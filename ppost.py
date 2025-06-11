@@ -12,15 +12,18 @@ CONGRATS_IMAGE = "https://example.com/congrats.jpg"
 SORRY_IMAGE = "https://example.com/sorry.jpg"
 STATE_FILE = "ppost_state.json"
 
+
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
             return json.load(f)
     return {}
 
+
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
+
 
 class RoleApplicationModal(ui.Modal):
     def __init__(self, role_id: int, original_user_id: int):
@@ -48,19 +51,22 @@ class RoleApplicationModal(ui.Modal):
 
         await interaction.response.send_message("Your application was submitted for review.", ephemeral=True)
 
+
 class RoleButtonView(ui.View):
     def __init__(self, roles_with_text, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
         for role, _ in roles_with_text:
             custom_id = f"ppost_apply_{role.id}"
-
-            async def callback(interaction: discord.Interaction, role_id=role.id, original_user_id=user_id):
-                await interaction.response.send_modal(RoleApplicationModal(role_id=role_id, original_user_id=original_user_id))
-
             button = ui.Button(label=role.name, style=discord.ButtonStyle.primary, custom_id=custom_id)
-            button.callback = callback
+            button.callback = self.make_callback(role.id)
             self.add_item(button)
+
+    def make_callback(self, role_id):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(RoleApplicationModal(role_id=role_id, original_user_id=self.user_id))
+        return callback
+
 
 class ApprovalView(ui.View):
     def __init__(self, applicant_id: int, role_id: int):
@@ -105,6 +111,7 @@ class ApprovalView(ui.View):
 
         await interaction.response.send_message("Application rejected.", ephemeral=True)
 
+
 class PPostCommand(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -118,24 +125,17 @@ class PPostCommand(commands.Cog):
             self.bot.add_view(ApprovalView(applicant_id=applicant_id, role_id=role_id))
             loaded_roles.add(role_id)
 
+        self.loaded_roles = loaded_roles
+
         @bot.event
         async def on_ready():
             print("Persistent views reloaded.")
-
-            # Register all role application buttons
             for guild in bot.guilds:
-                for role_id in loaded_roles:
-                    button_id = f"ppost_apply_{role_id}"
-
-                    async def callback(interaction: discord.Interaction, r_id=role_id):
-                        await interaction.response.send_modal(RoleApplicationModal(role_id=r_id, original_user_id=interaction.user.id))
-
-                    btn = ui.Button(label="Apply", custom_id=button_id, style=discord.ButtonStyle.primary)
-                    btn.callback = callback
-
-                    view = ui.View(timeout=None)
-                    view.add_item(btn)
-                    bot.add_view(view)
+                for role_id in self.loaded_roles:
+                    role = guild.get_role(role_id)
+                    if role:
+                        view = RoleButtonView([(role, "")], user_id=0)  # user_id = 0 = dummy
+                        bot.add_view(view)
 
     @app_commands.command(name="ppost", description="Post a role application embed.")
     @app_commands.describe(
@@ -175,10 +175,10 @@ class PPostCommand(commands.Cog):
             embed.add_field(name="Available Roles", value=role_desc, inline=False)
 
         view = RoleButtonView(roles, user_id=interaction.user.id)
-        for item in view.children:
-            self.bot.add_view(view)  # Add every view for persistence
+        self.bot.add_view(view)
 
         await interaction.response.send_message(embed=embed, view=view)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PPostCommand(bot))
