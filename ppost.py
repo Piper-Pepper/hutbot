@@ -12,18 +12,15 @@ CONGRATS_IMAGE = "https://example.com/congrats.jpg"
 SORRY_IMAGE = "https://example.com/sorry.jpg"
 STATE_FILE = "ppost_state.json"
 
-
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
             return json.load(f)
     return {}
 
-
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
-
 
 class RoleApplicationModal(ui.Modal):
     def __init__(self, role_id: int, original_user_id: int):
@@ -40,17 +37,21 @@ class RoleApplicationModal(ui.Modal):
 
         embed = discord.Embed(title=f"{role.name} Application", description=self.answer.value, color=0x3498db)
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-        embed.set_footer(text=f"Requested by {original_user}", icon_url=original_user.display_avatar.url)
+        if original_user:
+            embed.set_footer(text=f"Requested by {original_user}", icon_url=original_user.display_avatar.url)
 
         view = ApprovalView(applicant_id=interaction.user.id, role_id=role.id)
-        message = await guild.get_channel(REVIEW_CHANNEL_ID).send(embed=embed, view=view)
+        review_channel = guild.get_channel(REVIEW_CHANNEL_ID)
+        if review_channel:
+            message = await review_channel.send(embed=embed, view=view)
 
-        state = load_state()
-        state[str(message.id)] = {"applicant_id": interaction.user.id, "role_id": role.id}
-        save_state(state)
+            state = load_state()
+            state[str(message.id)] = {"applicant_id": interaction.user.id, "role_id": role.id}
+            save_state(state)
 
-        await interaction.response.send_message("Your application was submitted for review.", ephemeral=True)
-
+            await interaction.response.send_message("Your application was submitted for review.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Review channel not found. Please contact an admin.", ephemeral=True)
 
 class RoleApplyButton(ui.Button):
     def __init__(self, role: discord.Role, original_user_id: int):
@@ -64,13 +65,11 @@ class RoleApplyButton(ui.Button):
             original_user_id=self.original_user_id
         ))
 
-
 class RoleButtonView(ui.View):
     def __init__(self, roles_with_text, user_id):
         super().__init__(timeout=None)
         for role, _ in roles_with_text:
             self.add_item(RoleApplyButton(role, user_id))
-
 
 class ApprovalView(ui.View):
     def __init__(self, applicant_id: int, role_id: int):
@@ -84,18 +83,25 @@ class ApprovalView(ui.View):
         applicant = guild.get_member(self.applicant_id)
         role = guild.get_role(self.role_id)
 
-        await applicant.add_roles(role)
-        await applicant.send(
-            f"**Congratulations!** You got the job as **{role.name}**!",
-            embed=discord.Embed().set_image(url=CONGRATS_IMAGE)
-        )
-        await interaction.message.delete()
+        if applicant and role:
+            await applicant.add_roles(role)
+            try:
+                await applicant.send(
+                    f"**Congratulations!** You got the role **{role.name}**!",
+                    embed=discord.Embed().set_image(url=CONGRATS_IMAGE)
+                )
+            except discord.Forbidden:
+                pass  # User has DMs closed
 
-        state = load_state()
-        state.pop(str(interaction.message.id), None)
-        save_state(state)
+            await interaction.message.delete()
 
-        await interaction.response.send_message("Approved and role assigned.", ephemeral=True)
+            state = load_state()
+            state.pop(str(interaction.message.id), None)
+            save_state(state)
+
+            await interaction.response.send_message("Approved and role assigned.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Applicant or role not found.", ephemeral=True)
 
     @ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji=THUMB_DOWN_EMOJI, custom_id="ppost_reject")
     async def reject(self, interaction: discord.Interaction, button: ui.Button):
@@ -103,31 +109,39 @@ class ApprovalView(ui.View):
         applicant = guild.get_member(self.applicant_id)
         role = guild.get_role(self.role_id)
 
-        await applicant.send(
-            f"**Sorry..** At the moment we cannot apply anybody for **{role.name}**.",
-            embed=discord.Embed().set_image(url=SORRY_IMAGE)
-        )
-        await interaction.message.delete()
+        if applicant and role:
+            try:
+                await applicant.send(
+                    f"**Sorry..** Your application for **{role.name}** was rejected.",
+                    embed=discord.Embed().set_image(url=SORRY_IMAGE)
+                )
+            except discord.Forbidden:
+                pass  # User has DMs closed
 
-        state = load_state()
-        state.pop(str(interaction.message.id), None)
-        save_state(state)
+            await interaction.message.delete()
 
-        await interaction.response.send_message("Application rejected.", ephemeral=True)
+            state = load_state()
+            state.pop(str(interaction.message.id), None)
+            save_state(state)
 
+            await interaction.response.send_message("Application rejected.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Applicant or role not found.", ephemeral=True)
 
 class PPostCommand(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.loaded_roles = set()
 
-        # Persistent views
+        # Lade persistent Views nach Neustart
         state = load_state()
+        loaded_roles = set()
         for entry in state.values():
             role_id = entry["role_id"]
             applicant_id = entry["applicant_id"]
             self.bot.add_view(ApprovalView(applicant_id=applicant_id, role_id=role_id))
-            self.loaded_roles.add(role_id)
+            loaded_roles.add(role_id)
+
+        self.loaded_roles = loaded_roles
 
         @bot.event
         async def on_ready():
@@ -136,7 +150,7 @@ class PPostCommand(commands.Cog):
                 for role_id in self.loaded_roles:
                     role = guild.get_role(role_id)
                     if role:
-                        view = RoleButtonView([(role, "")], user_id=0)
+                        view = RoleButtonView([(role, "")], user_id=0)  # user_id=0 als Dummy
                         bot.add_view(view)
 
     @app_commands.command(name="ppost", description="Post a role application embed.")
@@ -162,7 +176,11 @@ class PPostCommand(commands.Cog):
                     role1_text: str = "", role2_text: str = "", role3_text: str = "",
                     role4_text: str = "", role5_text: str = ""):
 
-        await interaction.response.defer(thinking=True)  # Wichtig: direkt zu Beginn!
+        try:
+            await interaction.response.defer(thinking=True)
+        except discord.errors.NotFound:
+            # Falls Interaction schon verfallen ist, ignorieren wir die Exception
+            return
 
         roles = [(role1, role1_text)]
         for i, r in enumerate([role2, role3, role4, role5], start=2):
@@ -174,14 +192,18 @@ class PPostCommand(commands.Cog):
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.set_footer(text=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        if any(text for _, text in roles):
+        if any(desc for _, desc in roles):
             role_desc = "\n".join(f"**{r.name}**: {desc}" for r, desc in roles if desc)
             embed.add_field(name="Available Roles", value=role_desc, inline=False)
 
         view = RoleButtonView(roles, user_id=interaction.user.id)
         self.bot.add_view(view)
 
-        await interaction.followup.send(embed=embed, view=view)
+        try:
+            await interaction.followup.send(embed=embed, view=view)
+        except discord.errors.NotFound:
+            # Falls Interaction verfallen ist, z.B. Timeout
+            pass
 
 
 async def setup(bot: commands.Bot):
