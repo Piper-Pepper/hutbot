@@ -352,6 +352,9 @@ async def on_ready():
         print(f"Synced {len(synced)} command(s).")
     except Exception as e:
         print(f"Failed to sync: {e}")
+async def main():
+    await bot.load_extension("ppost.py") 
+
 
 # Launch the bot
 bot.run(TOKEN)
