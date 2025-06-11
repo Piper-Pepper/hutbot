@@ -15,6 +15,7 @@ TICKET_CHANNEL_ID = 1346418734360956972
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1382071708449771540/police_fuckthat.gif"
 REQUIRED_ROLE_ID = 1346428405368750122
 TICKET_STORAGE = "tickets.json"
+YOUR_GUILD_ID = 123456789012345678  # Ersetze dies mit deiner tatsächlichen Guild-ID
 
 # ---------------- Persistence ----------------
 def load_tickets():
@@ -109,14 +110,9 @@ class CaseClosedView(discord.ui.View):
             color=discord.Color.dark_red()
         )
         if self.ticket_creator:
-            embed.set_author(
-                name=self.ticket_creator.display_name,
-                icon_url=self.ticket_creator.display_avatar.url
-            )
+            embed.set_author(name=self.ticket_creator.display_name, icon_url=self.ticket_creator.display_avatar.url)
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.set_footer(
-            text=f"Case closed by {interaction.user.display_name} at {discord.utils.format_dt(discord.utils.utcnow(), style='F')}"
-        )
+        embed.set_footer(text=f"Case closed by {interaction.user.display_name} at {discord.utils.format_dt(discord.utils.utcnow(), style='F')}")
 
         await interaction.channel.send(embed=embed)
 
@@ -134,11 +130,12 @@ class CaseClosedView(discord.ui.View):
         remove_ticket(self.message.id)
         await interaction.response.send_message("Case closed!", ephemeral=True)
 
-        # ---------------- Slash Command ----------------
+# ---------------- Cog with Slash Commands ----------------
 class PPTicket(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # /ppticket command (for mod-created tickets using button + modal)
     @app_commands.command(name="ppticket", description="Create a ticket for the Pepper Police")
     @app_commands.describe(
         title="The ticket title",
@@ -162,15 +159,43 @@ class PPTicket(commands.Cog):
 
         await interaction.response.send_message("Ticket system ready. Users can now submit a ticket.", ephemeral=True)
 
+    # /ppolice command (ticket with text provided via slash; optional user mention)
+    @app_commands.command(name="ppolice", description="Let someone send a ticket to the Pepper Police")
+    @app_commands.describe(
+        text="The reason for the ticket",
+        user="Optional user to report or refer to"
+    )
+    async def ppolice(self, interaction: discord.Interaction, text: str, user: discord.User = None):
+        has_role = any(role.id == REQUIRED_ROLE_ID for role in interaction.user.roles)
+        if not has_role:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        title = "Report to the Pepper Police"
+        description = text
+        if user:
+            description += f"\n\n🚨 Reported User: {user.mention}"
+
+        embed = discord.Embed(title=f"**{title}**", description=description, color=discord.Color.orange())
+        embed.set_author(name=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else discord.Embed.Empty)
+        embed.set_image(url=DEFAULT_IMAGE_URL)
+
+        view = TicketView(ticket_title=title, ticket_text=description, ticket_creator=interaction.user)
+        msg = await interaction.channel.send(embed=embed, view=view)
+        view.message = msg
+        save_ticket(msg.id, title, description, interaction.user.id, interaction.channel.id)
+
+        await interaction.response.send_message("Pepper Police ticket created. Users can now submit their message.", ephemeral=True)
+
 # ---------------- Restore Tickets on Ready ----------------
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print("------")
-
-    bot.tree.copy_global_to(guild=discord.Object(id=YOUR_GUILD_ID))  # Optional: if using guild-only commands
-    await bot.tree.sync(guild=discord.Object(id=YOUR_GUILD_ID))      # Optional
-
+    # Falls du Guild-Commands verwendest:
+    guild_obj = discord.Object(id=YOUR_GUILD_ID)
+    bot.tree.copy_global_to(guild=guild_obj)
+    await bot.tree.sync(guild=guild_obj)
+    
     data = load_tickets()
     for message_id, info in data.items():
         try:
@@ -179,13 +204,11 @@ async def on_ready():
                 continue
             msg = await channel.fetch_message(int(message_id))
             user = await bot.fetch_user(int(info["user_id"]))
-            view = TicketView(
-                ticket_title=info["title"],
-                ticket_text=info["text"],
-                ticket_creator=user
-            )
+            view = TicketView(ticket_title=info["title"], ticket_text=info["text"], ticket_creator=user)
             view.message = msg
             await msg.edit(view=view)
+            # Registriere den View auch global, damit er persistiert
+            bot.add_view(view)
         except Exception as e:
             print(f"Failed to restore ticket {message_id}: {e}")
 
