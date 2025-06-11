@@ -40,7 +40,7 @@ class PPTicket(commands.Cog):
         await interaction.response.send_message("Ticket embed has been created!", ephemeral=True)
 
 class TicketView(discord.ui.View):
-    def __init__(self, ticket_title, ticket_text, ticket_creator):
+    def __init__(self, ticket_title=None, ticket_text=None, ticket_creator=None):
         super().__init__(timeout=None)
         self.ticket_title = ticket_title
         self.ticket_text = ticket_text
@@ -49,6 +49,10 @@ class TicketView(discord.ui.View):
 
     @discord.ui.button(label="Send a Ticket", style=discord.ButtonStyle.danger, custom_id="ticket_send_button")
     async def send_ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.ticket_title or not self.ticket_text or not self.ticket_creator:
+            await interaction.response.send_message("This button is no longer active. Please recreate the ticket.", ephemeral=True)
+            return
+
         await interaction.response.send_modal(SendTicketModal(
             ticket_title=self.ticket_title,
             ticket_text=self.ticket_text,
@@ -88,7 +92,7 @@ class SendTicketModal(discord.ui.Modal, title="Submit Your Ticket"):
         await interaction.response.send_message("Your ticket has been submitted!", ephemeral=True)
 
 class CaseClosedView(discord.ui.View):
-    def __init__(self, title, original_text, ticket_creator):
+    def __init__(self, title=None, original_text=None, ticket_creator=None):
         super().__init__(timeout=None)
         self.title = title
         self.original_text = original_text
@@ -97,6 +101,10 @@ class CaseClosedView(discord.ui.View):
 
     @discord.ui.button(label="Case Closed", style=discord.ButtonStyle.danger, custom_id="ticket_case_closed_button")
     async def case_closed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.title or not self.original_text or not self.ticket_creator:
+            await interaction.response.send_message("This button is no longer active. Please recreate the ticket.", ephemeral=True)
+            return
+
         embed = discord.Embed(
             title=f"Case Closed: {self.title}",
             description=self.original_text,
@@ -121,3 +129,5 @@ class CaseClosedView(discord.ui.View):
 
         await interaction.response.send_message("Case closed!", ephemeral=True)
 
+async def setup(bot):
+    await bot.add_cog(PPTicket(bot))
