@@ -16,7 +16,7 @@ DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/
 REQUIRED_ROLE_ID = 1346428405368750122
 TICKET_STORAGE = "tickets.json"
 
-# ------------- Persistence Handling -------------
+# ---------------- Persistence ----------------
 def load_tickets():
     if os.path.exists(TICKET_STORAGE):
         with open(TICKET_STORAGE, "r") as f:
@@ -41,7 +41,7 @@ def remove_ticket(message_id):
         with open(TICKET_STORAGE, "w") as f:
             json.dump(data, f)
 
-# ------------- Views & Modals -------------
+# ---------------- Views & Modals ----------------
 class TicketView(discord.ui.View):
     def __init__(self, ticket_title=None, ticket_text=None, ticket_creator=None):
         super().__init__(timeout=None)
@@ -55,7 +55,6 @@ class TicketView(discord.ui.View):
         if not self.ticket_title or not self.ticket_text or not self.ticket_creator:
             await interaction.response.send_message("This ticket is no longer active after a restart.\nPlease use `/ppticket` again.", ephemeral=True)
             return
-
         await interaction.response.send_modal(SendTicketModal(
             ticket_title=self.ticket_title,
             ticket_text=self.ticket_text,
@@ -121,12 +120,11 @@ class CaseClosedView(discord.ui.View):
 
         await interaction.channel.send(embed=embed)
 
-        # ✅ DM to the original ticket creator
         if self.ticket_creator:
             try:
                 await self.ticket_creator.send("Thank you! The Pepper Police cared about you sent ticket!")
             except:
-                pass  # Ignore if DM fails
+                pass
 
         try:
             await self.message.delete()
@@ -136,7 +134,7 @@ class CaseClosedView(discord.ui.View):
         remove_ticket(self.message.id)
         await interaction.response.send_message("Case closed!", ephemeral=True)
 
-# ------------- Slash Command & Cog -------------
+        # ---------------- Slash Command ----------------
 class PPTicket(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -164,3 +162,33 @@ class PPTicket(commands.Cog):
 
         await interaction.response.send_message("Ticket system ready. Users can now submit a ticket.", ephemeral=True)
 
+# ---------------- Restore Tickets on Ready ----------------
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print("------")
+
+    bot.tree.copy_global_to(guild=discord.Object(id=YOUR_GUILD_ID))  # Optional: if using guild-only commands
+    await bot.tree.sync(guild=discord.Object(id=YOUR_GUILD_ID))      # Optional
+
+    data = load_tickets()
+    for message_id, info in data.items():
+        try:
+            channel = bot.get_channel(int(info["channel_id"]))
+            if not channel:
+                continue
+            msg = await channel.fetch_message(int(message_id))
+            user = await bot.fetch_user(int(info["user_id"]))
+            view = TicketView(
+                ticket_title=info["title"],
+                ticket_text=info["text"],
+                ticket_creator=user
+            )
+            view.message = msg
+            await msg.edit(view=view)
+        except Exception as e:
+            print(f"Failed to restore ticket {message_id}: {e}")
+
+# ---------------- Cog Setup ----------------
+async def setup(bot):
+    await bot.add_cog(PPTicket(bot))
