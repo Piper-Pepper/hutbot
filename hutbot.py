@@ -9,6 +9,10 @@ from ticket import PPTicket
 from forward import DMForwarder
 from ppost import PPostCommand
 from ppost import RoleButtonView, load_state
+from dotenv import load_dotenv
+import os
+
+
 state = load_state()
 
 
@@ -18,6 +22,9 @@ state = load_state()
 intents = discord.Intents.all()
 intents.members = True
 intents.message_content = True
+
+load_dotenv()  # Diese Zeile lädt die .env Datei
+TOKEN = os.getenv('DISCORD_TOKEN')
 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -347,4 +354,4 @@ async def on_ready():
         print(f"Failed to sync: {e}")
 
 # Launch the bot
-bot.run("MTM3OTkwNjgzNDU4ODEwNjg4Mw.GXxuGq.4-yrxYK-2_cAI4ImN4An9wzJO6RmiKLxJ5Jaqs")
+bot.run(TOKEN)
