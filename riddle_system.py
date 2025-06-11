@@ -16,10 +16,11 @@ RIDDLE_STORAGE_FILE = "active_riddles.json"
 
 # In-memory storage
 active_riddles = {}
+message_links = {}
 
 # --------- Riddle Data Class ----------
 class RiddleData:
-    def __init__(self, author_id, question, solution, created_at, length, image_url, mentions, solution_img, winner_id=None, riddle_id=None):
+    def __init__(self, author_id, question, solution, created_at, length, image_url, mentions, solution_img, winner_id=None, riddle_id=None, message_id=None):
         self.id = riddle_id or f"#{str(uuid.uuid4())[:6].upper()}"
         self.author_id = author_id
         self.question = question
@@ -30,6 +31,7 @@ class RiddleData:
         self.mentions = FIXED_MENTIONS + mentions
         self.solution_img = solution_img or DEFAULT_SOLUTION_IMAGE
         self.winner_id = winner_id
+        self.message_id = message_id
 
     def is_expired(self):
         return datetime.utcnow() > datetime.fromisoformat(self.created_at) + timedelta(days=self.length)
@@ -45,7 +47,8 @@ class RiddleData:
             "image_url": self.image_url,
             "mentions": self.mentions,
             "solution_img": self.solution_img,
-            "winner_id": self.winner_id
+            "winner_id": self.winner_id,
+            "message_id": self.message_id
         }
 
     @staticmethod
@@ -60,7 +63,8 @@ class RiddleData:
             mentions=data["mentions"],
             solution_img=data["solution_img"],
             winner_id=data.get("winner_id"),
-            riddle_id=data["id"]
+            riddle_id=data["id"],
+            message_id=data.get("message_id")
         )
 
 # --------- Storage helpers ----------
@@ -79,9 +83,19 @@ def load_riddles():
 
 # --------- Bot Commands ----------
 async def setup_riddle_commands(bot: commands.Bot):
+
     load_riddles()
+
     for riddle in active_riddles.values():
         bot.add_view(RiddleSolveView(riddle_id=riddle.id, riddle_text=riddle.question, author_id=riddle.author_id))
+
+    @bot.tree.command(name="riddle_help", description="Show help for the riddle system.")
+    async def riddle_help(interaction: discord.Interaction):
+        embed = discord.Embed(title="❓ Riddle System Help", color=discord.Color.blue())
+        embed.add_field(name="/riddle_add", value="Create a new riddle with optional images and mentions.", inline=False)
+        embed.add_field(name="/riddle_win", value="Mark a riddle as solved or delete it (with optional winner).", inline=False)
+        embed.add_field(name="/riddle_list", value="List all currently open riddles.", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="riddle_add", description="Add a new riddle of the day.")
     @app_commands.checks.has_role(MODERATOR_ROLE_ID)
@@ -119,9 +133,6 @@ async def setup_riddle_commands(bot: commands.Bot):
             solution_img=solution_image_url
         )
 
-        active_riddles[riddle.id] = riddle
-        save_riddles()
-
         embed = discord.Embed(
             title=f"🧩 Riddle of the Day (Posted: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')})",
             description=f"> {text}\n\n**Created by:** {interaction.user.mention}",
@@ -135,50 +146,62 @@ async def setup_riddle_commands(bot: commands.Bot):
         bot.add_view(view)
 
         channel = await bot.fetch_channel(RIDDLE_CHANNEL_ID)
-        await channel.send(" ".join(riddle.mentions), embed=embed, view=view)
+        msg = await channel.send(" ".join(riddle.mentions), embed=embed, view=view)
+        riddle.message_id = msg.id
+        active_riddles[riddle.id] = riddle
+        save_riddles()
+
         await interaction.followup.send(f"✅ Riddle `{riddle.id}` posted successfully.")
 
-    @bot.tree.command(name="riddle_win", description="Mark a riddle as solved (with or without a winner).")
+    @bot.tree.command(name="riddle_win", description="Mark a riddle as solved or delete it.")
     @app_commands.checks.has_role(MODERATOR_ROLE_ID)
-    async def riddle_win(interaction: discord.Interaction, riddle_id: str, winner: discord.Member = None):
+    @app_commands.describe(
+        riddle_id="The ID of the riddle",
+        winner="The winner of the riddle, if any",
+        open="Whether to archive the riddle (True) or delete it (False)"
+    )
+    async def riddle_win(interaction: discord.Interaction, riddle_id: str, winner: discord.Member = None, open: bool = True):
         riddle = active_riddles.get(riddle_id)
+
         if not riddle:
-            if not active_riddles:
-                await interaction.response.send_message("❌ There are no open riddles.", ephemeral=True)
+            if active_riddles:
+                choices = "\n".join(f"• `{rid}`" for rid in active_riddles)
+                await interaction.response.send_message(f"❌ Riddle ID not found. Available riddles are:\n{choices}", ephemeral=True)
             else:
-                ids = ", ".join(active_riddles.keys())
-                await interaction.response.send_message(f"❌ Invalid ID. Open riddles: {ids}", ephemeral=True)
+                await interaction.response.send_message("❌ There are no open riddles.", ephemeral=True)
             return
 
-        if winner:
-            riddle.winner_id = winner.id
+        if open:
+            if winner:
+                riddle.winner_id = winner.id
+            await post_solution(bot, riddle)
+        else:
+            try:
+                channel = await bot.fetch_channel(RIDDLE_CHANNEL_ID)
+                message = await channel.fetch_message(riddle.message_id)
+                await message.delete()
+            except:
+                pass
+            author = await bot.fetch_user(riddle.author_id)
+            try:
+                await author.send(f"🗑️ Your riddle `{riddle.id}` was deleted without a winner.")
+            except:
+                pass
 
-        await post_solution(bot, riddle)
         del active_riddles[riddle_id]
         save_riddles()
-        if winner:
-            await interaction.response.send_message(f"🎉 Riddle `{riddle_id}` closed with winner {winner.mention}.")
-        else:
-            await interaction.response.send_message(f"🛑 Riddle `{riddle_id}` ended manually.")
+        await interaction.response.send_message(f"✅ Riddle `{riddle_id}` {'closed' if open else 'deleted'} successfully.")
 
-    @bot.tree.command(name="riddle_list", description="List all currently active riddles.")
+    @bot.tree.command(name="riddle_list", description="List all open riddles")
     async def riddle_list(interaction: discord.Interaction):
         if not active_riddles:
-            await interaction.response.send_message("📭 There are no open riddles.", ephemeral=True)
+            await interaction.response.send_message("📭 There are no open riddles.")
             return
 
-        embed = discord.Embed(
-            title="📋 Active Riddles",
-            color=discord.Color.orange()
-        )
-        for rid, r in active_riddles.items():
-            remaining = (datetime.fromisoformat(r.created_at) + timedelta(days=r.length)) - datetime.utcnow()
-            embed.add_field(
-                name=rid,
-                value=f"Ends in: {remaining.days}d {remaining.seconds//3600}h\nBy: <@{r.author_id}>",
-                inline=False
-            )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed = discord.Embed(title="📜 Open Riddles", color=discord.Color.orange())
+        for r in active_riddles.values():
+            embed.add_field(name=r.id, value=f"> {r.question[:100]}...", inline=False)
+        await interaction.response.send_message(embed=embed)
 
     @tasks.loop(minutes=5)
     async def check_expired_riddles():
@@ -248,3 +271,14 @@ async def post_solution(bot, riddle: RiddleData):
     embed.set_footer(text=f"Riddle ID: {riddle.id} • Well played.")
     channel = await bot.fetch_channel(SOLUTION_CHANNEL_ID)
     await channel.send(" ".join(riddle.mentions), embed=embed)
+
+    try:
+        channel = await bot.fetch_channel(RIDDLE_CHANNEL_ID)
+        message = await channel.fetch_message(riddle.message_id)
+        embed = message.embeds[0]
+        embed.title = "🧩 Riddle solved!"
+        embed.clear_fields()
+        embed.set_footer(text=f"Riddle ID: {riddle.id} • This riddle has ended.")
+        await message.edit(embed=embed, view=None)
+    except:
+        pass
