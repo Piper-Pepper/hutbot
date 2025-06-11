@@ -8,8 +8,8 @@ DEFAULT_IMAGE = "https://cdn.discordapp.com/attachments/1346843244067160074/1381
 REVIEW_CHANNEL_ID = 1381754826710585527
 THUMB_UP_EMOJI = "👍"
 THUMB_DOWN_EMOJI = "👎"
-CONGRATS_IMAGE = "https://example.com/congrats.jpg"
-SORRY_IMAGE = "https://example.com/sorry.jpg"
+CONGRATS_IMAGE = "https://cdn.discordapp.com/attachments/1346843244067160074/1382174258742165614/Thumbs_up.gif"
+SORRY_IMAGE = "https://cdn.discordapp.com/attachments/1346843244067160074/1382174501785309254/Sad_piper.gif"
 STATE_FILE = "ppost_state.json"
 
 def load_state():
