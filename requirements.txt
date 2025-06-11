@@ -1,4 +1,1 @@
 discord.py
-certifi
-python-dotenv
-aiohttp
