@@ -4,7 +4,7 @@ import subprocess
 import discord
 from discord import app_commands
 from discord.ext import commands
-import riddle_system
+from riddle_system import setup_riddle_commands
 from ticket import PPTicket
 from forward import DMForwarder
 from ppost import PPostCommand
@@ -342,8 +342,7 @@ async def on_message(message):
 async def on_ready():
     print(f"Bot connected as {bot.user}!")
     # Re-register persistent views
-    from riddle_system import setup as setup_riddle
-    await setup_riddle(bot)
+    await setup_riddle_commands(bot)
     await bot.add_cog(PPTicket(bot)) 
     await bot.add_cog(DMForwarder(bot)) 
     await bot.add_cog(PPostCommand(bot)) 
