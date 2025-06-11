@@ -79,11 +79,7 @@ def load_riddles():
 
 # --------- Bot Commands ----------
 async def setup_riddle_commands(bot: commands.Bot):
-
-    # Load riddles at startup
     load_riddles()
-
-    # Persistent View registration
     for riddle in active_riddles.values():
         bot.add_view(RiddleSolveView(riddle_id=riddle.id, riddle_text=riddle.question, author_id=riddle.author_id))
 
@@ -142,33 +138,48 @@ async def setup_riddle_commands(bot: commands.Bot):
         await channel.send(" ".join(riddle.mentions), embed=embed, view=view)
         await interaction.followup.send(f"✅ Riddle `{riddle.id}` posted successfully.")
 
-    @bot.tree.command(name="riddle_win", description="Mark a riddle as solved and announce the winner.")
+    @bot.tree.command(name="riddle_win", description="Mark a riddle as solved (with or without a winner).")
     @app_commands.checks.has_role(MODERATOR_ROLE_ID)
-    async def riddle_win(interaction: discord.Interaction, riddle_id: str, winner: discord.Member):
+    async def riddle_win(interaction: discord.Interaction, riddle_id: str, winner: discord.Member = None):
         riddle = active_riddles.get(riddle_id)
         if not riddle:
-            await interaction.response.send_message("❌ Riddle ID not found.", ephemeral=True)
+            if not active_riddles:
+                await interaction.response.send_message("❌ There are no open riddles.", ephemeral=True)
+            else:
+                ids = ", ".join(active_riddles.keys())
+                await interaction.response.send_message(f"❌ Invalid ID. Open riddles: {ids}", ephemeral=True)
             return
 
-        riddle.winner_id = winner.id
+        if winner:
+            riddle.winner_id = winner.id
+
         await post_solution(bot, riddle)
         del active_riddles[riddle_id]
         save_riddles()
-        await interaction.response.send_message(f"🎉 Riddle `{riddle_id}` closed with winner {winner.mention}.")
+        if winner:
+            await interaction.response.send_message(f"🎉 Riddle `{riddle_id}` closed with winner {winner.mention}.")
+        else:
+            await interaction.response.send_message(f"🛑 Riddle `{riddle_id}` ended manually.")
 
-    @bot.tree.command(name="riddle_end", description="Force end a riddle without a winner.")
-    @app_commands.checks.has_role(MODERATOR_ROLE_ID)
-    async def riddle_end(interaction: discord.Interaction, riddle_id: str):
-        riddle = active_riddles.get(riddle_id)
-        if not riddle:
-            await interaction.response.send_message("❌ Riddle ID not found.", ephemeral=True)
+    @bot.tree.command(name="riddle_list", description="List all currently active riddles.")
+    async def riddle_list(interaction: discord.Interaction):
+        if not active_riddles:
+            await interaction.response.send_message("📭 There are no open riddles.", ephemeral=True)
             return
-        await post_solution(bot, riddle)
-        del active_riddles[riddle_id]
-        save_riddles()
-        await interaction.response.send_message(f"🛑 Riddle `{riddle_id}` ended manually.")
 
-    # Auto cleanup loop
+        embed = discord.Embed(
+            title="📋 Active Riddles",
+            color=discord.Color.orange()
+        )
+        for rid, r in active_riddles.items():
+            remaining = (datetime.fromisoformat(r.created_at) + timedelta(days=r.length)) - datetime.utcnow()
+            embed.add_field(
+                name=rid,
+                value=f"Ends in: {remaining.days}d {remaining.seconds//3600}h\nBy: <@{r.author_id}>",
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @tasks.loop(minutes=5)
     async def check_expired_riddles():
         to_remove = [rid for rid, r in active_riddles.items() if r.is_expired()]
@@ -180,10 +191,8 @@ async def setup_riddle_commands(bot: commands.Bot):
 
     check_expired_riddles.start()
 
-    # Error handler
     @riddle_add.error
     @riddle_win.error
-    @riddle_end.error
     async def on_permission_error(interaction: discord.Interaction, error):
         if isinstance(error, app_commands.errors.MissingRole):
             await interaction.response.send_message("🚫 You don't have permission to use this command.", ephemeral=True)
@@ -197,7 +206,6 @@ class RiddleSolveView(discord.ui.View):
         self.author_id = author_id
 
     @discord.ui.button(label="🧠 Submit Solution", style=discord.ButtonStyle.primary, custom_id="riddle_submit_button")
-
     async def solution_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = RiddleSolutionModal(self.riddle_id, self.riddle_text, self.author_id)
         await interaction.response.send_modal(modal)
