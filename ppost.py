@@ -119,17 +119,15 @@ class ApprovalView(ui.View):
 class PPostCommand(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.loaded_roles = set()
 
-        # Load persistent views
+        # Persistent views
         state = load_state()
-        loaded_roles = set()
         for entry in state.values():
             role_id = entry["role_id"]
             applicant_id = entry["applicant_id"]
             self.bot.add_view(ApprovalView(applicant_id=applicant_id, role_id=role_id))
-            loaded_roles.add(role_id)
-
-        self.loaded_roles = loaded_roles
+            self.loaded_roles.add(role_id)
 
         @bot.event
         async def on_ready():
@@ -138,7 +136,7 @@ class PPostCommand(commands.Cog):
                 for role_id in self.loaded_roles:
                     role = guild.get_role(role_id)
                     if role:
-                        view = RoleButtonView([(role, "")], user_id=0)  # dummy user_id
+                        view = RoleButtonView([(role, "")], user_id=0)
                         bot.add_view(view)
 
     @app_commands.command(name="ppost", description="Post a role application embed.")
@@ -164,7 +162,7 @@ class PPostCommand(commands.Cog):
                     role1_text: str = "", role2_text: str = "", role3_text: str = "",
                     role4_text: str = "", role5_text: str = ""):
 
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(thinking=True)  # Wichtig: direkt zu Beginn!
 
         roles = [(role1, role1_text)]
         for i, r in enumerate([role2, role3, role4, role5], start=2):
