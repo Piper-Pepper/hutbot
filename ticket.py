@@ -12,89 +12,36 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TICKET_CHANNEL_ID = 1346418734360956972
-POLICE_CHANNEL_ID = 1381754826710585527
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1382071708449771540/police_fuckthat.gif"
 REQUIRED_ROLE_ID = 1346428405368750122
 TICKET_STORAGE = "tickets.json"
 
-def save_ticket(message_id, title, text, user_id):
+# ------------- Persistence Handling -------------
+def load_tickets():
     if os.path.exists(TICKET_STORAGE):
         with open(TICKET_STORAGE, "r") as f:
-            data = json.load(f)
-    else:
-        data = {}
+            return json.load(f)
+    return {}
 
+def save_ticket(message_id, title, text, user_id, channel_id):
+    data = load_tickets()
     data[str(message_id)] = {
         "title": title,
         "text": text,
-        "user_id": user_id
+        "user_id": user_id,
+        "channel_id": channel_id
     }
-
     with open(TICKET_STORAGE, "w") as f:
         json.dump(data, f)
 
 def remove_ticket(message_id):
-    try:
-        if os.path.exists(TICKET_STORAGE):
-            with open(TICKET_STORAGE, "r") as f:
-                data = json.load(f)
-            if str(message_id) in data:
-                del data[str(message_id)]
-                with open(TICKET_STORAGE, "w") as f:
-                    json.dump(data, f)
-    except:
-        pass
+    data = load_tickets()
+    if str(message_id) in data:
+        del data[str(message_id)]
+        with open(TICKET_STORAGE, "w") as f:
+            json.dump(data, f)
 
-class PPTicket(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="ppticket", description="Create a ticket for the Pepper Police")
-    @app_commands.describe(
-        title="The ticket title",
-        text="The ticket content",
-        image_url="Optional image URL to show instead of default"
-    )
-    async def ppticket(self, interaction: discord.Interaction, title: str, text: str, image_url: str = None):
-        has_role = any(role.id == REQUIRED_ROLE_ID for role in interaction.user.roles)
-        if not has_role:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-            return
-
-        embed = discord.Embed(title=f"**{title}**", description=text, color=discord.Color.orange())
-        embed.set_author(name=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else discord.Embed.Empty)
-        embed.set_image(url=image_url if image_url else DEFAULT_IMAGE_URL)
-
-        view = TicketView(ticket_title=title, ticket_text=text, ticket_creator=interaction.user)
-        msg = await interaction.channel.send(embed=embed, view=view)
-        view.message = msg
-        save_ticket(msg.id, title, text, interaction.user.id)
-
-        await interaction.response.send_message("Ticket embed has been created!", ephemeral=True)
-
-    @app_commands.command(name="ppolice", description="Pepper Police Ticket Command")
-    @app_commands.describe(
-        ticket="The ticket text",
-        user="Optional user to mention"
-    )
-    async def ppolice(self, interaction: discord.Interaction, ticket: str, user: discord.User = None):
-        police_channel = interaction.client.get_channel(POLICE_CHANNEL_ID)
-        if not police_channel:
-            await interaction.response.send_message("Police channel not found.", ephemeral=True)
-            return
-
-        embed = discord.Embed(description=ticket, color=discord.Color.red())
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-        if user:
-            embed.add_field(name="Concerned User", value=user.mention, inline=False)
-        embed.set_footer(text=f"Submitted at {discord.utils.format_dt(discord.utils.utcnow(), style='F')}")
-
-        view = CaseClosedView()
-        msg = await police_channel.send(embed=embed, view=view)
-        view.message = msg
-
-        await interaction.response.send_message("Your police ticket has been submitted.", ephemeral=True)
-
+# ------------- Views & Modals -------------
 class TicketView(discord.ui.View):
     def __init__(self, ticket_title=None, ticket_text=None, ticket_creator=None):
         super().__init__(timeout=None)
@@ -106,10 +53,7 @@ class TicketView(discord.ui.View):
     @discord.ui.button(label="Send a Ticket", style=discord.ButtonStyle.danger, custom_id="ticket_send_button")
     async def send_ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.ticket_title or not self.ticket_text or not self.ticket_creator:
-            await interaction.response.send_message(
-                "This ticket is no longer active after a restart.\nPlease use `/ppticket` again.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("This ticket is no longer active after a restart.\nPlease use `/ppticket` again.", ephemeral=True)
             return
 
         await interaction.response.send_modal(SendTicketModal(
@@ -139,14 +83,10 @@ class SendTicketModal(discord.ui.Modal, title="Submit Your Ticket"):
         embed.set_author(name=self.ticket_creator.display_name, icon_url=self.ticket_creator.display_avatar.url)
         embed.set_footer(text=f"Submitted at {discord.utils.format_dt(discord.utils.utcnow(), style='F')}")
 
-        view = CaseClosedView(
-            title=self.ticket_title,
-            original_text=self.ticket_text,
-            ticket_creator=self.ticket_creator
-        )
-
+        view = CaseClosedView(title=self.ticket_title, original_text=self.ticket_text, ticket_creator=self.ticket_creator)
         msg = await ticket_channel.send(embed=embed, view=view)
         view.message = msg
+        save_ticket(msg.id, self.ticket_title, self.ticket_text, self.ticket_creator.id, ticket_channel.id)
 
         await interaction.response.send_message("Your ticket has been submitted!", ephemeral=True)
 
@@ -181,6 +121,13 @@ class CaseClosedView(discord.ui.View):
 
         await interaction.channel.send(embed=embed)
 
+        # ✅ DM to the original ticket creator
+        if self.ticket_creator:
+            try:
+                await self.ticket_creator.send("Thank you! The Pepper Police cared about you sent ticket!")
+            except:
+                pass  # Ignore if DM fails
+
         try:
             await self.message.delete()
         except:
@@ -188,4 +135,32 @@ class CaseClosedView(discord.ui.View):
 
         remove_ticket(self.message.id)
         await interaction.response.send_message("Case closed!", ephemeral=True)
+
+# ------------- Slash Command & Cog -------------
+class PPTicket(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="ppticket", description="Create a ticket for the Pepper Police")
+    @app_commands.describe(
+        title="The ticket title",
+        text="The ticket content",
+        image_url="Optional image URL to show instead of default"
+    )
+    async def ppticket(self, interaction: discord.Interaction, title: str, text: str, image_url: str = None):
+        has_role = any(role.id == REQUIRED_ROLE_ID for role in interaction.user.roles)
+        if not has_role:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        embed = discord.Embed(title=f"**{title}**", description=text, color=discord.Color.orange())
+        embed.set_author(name=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else discord.Embed.Empty)
+        embed.set_image(url=image_url if image_url else DEFAULT_IMAGE_URL)
+
+        view = TicketView(ticket_title=title, ticket_text=text, ticket_creator=interaction.user)
+        msg = await interaction.channel.send(embed=embed, view=view)
+        view.message = msg
+        save_ticket(msg.id, title, text, interaction.user.id, interaction.channel.id)
+
+        await interaction.response.send_message("Ticket system ready. Users can now submit a ticket.", ephemeral=True)
 
