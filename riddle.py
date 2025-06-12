@@ -189,15 +189,16 @@ class SolutionModal(Modal):
         self.add_item(self.solution_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        solution_text = self.solution_input.value.replace('\\n', '\n')
         riddle = self.cog.riddles[self.riddle_id]
-        author = await self.cog.bot.fetch_user(riddle['author_id'])
+                author = await self.cog.bot.fetch_user(riddle['author_id'])
 
         embed = discord.Embed(
             title=f"\U0001F4DD Solution Proposal for Riddle {self.riddle_id}",
             description=riddle['text'],
             color=discord.Color.blue()
         )
-        embed.add_field(name="Proposed Solution", value=self.solution_input.value, inline=False)
+        embed.add_field(name="Proposed Solution", value=solution_text, inline=False)
         embed.add_field(name="Correct Solution", value=riddle['solution'], inline=False)
         embed.set_footer(text=f"From: {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
 
