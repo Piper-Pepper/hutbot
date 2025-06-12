@@ -191,7 +191,7 @@ class SolutionModal(Modal):
     async def on_submit(self, interaction: discord.Interaction):
         solution_text = self.solution_input.value.replace('\\n', '\n')
         riddle = self.cog.riddles[self.riddle_id]
-                author = await self.cog.bot.fetch_user(riddle['author_id'])
+        author = await self.cog.bot.fetch_user(riddle['author_id'])
 
         embed = discord.Embed(
             title=f"\U0001F4DD Solution Proposal for Riddle {self.riddle_id}",
