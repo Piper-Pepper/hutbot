@@ -11,6 +11,7 @@ RIDDLE_FILE = 'riddles.json'
 GUILD_LOGO_URL = 'https://cdn.discordapp.com/icons/{guild_id}/{icon}.png'
 DEFAULT_IMAGE_URL = 'https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg'
 MENTION_ROLE_ID = 1380610400416043089
+SUBMISSION_LOG_CHANNEL_ID = 1381754826710585527
 
 class RiddleCog(commands.Cog):
     def __init__(self, bot):
@@ -18,6 +19,7 @@ class RiddleCog(commands.Cog):
         self.riddles = {}
         self.load_riddles()
         self.bot.add_view(PersistentRiddleView(self))
+        self.bot.add_view(SolutionDecisionViewStatic(self))
         self.check_expiry.start()
 
     def load_riddles(self):
@@ -208,8 +210,19 @@ class SolutionModal(Modal):
         embed.set_footer(text=f"From: {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
 
         view = SolutionDecisionView(self.cog, self.riddle_id, interaction.user, self.solution_input.value)
-        await author.send(embed=embed, view=view)
+        
+        try:
+            await author.send(embed=embed, view=view)
+        except discord.Forbidden:
+            pass  # falls DMs deaktiviert sind
+
+        # Zusätzlich in Submission-Channel posten
+        log_channel = self.cog.bot.get_channel(SUBMISSION_LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(embed=embed, view=view)
+
         await interaction.response.send_message("Your solution has been submitted.", ephemeral=True)
+
 
 class SolutionDecisionView(View):
     def __init__(self, cog, riddle_id, solver, solution_text):
@@ -336,6 +349,18 @@ class WinnerModal(Modal):
         await self.cog.close_riddle(self.riddle_id, winner=member)
         await interaction.response.send_message(f"Rätsel {self.riddle_id} wurde mit Gewinner {member.mention} geschlossen.", ephemeral=True)
 
+class SolutionDecisionViewStatic(View):
+    def __init__(self, cog):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("This action is only valid via DM submission.", ephemeral=True)
+
+    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("This action is only valid via DM submission.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(RiddleCog(bot))
