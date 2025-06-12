@@ -234,28 +234,33 @@ class SolutionDecisionView(View):
         self.submitter = submitter
         self.solution_text = solution_text
 
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept_button")
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        riddle = self.cog.riddles.get(self.riddle_id)
-        if not riddle:
-            await interaction.response.send_message("This riddle no longer exists.", ephemeral=True)
-            return
-   
-        riddle['status'] = 'closed'
-        riddle['winner'] = self.submitter.id
-        save_riddles(self.cog.riddles)
+@discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept_button")
+async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+    riddle = self.cog.riddles.get(self.riddle_id)
+    if not riddle:
+        await interaction.response.send_message("This riddle no longer exists.", ephemeral=True)
+        return
 
-        await interaction.message.edit(view=None)
-        await interaction.response.send_message(
-            f"✅ The solution by {self.submitter.mention} has been accepted for Riddle {self.riddle_id}!"
+    riddle['status'] = 'closed'
+    riddle['winner'] = self.submitter.id
+    save_riddles(self.cog.riddles)
+
+    # Editiere die ursprüngliche Nachricht, entferne Buttons
+    await interaction.message.edit(view=None)
+
+    # Antworte auf die Interaktion (einmalig)
+    await interaction.response.send_message(
+        f"✅ The solution by {self.submitter.mention} has been accepted for Riddle {self.riddle_id}!",
+        ephemeral=True
+    )
+
+    # Nachricht im Riddle-Channel senden
+    channel = self.cog.bot.get_channel(riddle['channel_id'])
+    if channel:
+        await channel.send(
+            f"🎉 Congratulations {self.submitter.mention}! Your answer to Riddle {self.riddle_id} was accepted!"
         )
 
-        channel = self.cog.bot.get_channel(riddle['channel_id'])
-        if channel:
-            await channel.send(
-                f"🎉 Congratulations {self.submitter.mention}! Your answer to Riddle {self.riddle_id} was accepted!"
-            )
 
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
