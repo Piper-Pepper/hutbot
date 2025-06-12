@@ -253,7 +253,10 @@ async def accept(self, interaction: discord.Interaction, button: discord.ui.Butt
         f"✅ The solution by {self.submitter.mention} has been accepted for Riddle {self.riddle_id}!",
         ephemeral=True
     )
-
+# Optional: Buttons deaktivieren (View aktualisieren)
+    self.disable_all_items()
+    await interaction.message.edit(view=self)
+    
     # Nachricht im Riddle-Channel senden
     channel = self.cog.bot.get_channel(riddle['channel_id'])
     if channel:
