@@ -92,7 +92,7 @@ class RiddleCog(commands.Cog):
     def create_riddle_embed(self, riddle_data, guild):
         embed = discord.Embed(
             title=f"\U0001F9E0 Riddle of the Day ({riddle_data['created_at'].split(' ')[0]})",
-            description=riddle_data['text'],
+            description=riddle_data['text'].replace('\\n', '\n'),
             color=discord.Color.purple()
         )
         embed.set_image(url=riddle_data['image_url'])
@@ -122,7 +122,7 @@ class RiddleCog(commands.Cog):
 
         embed = discord.Embed(
             title="\U0000274C Riddle Closed",
-            description=riddle['text'],
+            description=riddle['text'].replace('\\n', '\n'),
             color=discord.Color.red()
         )
         embed.set_image(url=riddle['solution_image'])
@@ -189,7 +189,7 @@ class SolutionModal(Modal):
         self.add_item(self.solution_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        solution_text = self.solution_input.value.replace('\\n', '\n')
+        solution_text = self.solution_input.value.replace('\n', '\n')
         riddle = self.cog.riddles[self.riddle_id]
         author = await self.cog.bot.fetch_user(riddle['author_id'])
 
