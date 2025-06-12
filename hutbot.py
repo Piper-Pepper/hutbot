@@ -44,6 +44,12 @@ async def on_message(message):
 async def on_ready():
     print(f"✅ Bot connected as {bot.user}!")
     await bot.change_presence(activity=discord.Game(name=".. with her Cum-Kitty"))
+
+    from riddle import SolutionDMView, SolutionChannelView, RiddleView, RiddleManagementView
+    bot.add_view(SolutionDMView())
+    bot.add_view(SolutionChannelView())
+    bot.add_view(RiddleView())
+    bot.add_view(RiddleManagementView())
     try:
         synced = await tree.sync()
         print(f"Synced {len(synced)} command(s).")
