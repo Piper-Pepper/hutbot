@@ -22,10 +22,6 @@ tree = bot.tree
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1381375333491675217/idcard_small.png"
 DEFAULT_HUTMEMBER_IMAGE_URL = DEFAULT_IMAGE_URL
 
-
-
-
-
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -44,13 +40,8 @@ async def on_message(message):
 async def on_ready():
     print(f"✅ Bot connected as {bot.user}!")
     await bot.change_presence(activity=discord.Game(name=".. with her Cum-Kitty"))
-
-    from riddle import SolutionDMView, SolutionChannelView, RiddleView, RiddleManagementView
-    bot.add_view(SolutionDMView())
-    bot.add_view(SolutionChannelView())
-    bot.add_view(RiddleView())
-    bot.add_view(RiddleManagementView())
     try:
+        print("Starting to sync commands...")
         synced = await tree.sync()
         print(f"Synced {len(synced)} command(s).")
     except Exception as e:
@@ -59,7 +50,6 @@ async def on_ready():
 async def main():
     async with bot:
         await bot.load_extension("pepper")  # <- So wird pepper.py geladen
-        await bot.load_extension("riddle")
         await bot.start(TOKEN)
 
 asyncio.run(main())
