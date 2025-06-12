@@ -50,6 +50,7 @@ async def on_ready():
 async def main():
     async with bot:
         await bot.load_extension("pepper")  # <- So wird pepper.py geladen
+        await bot.load_extension("riddle_cog") 
         await bot.start(TOKEN)
 
 asyncio.run(main())
