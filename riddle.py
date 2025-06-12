@@ -236,6 +236,7 @@ class SolutionDecisionView(View):
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept_button")
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         riddle = self.cog.riddles.get(self.riddle_id)
         if not riddle:
             await interaction.response.send_message("This riddle no longer exists.", ephemeral=True)
@@ -259,6 +260,7 @@ class SolutionDecisionView(View):
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         riddle = self.cog.riddles.get(self.riddle_id)
+        await interaction.response.defer()
         if not riddle:
             await interaction.response.send_message("This riddle no longer exists.", ephemeral=True)
             return
@@ -381,11 +383,13 @@ class SolutionDecisionViewStatic(View):
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept_button")
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("This action is only valid via DM submission.", ephemeral=True)
+        await interaction.response.defer()
+       
 
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("This action is only valid via DM submission.", ephemeral=True)
+        await interaction.response.defer()
+
 
 async def setup(bot):
     await bot.add_cog(RiddleCog(bot))
