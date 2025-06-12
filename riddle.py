@@ -20,8 +20,8 @@ class RiddleCog(commands.Cog):
         self.load_riddles()
         self.bot.add_view(PersistentRiddleView(self))
         self.bot.add_view(SolutionDecisionViewStatic(self))
+        self.bot.add_view(SolutionDecisionView(self, None, None, ""))
         self.check_expiry.start()
-
     def load_riddles(self):
         if os.path.exists(RIDDLE_FILE):
             with open(RIDDLE_FILE, 'r') as f:
@@ -210,13 +210,14 @@ class SolutionModal(Modal):
         embed.set_footer(text=f"From: {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
 
         view = SolutionDecisionView(self.cog, self.riddle_id, interaction.user, self.solution_input.value)
-        
+
+        # Versuch: DM senden
         try:
             await author.send(embed=embed, view=view)
         except discord.Forbidden:
-            pass  # falls DMs deaktiviert sind
+            pass
 
-        # Zusätzlich in Submission-Channel posten
+        # Auch im öffentlichen Channel posten
         log_channel = self.cog.bot.get_channel(SUBMISSION_LOG_CHANNEL_ID)
         if log_channel:
             await log_channel.send(embed=embed, view=view)
@@ -224,22 +225,46 @@ class SolutionModal(Modal):
         await interaction.response.send_message("Your solution has been submitted.", ephemeral=True)
 
 
+
 class SolutionDecisionView(View):
-    def __init__(self, cog, riddle_id, solver, solution_text):
+    def __init__(self, cog, riddle_id, submitter: discord.User, solution_text: str):
         super().__init__(timeout=None)
         self.cog = cog
         self.riddle_id = riddle_id
-        self.solver = solver
+        self.submitter = submitter
         self.solution_text = solution_text
 
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept_button")
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.close_riddle(self.riddle_id, winner=self.solver, proposed_solution=self.solution_text)
-        await interaction.message.delete()
+        riddle = self.cog.riddles.get(self.riddle_id)
+        if not riddle:
+            await interaction.response.send_message("This riddle no longer exists.", ephemeral=True)
+            return
+   
+        riddle['status'] = 'closed'
+        riddle['winner'] = self.submitter.id
+        save_riddles(self.cog.riddles)
 
-    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌")
+        await interaction.message.edit(view=None)
+        await interaction.response.send_message(
+            f"✅ The solution by {self.submitter.mention} has been accepted for Riddle {self.riddle_id}!"
+        )
+
+        channel = self.cog.bot.get_channel(riddle['channel_id'])
+        if channel:
+            await channel.send(
+                f"🎉 Congratulations {self.submitter.mention}! Your answer to Riddle {self.riddle_id} was accepted!"
+            )
+
+    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.message.delete()
+        riddle = self.cog.riddles.get(self.riddle_id)
+        if not riddle:
+            await interaction.response.send_message("This riddle no longer exists.", ephemeral=True)
+            return
+
+        await interaction.message.edit(view=None)
+        await interaction.response.send_message(f"The solution from {self.submitter.mention} has been rejected.")
 
 class RiddleSelect(Select):
     def __init__(self, cog, options):
@@ -354,11 +379,11 @@ class SolutionDecisionViewStatic(View):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept")
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="riddle_accept_button")
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("This action is only valid via DM submission.", ephemeral=True)
 
-    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject")
+    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌", custom_id="riddle_reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("This action is only valid via DM submission.", ephemeral=True)
 
