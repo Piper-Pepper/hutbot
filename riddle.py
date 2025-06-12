@@ -92,14 +92,32 @@ class RiddleCog(commands.Cog):
     def create_riddle_embed(self, riddle_data, guild):
         embed = discord.Embed(
             title=f"\U0001F9E0 Riddle of the Day ({riddle_data['created_at'].split(' ')[0]})",
-            description=riddle_data['text'].replace('\\n', '\n'),
+            description=riddle_data['text'].replace('\\n', '\n'),  # Zeilenumbrüche korrekt anzeigen
             color=discord.Color.purple()
         )
+
+        # Bild des Rätsels bleibt unten
         embed.set_image(url=riddle_data['image_url'])
-        embed.set_author(name=riddle_data['author_name'], icon_url=riddle_data['author_avatar'])
+
+        # Avatar des Rätselerstellers oben rechts groß
+        embed.set_thumbnail(url=riddle_data['author_avatar'])
+
+        # Autor-Info klein oben links
+        embed.set_author(name=f"Erstellt von: {riddle_data['author_name']}")
+
+        # Footer: Gildenname, Gildenlogo und Riddle-ID
         if guild.icon:
-            embed.set_footer(text=guild.name, icon_url=guild.icon.url)
+            embed.set_footer(
+                text=f"{guild.name} | Riddle ID: {riddle_data['id']}",
+                icon_url=guild.icon.url
+            )
+        else:
+            embed.set_footer(
+                text=f"Riddle ID: {riddle_data['id']}"
+            )
+
         return embed
+
 
     @tasks.loop(minutes=1)
     async def check_expiry(self):
