@@ -1,0 +1,137 @@
+import datetime
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+DEFAULT_IMAGE_URL = "https://example.com/default_pepper_image.jpg"  # Anpassen bei Bedarf
+
+special_roles_to_highlight = {
+    1346428405368750122: "👮‍♂️ *(Mod Team)*",
+    1346414581643219029: "💋 Your favourite...",
+    1375143857024401478: "*(XP Leader)*",
+    "Server Booster": "🚀 *(Hut-Boosters)*",
+    1378442177763479654: "**3.** *Voice Time*",
+    1375481531426144266: "**1.** *Voice Time*",
+    1378130233693306950: "**2.** Voice Time",
+    1381454281500262520: "*(1rd #msg)*",
+    1381454805205258250: "*(2rd #msg)*",
+    1381455215215247481: "*(3rd #msg)*",
+    1379909107926171668: "*(🤖 My lil Bots)*",
+    1346479048175652924: "*(Stream VJ)*",
+    1361993080013717678: "*(**NO NSFW**)*",
+    1379175952147546215: "*(Stream Alerts)*",
+    1346549280617271326: "*(more Alerts)*",
+    1380610400416043089: "*(Riddler of the Hut)*"
+}
+
+level_roles = {
+    1377051179615522926: ("0️⃣3️⃣", "ₜᵢₑᵣ ₁"),
+    1375147276413964408: ("1️⃣1️⃣", "ₜᵢₑᵣ ₂"),
+    1376592697606930593: ("2️⃣1️⃣", "ₜₜᵢₑᵣ ₃"),
+    1381791848875430069: ("3️⃣3️⃣", "ₜᵢₑᵣ ₄"),
+    1375666588404940830: ("4️⃣2️⃣", "ₜᵢₑᵣ ₅"),
+    1375584380914896978: ("6️⃣9️⃣", "ₜᵢₑᵣ ₆")
+}
+
+location_roles = {
+    "Europe", "North America", "Asia", "Oceania", "Africa", "South America", "Outer Goonverse"
+}
+
+gender_roles = {
+    "Male", "Female", "Non-Binary"
+}
+
+stoner_role_id = 1346461573392105474
+
+async def send_pepper_embed(interaction, user, open=False, mention_group=None, text=None, image_url=None):
+    await interaction.response.defer(ephemeral=not open)
+    guild = interaction.guild
+    member = guild.get_member(user.id) or await guild.fetch_member(user.id)
+    if not member:
+        await interaction.followup.send(content="❌ Member not found.", ephemeral=True)
+        return
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    def format_date_with_days(date):
+        if not date:
+            return "Unknown"
+        days_ago = (now - date).days
+        return f"\n{date.strftime('%Y-%m-%d %H:%M UTC')}\n(**{days_ago} days ago**)"
+
+    joined_at = format_date_with_days(member.joined_at)
+    created_at = format_date_with_days(user.created_at)
+
+    sorted_roles = sorted((role for role in member.roles if role != guild.default_role), key=lambda r: r.name.lower())
+    highlighted_roles, normal_roles = [], []
+    location_role = gender_role = stoner_buddy = None
+
+    for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
+        role_highlight = special_roles_to_highlight.get(role.id) or special_roles_to_highlight.get(role.name)
+        if role_highlight:
+            highlighted_roles.append(f"👉 {role.mention} / {role_highlight}")
+        elif role.id in level_roles:
+            continue
+        elif role.name in location_roles and not location_role:
+            location_role = role.mention
+        elif role.name in gender_roles and not gender_role:
+            gender_role = role.mention
+        elif role.id == stoner_role_id:
+            stoner_buddy = " ₛₜₒₙₑᵣ Bᵤddy💨"
+        else:
+            normal_roles.append(f"{role.mention}")
+
+    level_roles_of_member = [
+        f"{level_roles[role.id][0]}​{role.mention}​{level_roles[role.id][1]}"
+        for role in sorted_roles if role.id in level_roles
+    ]
+
+    embed_color = member.top_role.color if member.top_role.color.value else discord.Color.dark_gold()
+    embed = discord.Embed(
+        title=f"ᕼᑌT ᗰEᗰᗷEᖇ: \n{member.global_name or member.name} *({user.name})*",
+        color=embed_color
+    )
+    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
+    embed.add_field(name="​ᴀᴄᴄᴏᴜɴᴛ\n", value=created_at, inline=True)
+    embed.add_field(name="​ᴊᴏɪɴᴇᴅ\n", value=joined_at, inline=True)
+    embed.add_field(name="ᴛᴏᴘ ʀᴏʟᴇ​\n", value=member.top_role.mention if member.top_role != guild.default_role else "No top role", inline=True)
+    embed.add_field(name="🌍ʟᴏᴄᴀᴛɪᴏɴ", value=location_role or "No location role", inline=True)
+    embed.add_field(name="🚻ɢᴇɴᴅᴇʀ", value=gender_role or "No gender role", inline=True)
+    if stoner_buddy:
+        embed.add_field(name="✅ɢᴀɴᴊᴀ", value=stoner_buddy, inline=True)
+    if level_roles_of_member:
+        embed.add_field(name="🏆 𝙇𝙀𝙑𝙀𝙇𝙎", value="\n".join(level_roles_of_member), inline=False)
+    if highlighted_roles:
+        embed.add_field(name="⭐ Special Roles", value="\n".join(highlighted_roles), inline=False)
+    embed.add_field(name="🎭 𝙍𝙊𝙇𝙀𝙎", value=", ".join(normal_roles) if normal_roles else "No roles", inline=False)
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
+    embed.set_image(url=image_url if image_url else DEFAULT_IMAGE_URL)
+    embed.set_footer(text="Pumping forever... Cumming never...")
+
+    final_content = ""
+    if open and mention_group:
+        final_content += mention_group.mention + "\n"
+    if text:
+        final_content += text
+
+    await interaction.followup.send(content=final_content if final_content else None, embed=embed, ephemeral=not open)
+
+async def setup(bot: commands.Bot):
+    @bot.tree.context_menu(name="🛖 Goon Hut Info")
+    async def pepper_context(interaction: discord.Interaction, user: discord.User):
+        await send_pepper_embed(interaction, user)
+
+    @bot.tree.command(name="pepper", description="Show detailed info about a server member")
+    @app_commands.describe(
+        user="The member to show info for",
+        open="Show embed publicly (True) or private (False)",
+        mention_group="Optional: Select a role to mention (only if open=True)",
+        text="Optional: Additional text to display",
+        image_url="Optional: URL of an image to display below the embed"
+    )
+    @app_commands.rename(mention_group="mention-group")
+    async def pepper_slash(interaction: discord.Interaction, user: discord.User, open: bool = False, mention_group: discord.Role = None, text: str = None, image_url: str = None):
+        if not open and mention_group is not None:
+            await interaction.response.send_message("⚠️ You can only use **mention-group** if **open** is set to True.", ephemeral=True)
+            return
+        await send_pepper_embed(interaction, user, open=open, mention_group=mention_group, text=text, image_url=image_url)
