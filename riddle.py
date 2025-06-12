@@ -96,17 +96,14 @@ class RiddleCog(commands.Cog):
             color=discord.Color.purple()
         )
         embed.set_image(url=riddle_data['image_url'])
-        
-        # Avatar oben rechts
-        embed.set_thumbnail(url=riddle_data['author_avatar'])
-        
-        # Footer: Guild Name, Logo und Riddle ID
+        embed.set_thumbnail(url=riddle_data['author_avatar'])  # Avatar oben rechts
+
         if guild.icon:
             embed.set_footer(text=f"{guild.name} | Riddle ID: {riddle_data['id']}", icon_url=guild.icon.url)
         else:
             embed.set_footer(text=f"Riddle ID: {riddle_data['id']}")
-        
         return embed
+
 
 
     @tasks.loop(minutes=1)
@@ -130,7 +127,7 @@ class RiddleCog(commands.Cog):
 
         embed = discord.Embed(
             title="\U0000274C Riddle Closed",
-            description=riddle['text'].replace('\\n', '\n'),
+            description=riddle['text'],
             color=discord.Color.red()
         )
         embed.set_image(url=riddle['solution_image'])
