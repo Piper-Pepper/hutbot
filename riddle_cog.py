@@ -18,7 +18,7 @@ class RiddleCog(commands.Cog):
         self.bot = bot
         self.riddles = {}
         self.load_riddles()
-        self.bot.add_view(PersistentRiddleView(self))
+        self.bot.add_view(PersistentRiddleView(self))  # View mit timeout=None, persistent
         self.check_expiry.start()
 
     def load_riddles(self):
@@ -41,7 +41,7 @@ class RiddleCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        print("RiddleCog loaded and ready.")
+        print("✅ Riddle loaded and ready.")
 
     @app_commands.command(name="riddle_add", description="Add a new riddle.")
     async def riddle_add(self, interaction: discord.Interaction, text: str, solution: str, channel: discord.TextChannel,
@@ -101,10 +101,8 @@ class RiddleCog(commands.Cog):
         embed.set_image(url=riddle_data['image_url'])
         embed.set_thumbnail(url=riddle_data['author_avatar'])
 
- 
         if riddle_data.get('award'):
             embed.add_field(name="🎗️Award:", value=riddle_data['award'], inline=False)
-
 
         if guild.icon:
             embed.set_footer(text=f"{guild.name} | Riddle ID: {riddle_data['id']}", icon_url=guild.icon.url)
@@ -142,16 +140,14 @@ class RiddleCog(commands.Cog):
             embed.add_field(name="\U0001F3C6 Winner", value=f"{winner.display_name}", inline=False)
             embed.add_field(name="Submitted Solution", value=proposed_solution or "(None)", inline=False)
             embed.add_field(name="Correct Solution", value=riddle['solution'], inline=False)
-            
-            embed.set_thumbnail(url=winner.display_avatar.url)  # Sicherer Avatar-Link
-            if riddle.get('award'):  # riddle statt riddle_data
+
+            embed.set_thumbnail(url=winner.display_avatar.url)
+            if riddle.get('award'):
                 embed.add_field(name="🎗️Award:", value=riddle['award'], inline=False)
-            
+
         else:
             embed.add_field(name="\U0001F3C6 Winner", value="No winner", inline=False)
             embed.add_field(name="Correct Solution", value=riddle['solution'], inline=False)
-
-
 
         await channel.send(content=self.build_mentions(riddle, winner=winner), embed=embed)
         await message.edit(view=None)
@@ -175,10 +171,6 @@ class RiddleCog(commands.Cog):
         view.add_item(select)
 
         await interaction.response.send_message("Select a riddle to manage:", view=view, ephemeral=True)
-        
-    @commands.Cog.listener()
-    async def on_ready(self):
-        print("✅ Riddle loaded and ready.")
 
 async def setup(bot):
     await bot.add_cog(RiddleCog(bot))
