@@ -52,6 +52,7 @@ async def main():
         await bot.load_extension("pepper")  # <- So wird pepper.py geladen
         await bot.load_extension("riddle_cog") 
         await bot.load_extension("hutmember") 
+        await bot.load_extension("ppost") 
         await bot.start(TOKEN)
 
 asyncio.run(main())

@@ -30,7 +30,7 @@ async def send_paginated_hutmember(interaction: discord.Interaction, role: disco
         top_role_display = f"**{top_role.mention}**" if top_role != guild.default_role else "**No Role**"
         avatar_link = m.display_avatar.url
         display_name_link = f"[**{m.display_name}**]({avatar_link})"
-        return f"{display_name_link} hutz — {top_role_display} — *({days}d)*"
+        return f"{display_name_link} / {top_role_display} / *({days}d)*"
 
     def get_page_embed(page):
         start = page * per_page

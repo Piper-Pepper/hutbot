@@ -75,7 +75,6 @@ class RiddleCog(commands.Cog):
 
         embed = self.create_riddle_embed(riddle_data, interaction.guild)
         view = RiddleView(self, riddle_id)
-
         message = await channel.send(content=self.build_mentions(riddle_data), embed=embed, view=view)
         riddle_data['message_id'] = message.id
         self.riddles[riddle_id] = riddle_data
@@ -83,12 +82,14 @@ class RiddleCog(commands.Cog):
 
         await interaction.response.send_message(f"Riddle {riddle_id} successfully posted in {channel.mention}.", ephemeral=True)
 
-    def build_mentions(self, riddle_data):
+    def build_mentions(self, riddle_data, winner=None):
         mentions = f"<@&{MENTION_ROLE_ID}>"
         if riddle_data['mention_group1']:
             mentions += f" {riddle_data['mention_group1']}"
         if riddle_data['mention_group2']:
             mentions += f" {riddle_data['mention_group2']}"
+        if winner:
+            mentions += f" {winner.mention}"
         return mentions
 
     def create_riddle_embed(self, riddle_data, guild):
@@ -138,20 +139,21 @@ class RiddleCog(commands.Cog):
         embed.set_image(url=riddle['solution_image'])
 
         if winner:
-            embed.add_field(name="\U0001F3C6 Winner", value=f"{winner.mention}", inline=False)
+            embed.add_field(name="\U0001F3C6 Winner", value=f"{winner.display_name}", inline=False)
             embed.add_field(name="Submitted Solution", value=proposed_solution or "(None)", inline=False)
-            embed.set_footer(text=f"Correct Solution: {riddle['solution']}")
+            embed.add_field(name="Correct Solution", value=riddle['solution'], inline=False)
+            
             embed.set_thumbnail(url=winner.display_avatar.url)  # Sicherer Avatar-Link
             if riddle.get('award'):  # riddle statt riddle_data
                 embed.add_field(name="🎗️Award:", value=riddle['award'], inline=False)
             
         else:
             embed.add_field(name="\U0001F3C6 Winner", value="No winner", inline=False)
-            embed.set_footer(text=f"Solution: {riddle['solution']}")
+            embed.add_field(name="Correct Solution", value=riddle['solution'], inline=False)
 
-            
 
-        await channel.send(content=self.build_mentions(riddle), embed=embed)
+
+        await channel.send(content=self.build_mentions(riddle, winner=winner), embed=embed)
         await message.edit(view=None)
 
         del self.riddles[riddle_id]
@@ -173,7 +175,10 @@ class RiddleCog(commands.Cog):
         view.add_item(select)
 
         await interaction.response.send_message("Select a riddle to manage:", view=view, ephemeral=True)
-
+        
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print("✅ Riddle loaded and ready.")
 
 async def setup(bot):
     await bot.add_cog(RiddleCog(bot))

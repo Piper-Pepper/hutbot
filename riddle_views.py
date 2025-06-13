@@ -38,6 +38,7 @@ class SolutionModal(Modal):
     async def on_submit(self, interaction: discord.Interaction):
         solution_text = self.solution_input.value.replace('\\n', '\n')
         riddle = self.cog.riddles[self.riddle_id]
+        channel_id = riddle['channel_id']
         author = await self.cog.bot.fetch_user(riddle['author_id'])
 
         embed = discord.Embed(
@@ -85,7 +86,25 @@ class SolutionDecisionView(View):
 
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        riddle = self.cog.riddles[self.riddle_id]
+        solver = self.solver  # User, der die Lösung eingereicht hat
+        
+        embed = discord.Embed(
+            title="Riddle Solution Rejected",
+            description=f"**{solver.display_name}**",
+            color=discord.Color.red()
+        )
+        embed.set_thumbnail(url=solver.avatar.url if solver.avatar else None)
+        embed.add_field(name="Riddle Text", value=riddle['text'], inline=False)
+        embed.add_field(name="Suggested Solution", value=self.solution_text, inline=False)
+        embed.add_field(name="Result", value="The answer was not correct.", inline=False)
+        
+        channel = self.cog.bot.get_channel(riddle['channel_id'])
+        if channel:
+            await channel.send(content=solver.mention, embed=embed)
+        
         await self.disable_all_messages("❌ Solution rejected.")
+
 
 
 
