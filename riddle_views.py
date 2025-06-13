@@ -16,7 +16,7 @@ class PersistentRiddleView(View):
     )
     async def submit_solution(self, interaction: discord.Interaction, button: discord.ui.Button):
         message_id = interaction.message.id
-        riddle_id, riddle = self.cog.get_riddle_by_message(message_id)
+        riddle_id, riddle = self.cog.get_riddle_by_message_from_file(message_id)
         if not riddle:
             await interaction.response.send_message("This riddle is no longer active.", ephemeral=True)
             return

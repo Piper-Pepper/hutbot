@@ -38,6 +38,23 @@ class RiddleCog(commands.Cog):
             if data['message_id'] == message_id:
                 return rid, data
         return None, None
+    
+    def get_riddle_by_message_from_file(self, message_id):
+        if os.path.exists(RIDDLE_FILE):
+            with open(RIDDLE_FILE, 'r') as f:
+                riddles = json.load(f)
+            for rid, data in riddles.items():
+                if data['message_id'] == message_id:
+                    return rid, data
+        return None, None
+    
+    def get_riddle_by_id_from_file(self, riddle_id):
+        if os.path.exists(RIDDLE_FILE):
+            with open(RIDDLE_FILE, 'r') as f:
+                riddles = json.load(f)
+            return riddles.get(riddle_id)
+        return None
+
 
     @commands.Cog.listener()
     async def on_ready(self):
