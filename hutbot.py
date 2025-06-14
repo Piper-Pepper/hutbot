@@ -41,6 +41,10 @@ async def main():
         await bot.load_extension("hutmember")
         await bot.load_extension("riddle_cog")
 
+        # Starte den Bot
+        await bot.start(TOKEN)
+
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot connected as {bot.user}!")
@@ -51,13 +55,6 @@ async def on_ready():
         print(f"Synced {len(synced)} command(s).")
     except Exception as e:
         print(f"Failed to sync: {e}")
-        
-async def main():
-    async with bot:
-        # Lade die Extensions (Cogs)
-        await bot.load_extension("pepper")
-        await bot.load_extension("hutmember")
-        await bot.load_extension("riddle_cog")
 
 
 if __name__ == "__main__":
