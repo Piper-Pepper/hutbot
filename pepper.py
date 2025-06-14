@@ -121,10 +121,10 @@ async def setup(bot: commands.Bot):
     async def pepper_context(interaction: discord.Interaction, user: discord.User):
         await send_pepper_embed(interaction, user)
 
-    @bot.tree.command(name="pepper", description="Show detailed info about a server member")
+    @bot.tree.command(name="pepper", description="Do it Pepper-Style ... and your position the the hut..")
     @app_commands.describe(
-        user="The member to show info for",
-        open="Show embed publicly (True) or private (False)",
+        user="The gooner to show info for",
+        open="Show your ID to all publicly? (True) or private (False)",
         mention_group="Optional: Select a role to mention (only if open=True)",
         text="Optional: Additional text to display",
         image_url="Optional: URL of an image to display below the embed"
@@ -135,3 +135,5 @@ async def setup(bot: commands.Bot):
             await interaction.response.send_message("⚠️ You can only use **mention-group** if **open** is set to True.", ephemeral=True)
             return
         await send_pepper_embed(interaction, user, open=open, mention_group=mention_group, text=text, image_url=image_url)
+
+
