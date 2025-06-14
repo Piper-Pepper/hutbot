@@ -41,15 +41,6 @@ async def main():
         await bot.load_extension("hutmember")
         await bot.load_extension("riddle_cog")
 
-        # Hole den RiddleCog und rufe setup_persistent_views() auf
-        riddle_cog = bot.get_cog("RiddleCog")
-        if riddle_cog:
-            await riddle_cog.setup_persistent_views()
-
-        # Starte den Bot
-        await bot.start(TOKEN)
-
-
 @bot.event
 async def on_ready():
     print(f"✅ Bot connected as {bot.user}!")
