@@ -55,9 +55,7 @@ async def on_ready():
 async def main():
     async with bot:
         await bot.load_extension("pepper")
-        await bot.load_extension("riddle_cog")
         await bot.load_extension("hutmember")
-        await bot.load_extension("ppost")
         await bot.start(TOKEN)
 
 asyncio.run(main())
