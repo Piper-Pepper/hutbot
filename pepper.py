@@ -121,7 +121,7 @@ async def setup(bot: commands.Bot):
     async def pepper_context(interaction: discord.Interaction, user: discord.User):
         await send_pepper_embed(interaction, user)
 
-    @bot.tree.command(name="pepper", description="Do it Pepper-Style ... and your position the the hut..")
+    @bot.tree.command(name="pepper", description="Do it Pepper-Style 🫦 ... and show your ID Card..")
     @app_commands.describe(
         user="The gooner to show info for",
         open="Show your ID to all publicly? (True) or private (False)",
