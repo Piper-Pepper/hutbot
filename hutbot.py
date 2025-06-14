@@ -40,17 +40,13 @@ async def on_message(message):
 async def on_ready():
     print(f"✅ Bot connected as {bot.user}!")
     await bot.change_presence(activity=discord.Game(name=".. with her Cum-Kitty"))
-    
-    # Warten bis application_id gesetzt ist (Discord API braucht das)
-    while bot.application_id is None:
-        await asyncio.sleep(1)
-    
     try:
         print("Starting to sync commands...")
         synced = await tree.sync()
         print(f"Synced {len(synced)} command(s).")
     except Exception as e:
-        print(f"Failed to sync commands: {e}")
+        print(f"Failed to sync: {e}")
+
 
 async def main():
     async with bot:
