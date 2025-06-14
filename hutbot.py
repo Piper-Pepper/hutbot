@@ -7,7 +7,6 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 
-
 intents = discord.Intents.all()
 intents.members = True
 intents.message_content = True
@@ -18,9 +17,9 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1381375333491675217/idcard_small.png"
 DEFAULT_HUTMEMBER_IMAGE_URL = DEFAULT_IMAGE_URL
+
 
 @bot.event
 async def on_message(message):
@@ -35,6 +34,21 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
+async def main():
+    async with bot:
+        # Lade die Extensions (Cogs)
+        await bot.load_extension("pepper")
+        await bot.load_extension("hutmember")
+        await bot.load_extension("riddle_cog")
+
+        # Hole den RiddleCog und rufe setup_persistent_views() auf
+        riddle_cog = bot.get_cog("RiddleCog")
+        if riddle_cog:
+            await riddle_cog.setup_persistent_views()
+
+        # Starte den Bot
+        await bot.start(TOKEN)
+
 
 @bot.event
 async def on_ready():
@@ -48,10 +62,5 @@ async def on_ready():
         print(f"Failed to sync: {e}")
 
 
-async def main():
-    async with bot:
-        await bot.load_extension("pepper")
-        await bot.load_extension("hutmember")
-        await bot.start(TOKEN)
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
