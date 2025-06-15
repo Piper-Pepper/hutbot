@@ -68,6 +68,7 @@ class Riddle(commands.Cog):
         riddle_id = str(int(datetime.utcnow().timestamp() * 1000))
         image_url = image_url or DEFAULT_RIDDLE_IMAGE
         solution_image = solution_image or DEFAULT_RIDDLE_IMAGE
+        message = await channel.send(content=mentions_text, embed=embed, view=SubmitSolutionView(riddle_id))
 
         mentions = [f"<@&{RIDDLE_ADD_PERMISSION_ROLE_ID}>"]
         if mention_group1:
@@ -79,22 +80,31 @@ class Riddle(commands.Cog):
         created_at = datetime.utcnow()
         close_at = created_at + timedelta(days=length)
 
+
+
+        riddle_id_display = f"#{riddle_id}"  # oder einfach str(riddle_id), je nach Format
+
+
         embed = discord.Embed(
-            title=f"Goon Hut Riddle (Created: {created_at.strftime('%Y-%m-%d %H:%M UTC')})",
+            title=f"🧠Goon Hut Riddle #{riddle_id_display} (Created: {created_at.strftime('%Y-%m-%d %H:%M UTC')})",
             description=text.replace("\\n", "\n"),
             color=discord.Color.blue(),
             timestamp=created_at
         )
+        # Thumbnail = Avatar des Rätselerstellers
         avatar_url = interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url
         embed.set_thumbnail(url=avatar_url)
+
+        # Großes Bild oben = Riddle-Bild oder Default
+        embed.set_image(url=image if image else DEFAULT_RIDDLE_IMAGE)
+
+        # Footer = Ersteller + Ablaufdatum
         embed.set_footer(text=f"Created by {interaction.user.display_name} | Closes in {length} day(s)")
 
+        # Optional: Award prominent unter Text
         if award:
-            embed.add_field(name="Award", value=award, inline=False)
-        embed.add_field(name="Mentions", value=mentions_text, inline=False)
+            embed.add_field(name="🏆 Award", value=award, inline=False)
 
-        view = SubmitSolutionView(riddle_id)
-        message = await channel.send(content=mentions_text, embed=embed, view=view)
 
         self.riddles[riddle_id] = {
             "id": riddle_id,
