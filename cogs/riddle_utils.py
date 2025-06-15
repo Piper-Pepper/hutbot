@@ -5,6 +5,21 @@ import random
 import string
 from typing import Dict
 
+
+import json
+import os
+
+# wie vorher
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RIDDLE_DB_PATH = os.path.join(BASE_DIR, "..", "riddles.json")
+USER_STATS_PATH = os.path.join(BASE_DIR, "..", "user_stats.json")
+
+# Erstelle leere JSON-Dateien, wenn sie nicht existieren
+for path in [RIDDLE_DB_PATH, USER_STATS_PATH]:
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            json.dump({}, f)
+
 def load_riddles(path: str) -> Dict:
     if not os.path.exists(path):
         with open(path, 'w') as f:

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 from .riddle_views import SubmitSolutionView
 from .riddle_utils import load_riddles, save_riddles, generate_riddle_id
 
-RIDDLE_DB_PATH = 'data/riddles.json'
-USER_STATS_PATH = 'data/user_stats.json'
+RIDDLE_DB_PATH = 'riddles.json'
+USER_STATS_PATH = 'user_stats.json'
 
 RIDDLE_GROUP_ID = 1380610400416043089
 LOG_CHANNEL_ID = 1381754826710585527

@@ -5,8 +5,8 @@ from discord import Interaction
 from .riddle_utils import load_riddles, save_riddles
 import json
 
-RIDDLE_DB_PATH = 'data/riddles.json'
-USER_STATS_PATH = 'data/user_stats.json'
+RIDDLE_DB_PATH = 'riddles.json'
+USER_STATS_PATH = 'user_stats.json'
 LOG_CHANNEL_ID = 1381754826710585527
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg"
 
@@ -74,9 +74,9 @@ class SolutionReviewButtons(View):
         self.submitter_id = submitter_id
         self.submitted_solution = submitted_solution
         self.bot = bot
-        self.add_item(Button(emoji="✅", style=discord.ButtonStyle.success,
+        self.add_item(Button(emoji="👍", style=discord.ButtonStyle.success,
                              custom_id=f"approve_{riddle_id}"))
-        self.add_item(Button(emoji="❌", style=discord.ButtonStyle.danger,
+        self.add_item(Button(emoji="👎", style=discord.ButtonStyle.danger,
                              custom_id=f"reject_{riddle_id}"))
 
     async def interaction_check(self, interaction: Interaction) -> bool:
@@ -90,7 +90,7 @@ class SolutionReviewButtons(View):
         riddle = riddles.get(self.riddle_id)
 
         if not riddle or not riddle.get("active"):
-            await interaction.response.send_message("The riddle is already closed.", ephemeral=True)
+            await interaction.response.send_message("The riddle is already closed 😢", ephemeral=True)
             return
 
         custom_id = interaction.data["custom_id"]
@@ -101,7 +101,7 @@ class SolutionReviewButtons(View):
             await interaction.message.delete()
             try:
                 submitter = await self.bot.fetch_user(self.submitter_id)
-                await submitter.send("Sorry, your solution was not correct!")
+                await submitter.send("Sorry, your solution was not correct! 🙈🙉🙊")
             except discord.Forbidden:
                 pass
 
@@ -131,12 +131,15 @@ class SolutionReviewButtons(View):
 
         sol_embed = discord.Embed(
             title="Riddle Solution Revealed",
-            description=f"**Riddle:** {riddle['text']}\n**Answer:** {riddle['solution']}\n",
+            description=f"🧩**Riddle:** {riddle['text']}\n⁉️**Answer:** {riddle['solution']}\n",
             color=discord.Color.green()
         )
         sol_embed.set_image(url=riddle["solution_image"] or DEFAULT_IMAGE_URL)
-        sol_embed.set_footer(text=f"Winner: {winner.display_name if winner else 'No winner'}",
+        sol_embed.set_footer(text=f"🍾🏆Winner: {winner.display_name if winner else '😭No winner'}",
                              icon_url=winner.avatar.url if winner else None)
+        
+        if winner and riddle.get("award"):
+            sol_embed.add_field(name="🏅 Award", value=riddle["award"], inline=False)
 
         mentions = f"<@&{RIDDLE_GROUP_ID}>"
         for m in riddle["mentions"]:
@@ -144,5 +147,5 @@ class SolutionReviewButtons(View):
                 mentions += f" <@&{m}>"
 
         await channel.send(content=mentions, embed=sol_embed)
-        await interaction.response.send_message("Riddle closed.", ephemeral=True)
+        await interaction.response.send_message("🚫Riddle closed.", ephemeral=True)
 
