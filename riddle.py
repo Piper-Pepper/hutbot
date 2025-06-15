@@ -5,7 +5,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import json
 from datetime import datetime, timedelta
-from riddle_views import SubmitSolutionView, CreatorDMView, ModerationView, RiddleListView, RiddleOptionsView, StatsView
+from riddle_views import SubmitSolutionView, CreatorDMView, ModerationView, RiddleListView, RiddleOptionsView
 
 RIDDLES_FILE = "riddles.json"
 USER_STATS_FILE = "user_stats.json"
