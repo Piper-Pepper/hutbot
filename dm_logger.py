@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from datetime import datetime
 
-BOT_ID = 1379906834588106883  # Deine Bot-ID
+BOT_ID = 1379906834588106883 # Deine Bot-ID
 LOG_CHANNEL_ID = 1381754826710585527  # Kanal, in dem die DMs als Embed gepostet werden
 
 class DMLogger(commands.Cog):
