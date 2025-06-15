@@ -146,3 +146,4 @@ class Riddle(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Riddle(bot))
+    bot.add_view(RiddleOptionsView("dummy"))  # dummy-ID, wird nicht geklickt
