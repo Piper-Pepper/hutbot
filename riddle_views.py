@@ -3,7 +3,7 @@ from discord import TextChannel
 from discord.ui import View, Button, Modal, TextInput, Select
 from datetime import datetime
 import json
-from utils import load_json, save_json, RIDDLES_FILE, USER_STATS_FILE, LOG_CHANNEL_ID, DEFAULT_SOLUTION_IMAGE
+from utils import load_json, save_json, RIDDLES_FILE, USER_STATS_FILE, LOG_CHANNEL_ID, DEFAULT_SOLUTION_IMAGE, DEFAULT_RIDDLE_IMAGE, RIDDLE_ADD_PERMISSION_ROLE_ID
 
 
 class SubmitSolutionView(View):
