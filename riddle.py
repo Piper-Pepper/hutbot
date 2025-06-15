@@ -1,28 +1,31 @@
-# riddle.py (adapted for new views & /riddle stats)
+# riddle.py (angepasst für neue Views & /riddle_stats)
 
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import json
 from datetime import datetime, timedelta
-from riddle_views import SubmitSolutionView, CreatorDMView, ModerationView, RiddleListView, RiddleOptionsView
+from riddle_views import (
+    SubmitSolutionView,
+    CreatorDMView,
+    ModerationView,
+    RiddleListView,
+    RiddleOptionsView,
+    StatsView  # hinzugefügt
+)
 
-RIDDLES_FILE = "riddles.json"
-USER_STATS_FILE = "user_stats.json"
-LOG_CHANNEL_ID = 1381754826710585527
+from utils import (
+    RIDDLES_FILE,
+    USER_STATS_FILE,
+    LOG_CHANNEL_ID,
+    DEFAULT_SOLUTION_IMAGE,
+    load_json,
+    save_json
+)
+
 RIDDLE_ADD_PERMISSION_ROLE_ID = 1380610400416043089
-DEFAULT_RIDDLE_IMAGE = "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg"
 
-def load_json(filename):
-    try:
-        with open(filename, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
 
-def save_json(filename, data):
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=4)
 
 class Riddle(commands.Cog):
     def __init__(self, bot):
@@ -62,8 +65,8 @@ class Riddle(commands.Cog):
     @app_commands.checks.has_role(RIDDLE_ADD_PERMISSION_ROLE_ID)
     @app_commands.describe(channel="Channel to post the riddle embed")
     async def riddle_add(self, interaction: discord.Interaction, text: str, solution: str, channel: discord.TextChannel,
-                        image_url: str = None, mention_group1: discord.Role | discord.User = None, mention_group2: discord.Role | discord.User = None,
-                        solution_image: str = None, length: int = 1, award: str = None):
+                         image_url: str = None, mention_group1: discord.Role | discord.User = None, mention_group2: discord.Role | discord.User = None,
+                         solution_image: str = None, length: int = 1, award: str = None):
 
         riddle_id = str(int(datetime.utcnow().timestamp() * 1000))
         image_url = image_url or DEFAULT_RIDDLE_IMAGE
@@ -78,7 +81,7 @@ class Riddle(commands.Cog):
 
         created_at = datetime.utcnow()
         close_at = created_at + timedelta(days=length)
-        riddle_id_display = f"#{riddle_id}"  # or just str(riddle_id), depending on format
+        riddle_id_display = f"#{riddle_id}"
 
         embed = discord.Embed(
             title=f"🧠 Goon Hut Riddle {riddle_id_display} (Created: {created_at.strftime('%Y-%m-%d %H:%M UTC')})",
@@ -88,7 +91,7 @@ class Riddle(commands.Cog):
         )
         avatar_url = interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url
         embed.set_thumbnail(url=avatar_url)
-        embed.set_image(url=image_url if image_url else DEFAULT_RIDDLE_IMAGE)
+        embed.set_image(url=image_url)
         embed.set_footer(text=f"Created by {interaction.user.display_name} | Closes in {length} day(s)")
 
         if award:
@@ -127,19 +130,16 @@ class Riddle(commands.Cog):
             await interaction.response.send_message("No open riddles available.", ephemeral=True)
             return
 
-        view = RiddleListView(open_riddles, self.bot)  # pass bot here
+        view = RiddleListView(open_riddles, self.bot)
         await interaction.response.send_message("Here are the open riddles:", view=view, ephemeral=True)
-
 
     async def close_riddle(self, riddle_id: str, winner: discord.User = None, submitted_solution: str = None):
         riddle = self.riddles.get(riddle_id)
         if not riddle or riddle.get("closed", False):
-            return  # Riddle does not exist or is already closed
+            return
 
-        # Mark riddle as closed
         riddle["closed"] = True
 
-        # If winner exists, increase stats
         if winner:
             user_id = str(winner.id)
             stats = self.user_stats.get(user_id, {"submitted": 0, "solved": 0})
@@ -149,19 +149,17 @@ class Riddle(commands.Cog):
 
         save_json(RIDDLES_FILE, self.riddles)
 
-        # Fetch channel and send closing embed
         channel = self.bot.get_channel(riddle["channel_id"])
         if channel is None:
             print(f"Channel {riddle['channel_id']} not found.")
             return
-        image_url = image_url or DEFAULT_RIDDLE_IMAGE
+
         embed = discord.Embed(
             title=f"🎉 Riddle {riddle_id} closed! 🎉",
             color=discord.Color.green(),
             timestamp=datetime.utcnow()
         )
-        
-        embed.set_image(url=image_url)
+
         if winner:
             embed.add_field(name="🏆 Winner", value=f"{winner.mention} (ID: {winner.id})", inline=True)
             embed.set_thumbnail(url=winner.avatar.url if winner.avatar else winner.default_avatar.url)
@@ -170,10 +168,10 @@ class Riddle(commands.Cog):
                 f"**Submitted Solution:** {submitted_solution or 'No submission provided'}\n"
                 f"**Preset Solution:** ||{riddle['solution']}||"
             )
-            # Show solution image prominently: custom if set, else default
             embed.set_image(url=riddle.get("solution_image", DEFAULT_RIDDLE_IMAGE))
         else:
             embed.description = f"The riddle was closed without a winner.\n\n**Riddle:**\n{riddle['text']}"
+            embed.set_image(url=riddle.get("solution_image", DEFAULT_RIDDLE_IMAGE))
 
         if riddle.get("award"):
             embed.add_field(name="🏆 Award", value=riddle["award"], inline=False)
@@ -181,7 +179,7 @@ class Riddle(commands.Cog):
         await channel.send(embed=embed)
 
     async def delete_riddle(self, riddle_id: str):
-        # ... remains unchanged
+        # placeholder
         pass
 
     @riddle_add.error
@@ -193,4 +191,4 @@ class Riddle(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Riddle(bot))
-    bot.add_view(RiddleOptionsView("dummy"))  # dummy ID, will not be clicked
+    bot.add_view(RiddleOptionsView("dummy"))  # dummy ID, will not be geklickt

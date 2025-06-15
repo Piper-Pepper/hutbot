@@ -1,10 +1,9 @@
 import discord
 from discord import TextChannel
 from discord.ui import View, Button, Modal, TextInput, Select
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 from utils import load_json, save_json, RIDDLES_FILE, USER_STATS_FILE, LOG_CHANNEL_ID, DEFAULT_SOLUTION_IMAGE
-
 
 
 class SubmitSolutionView(View):
@@ -102,7 +101,7 @@ class CreatorDMView(View):
             await user.send("❌ Your solution was not correct. Better luck next time!")
         except:
             pass
-        channel = interaction.channel
+
         embed = discord.Embed(
             title="❌ Incorrect Solution Submitted",
             color=discord.Color.red(),
@@ -115,7 +114,6 @@ class CreatorDMView(View):
         embed.add_field(name="Date of Submission", value=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), inline=False)
         embed.set_footer(text="Sadly, this is not the correct solution.")
 
-
         await riddle_channel.send(embed=embed)
 
 
@@ -127,9 +125,11 @@ class ModerationView(CreatorDMView):
 
 
 class RiddleListView(View):
-    def __init__(self, riddles_dict):
+    def __init__(self, riddles, bot=None):
         super().__init__(timeout=None)
-        self.riddles = riddles_dict
+        self.riddles = riddles
+        self.bot = bot
+
         options = []
         for rid, data in self.riddles.items():
             created = datetime.fromisoformat(data['created_at']).strftime("%Y-%m-%d")
@@ -138,12 +138,17 @@ class RiddleListView(View):
                 label=f"ID {rid} | {created} | By {creator}",
                 value=rid
             ))
-        select = Select(placeholder="Choose a riddle", options=options, custom_id="riddle_list_select")
-        select.callback = self.select_callback
-        self.add_item(select)
+
+        if options:
+            select = Select(placeholder="Choose a riddle", options=options, custom_id="riddle_list_select")
+            select.callback = self.select_callback
+            self.add_item(select)
+
+        if self.bot:
+            self.add_item(Button(label="Reset Data", style=discord.ButtonStyle.danger, emoji="💀", custom_id="reset_data_button"))
 
     async def select_callback(self, interaction: discord.Interaction):
-        rid = self.children[0].values[0]
+        rid = interaction.data['values'][0]
         riddles = load_json(RIDDLES_FILE)
         riddle = riddles.get(rid)
         if not riddle:
@@ -187,7 +192,6 @@ class RiddleOptionsView(View):
             return
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-        # Delete related log message
         try:
             if 'log_message_id' in riddle:
                 msg = await log_channel.fetch_message(riddle['log_message_id'])
@@ -206,10 +210,6 @@ class RiddleOptionsView(View):
         save_json(RIDDLES_FILE, riddles)
         await interaction.response.send_message("🗑️ Riddle and all related messages deleted.", ephemeral=True)
 
-        await interaction.response.send_message(embed=embed, view=RiddleOptionsView(rid), ephemeral=True)
-
-
-# === NEU: StatsView zum Anzeigen der User-Statistiken ===
 
 class StatsView(View):
     def __init__(self, user: discord.User, stats: dict):
@@ -221,12 +221,7 @@ class StatsView(View):
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.message.delete()
 
-    async def on_timeout(self):
-        # View läuft nie aus, aber falls timeout gesetzt wird, löscht View die Nachricht
-        pass
-
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Nur der User selbst darf die Stats schließen
         return interaction.user.id == self.user.id
 
     async def send_stats(self, interaction: discord.Interaction):
