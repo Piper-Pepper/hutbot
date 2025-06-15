@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord import TextChannel
 import json
 import os
 import uuid
@@ -126,14 +125,14 @@ class Riddle(commands.Cog):
     async def add_riddle(self, interaction: discord.Interaction,
                          text: str,
                          solution: str,
-                         channel: TextChannel,
+                         channel: str,
                          image_url: str = DEFAULT_IMAGE_URL,
                          mention_group1: str = None,
                          mention_group2: str = None,
                          solution_image: str = None,
                          length: int = 1,
                          award: str = None):
-        target_channel = channel
+
         if RIDDLE_ROLE_ID not in [role.id for role in interaction.user.roles]:
             await interaction.response.send_message("❌ You don't have permission to add riddles.", ephemeral=True)
             return

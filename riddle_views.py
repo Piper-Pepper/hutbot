@@ -1,7 +1,7 @@
 import discord
 import json
 from datetime import datetime
-
+from discord import TextChannel
 
 RIDDLES_FILE = "riddles.json"
 USER_STATS_FILE = "user_stats.json"

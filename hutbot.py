@@ -3,6 +3,7 @@ import datetime
 import subprocess
 import discord
 from discord import app_commands
+from discord import TextChannel
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
