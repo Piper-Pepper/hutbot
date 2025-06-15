@@ -5,12 +5,6 @@ from datetime import datetime, timedelta
 import json
 from utils import load_json, save_json, RIDDLES_FILE, USER_STATS_FILE, LOG_CHANNEL_ID, DEFAULT_SOLUTION_IMAGE
 
-RIDDLES_FILE = "riddles.json"
-USER_STATS_FILE = "user_stats.json"
-LOG_CHANNEL_ID = 1381754826710585527
-DEFAULT_SOLUTION_IMAGE = "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg"
-
-
 
 
 class SubmitSolutionView(View):

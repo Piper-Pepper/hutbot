@@ -1,4 +1,4 @@
-# riddle.py (angepasst für neue Views & /riddle stats)
+# riddle.py (adapted for new views & /riddle stats)
 
 import discord
 from discord.ext import commands, tasks
@@ -52,7 +52,7 @@ class Riddle(commands.Cog):
             if not riddle.get("closed", False) and now > datetime.fromisoformat(riddle["close_at"]):
                 await self.close_riddle(riddle_id)
 
-    @app_commands.command(name="riddle_stats", description="Zeigt deine oder andere Rätselfortschritte")
+    @app_commands.command(name="riddle_stats", description="Shows your or another user's riddle progress")
     async def riddle_stats(self, interaction: discord.Interaction, user: discord.User = None):
         target_user = user or interaction.user
         stats = self.user_stats.get(str(target_user.id), {"submitted": 0, "solved": 0})
@@ -78,10 +78,10 @@ class Riddle(commands.Cog):
 
         created_at = datetime.utcnow()
         close_at = created_at + timedelta(days=length)
-        riddle_id_display = f"#{riddle_id}"  # oder einfach str(riddle_id), je nach Format
+        riddle_id_display = f"#{riddle_id}"  # or just str(riddle_id), depending on format
 
         embed = discord.Embed(
-            title=f"🧠Goon Hut Riddle {riddle_id_display} (Created: {created_at.strftime('%Y-%m-%d %H:%M UTC')})",
+            title=f"🧠 Goon Hut Riddle {riddle_id_display} (Created: {created_at.strftime('%Y-%m-%d %H:%M UTC')})",
             description=text.replace("\\n", "\n"),
             color=discord.Color.blue(),
             timestamp=created_at
@@ -124,21 +124,21 @@ class Riddle(commands.Cog):
     async def riddle_list(self, interaction: discord.Interaction):
         open_riddles = {k: v for k, v in self.riddles.items() if not v.get("closed", False)}
         if not open_riddles:
-            await interaction.response.send_message("Keine offenen Rätsel vorhanden.", ephemeral=True)
+            await interaction.response.send_message("No open riddles available.", ephemeral=True)
             return
 
         view = RiddleListView(open_riddles)
-        await interaction.response.send_message("Hier sind die offenen Rätsel:", view=view, ephemeral=True)
+        await interaction.response.send_message("Here are the open riddles:", view=view, ephemeral=True)
 
     async def close_riddle(self, riddle_id: str, winner: discord.User = None, submitted_solution: str = None):
         riddle = self.riddles.get(riddle_id)
         if not riddle or riddle.get("closed", False):
-            return  # Rätsel existiert nicht oder ist schon geschlossen
+            return  # Riddle does not exist or is already closed
 
-        # Markiere Rätsel als geschlossen
+        # Mark riddle as closed
         riddle["closed"] = True
 
-        # Wenn Gewinner vorhanden, erhöhe Statistik
+        # If winner exists, increase stats
         if winner:
             user_id = str(winner.id)
             stats = self.user_stats.get(user_id, {"submitted": 0, "solved": 0})
@@ -148,28 +148,31 @@ class Riddle(commands.Cog):
 
         save_json(RIDDLES_FILE, self.riddles)
 
-        # Hole Channel und sende Abschluss-Embed
+        # Fetch channel and send closing embed
         channel = self.bot.get_channel(riddle["channel_id"])
         if channel is None:
-            print(f"Channel {riddle['channel_id']} nicht gefunden.")
+            print(f"Channel {riddle['channel_id']} not found.")
             return
-
+        image_url = image_url or DEFAULT_RIDDLE_IMAGE
         embed = discord.Embed(
-            title=f"🎉 Rätsel {riddle_id} geschlossen! 🎉",
+            title=f"🎉 Riddle {riddle_id} closed! 🎉",
             color=discord.Color.green(),
             timestamp=datetime.utcnow()
         )
-
+        
+        embed.set_image(url=image_url)
         if winner:
-            embed.add_field(name="🏆 Gewinner", value=f"{winner.mention} (ID: {winner.id})", inline=True)
+            embed.add_field(name="🏆 Winner", value=f"{winner.mention} (ID: {winner.id})", inline=True)
             embed.set_thumbnail(url=winner.avatar.url if winner.avatar else winner.default_avatar.url)
             embed.description = (
-                f"**Rätsel:**\n{riddle['text']}\n\n"
-                f"**Eingereichte Lösung:** {submitted_solution or 'Keine Angabe'}\n"
-                f"**Voreingestellte Lösung:** ||{riddle['solution']}||"
+                f"**Riddle:**\n{riddle['text']}\n\n"
+                f"**Submitted Solution:** {submitted_solution or 'No submission provided'}\n"
+                f"**Preset Solution:** ||{riddle['solution']}||"
             )
+            # Show solution image prominently: custom if set, else default
+            embed.set_image(url=riddle.get("solution_image", DEFAULT_RIDDLE_IMAGE))
         else:
-            embed.description = f"Das Rätsel wurde ohne Gewinner geschlossen.\n\n**Rätsel:**\n{riddle['text']}"
+            embed.description = f"The riddle was closed without a winner.\n\n**Riddle:**\n{riddle['text']}"
 
         if riddle.get("award"):
             embed.add_field(name="🏆 Award", value=riddle["award"], inline=False)
@@ -177,7 +180,7 @@ class Riddle(commands.Cog):
         await channel.send(embed=embed)
 
     async def delete_riddle(self, riddle_id: str):
-        # ... bleibt unverändert
+        # ... remains unchanged
         pass
 
     @riddle_add.error
@@ -189,4 +192,4 @@ class Riddle(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Riddle(bot))
-    bot.add_view(RiddleOptionsView("dummy"))  # dummy-ID, wird nicht geklickt
+    bot.add_view(RiddleOptionsView("dummy"))  # dummy ID, will not be clicked
