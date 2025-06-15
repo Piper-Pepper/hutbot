@@ -113,6 +113,8 @@ class CreatorDMView(View):
     async def reject_solution(self, interaction: discord.Interaction, button: discord.ui.Button):
         riddles = load_json(RIDDLES_FILE)
         riddle = riddles.get(self.riddle_id)
+        riddle_channel = interaction.client.get_channel(riddle['channel_id'])
+
         if riddle:
             riddle['submissions'] = [s for s in riddle.get('submissions', []) if s['user_id'] != self.submitter_id]
             save_json(RIDDLES_FILE, riddles)
@@ -123,15 +125,19 @@ class CreatorDMView(View):
             pass
         channel = interaction.channel
         embed = discord.Embed(
-            title="❌ Incorrect Solution",
-            description=f"The submitted solution `{self.submitted_solution}` was not correct.",
+            title="❌ Incorrect Solution Submitted",
             color=discord.Color.red(),
             timestamp=datetime.utcnow()
         )
-        embed.set_footer(text=user.display_name, icon_url=user.avatar.url if user.avatar else None)
-        await channel.send(embed=embed)
-        await interaction.response.send_message("❌ Solution rejected and submitter notified.", ephemeral=True)
 
+        embed.set_author(name=user.display_name, icon_url=user.avatar.url if user.avatar else None)
+        embed.add_field(name="Riddle Text", value=riddle['text'].replace("\\n", "\n"), inline=False)
+        embed.add_field(name="Submitted Solution", value=self.submitted_solution, inline=False)
+        embed.add_field(name="Date of Submission", value=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), inline=False)
+        embed.set_footer(text="Sadly, this is not the correct solution.")
+
+
+        await riddle_channel.send(embed=embed)
 
 class ModerationView(CreatorDMView):
     def __init__(self, riddle_id, submitter_id=None, submitted_solution=None):
