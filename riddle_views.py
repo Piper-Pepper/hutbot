@@ -56,12 +56,14 @@ class SolutionModal(Modal, title="\U0001F4A1 Submit Your Solution"):
         creator = await interaction.client.fetch_user(riddle['creator_id'])
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
 
+        riddle_text = riddle['text'].replace('\\n', '\n')
         embed = discord.Embed(
             title="\U0001F4DD New Solution Submitted!",
-            description=f"**Riddle:** {riddle['text'].replace('\\n', '\n')}\n\n**Submitted Solution:** {solution_text}",
+            description=f"**Riddle:** {riddle_text}\n\n**Submitted Solution:** {solution_text}",
             color=discord.Color.orange(),
             timestamp=datetime.utcnow()
-        )
+    )
+
         embed.set_footer(text=f"From: {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
 
         view_creator_dm = CreatorDMView(self.riddle_id, submitter_id=interaction.user.id, submitted_solution=solution_text)
