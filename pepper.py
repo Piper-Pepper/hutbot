@@ -6,10 +6,10 @@ from discord.ext import commands
 DEFAULT_IMAGE_URL = "https://example.com/default_pepper_image.jpg"  # Anpassen bei Bedarf
 
 special_roles_to_highlight = {
-    1346428405368750122: "👮‍♂️ *(Mod Team)*",
-    1346414581643219029: "💋 Your favourite...",
+    1346428405368750122: "*(Mod Team👮‍♂️)*",
+    1346414581643219029: "*(your favourite...💋)*",
     1375143857024401478: "*(XP 🍾 Leader)*",
-    "Server Booster": "🚀 *(Hut-Boosters)*",
+    "Server Booster": "*(Hut-Booster 🚀)*",
     1378442177763479654: "*(₃ᵣd 🎤Voice Time)*",
     1375481531426144266: "*(¹ˢᵗ 🎤Voice Time)*",
     1378130233693306950: "*(₂ₙd* 🎤Voice Time)*",
@@ -69,7 +69,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
     for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
         role_highlight = special_roles_to_highlight.get(role.id) or special_roles_to_highlight.get(role.name)
         if role_highlight:
-            highlighted_roles.append(f"▶️{role.mention} ⏭ {role_highlight}")
+            highlighted_roles.append(f"▶️{role.mention} ⏭{role_highlight}")
         elif role.id in level_roles:
             continue
         elif role.name in location_roles and not location_role:
