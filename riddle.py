@@ -131,8 +131,50 @@ class Riddle(commands.Cog):
         await interaction.response.send_message("Hier sind die offenen Rätsel:", view=view, ephemeral=True)
 
     async def close_riddle(self, riddle_id: str, winner: discord.User = None, submitted_solution: str = None):
-        # ... bleibt unverändert aus deiner bestehenden Version
-        pass
+        riddle = self.riddles.get(riddle_id)
+        if not riddle or riddle.get("closed", False):
+            return  # Rätsel existiert nicht oder ist schon geschlossen
+
+        # Markiere Rätsel als geschlossen
+        riddle["closed"] = True
+
+        # Wenn Gewinner vorhanden, erhöhe Statistik
+        if winner:
+            user_id = str(winner.id)
+            stats = self.user_stats.get(user_id, {"submitted": 0, "solved": 0})
+            stats["solved"] += 1
+            self.user_stats[user_id] = stats
+            save_json(USER_STATS_FILE, self.user_stats)
+
+        save_json(RIDDLES_FILE, self.riddles)
+
+        # Hole Channel und sende Abschluss-Embed
+        channel = self.bot.get_channel(riddle["channel_id"])
+        if channel is None:
+            print(f"Channel {riddle['channel_id']} nicht gefunden.")
+            return
+
+        embed = discord.Embed(
+            title=f"🎉 Rätsel {riddle_id} geschlossen! 🎉",
+            color=discord.Color.green(),
+            timestamp=datetime.utcnow()
+        )
+
+        if winner:
+            embed.add_field(name="🏆 Gewinner", value=f"{winner.mention} (ID: {winner.id})", inline=True)
+            embed.set_thumbnail(url=winner.avatar.url if winner.avatar else winner.default_avatar.url)
+            embed.description = (
+                f"**Rätsel:**\n{riddle['text']}\n\n"
+                f"**Eingereichte Lösung:** {submitted_solution or 'Keine Angabe'}\n"
+                f"**Voreingestellte Lösung:** ||{riddle['solution']}||"
+            )
+        else:
+            embed.description = f"Das Rätsel wurde ohne Gewinner geschlossen.\n\n**Rätsel:**\n{riddle['text']}"
+
+        if riddle.get("award"):
+            embed.add_field(name="🏆 Award", value=riddle["award"], inline=False)
+
+        await channel.send(embed=embed)
 
     async def delete_riddle(self, riddle_id: str):
         # ... bleibt unverändert

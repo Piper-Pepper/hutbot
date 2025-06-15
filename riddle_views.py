@@ -1,5 +1,3 @@
-# riddle_views.py (Teil 1)
-
 import discord
 from discord import TextChannel
 from discord.ui import View, Button, Modal, TextInput, Select
@@ -7,24 +5,12 @@ from datetime import datetime, timedelta
 import json
 from utils import load_json, save_json, RIDDLES_FILE, USER_STATS_FILE, LOG_CHANNEL_ID, DEFAULT_SOLUTION_IMAGE
 
-
 RIDDLES_FILE = "riddles.json"
 USER_STATS_FILE = "user_stats.json"
 LOG_CHANNEL_ID = 1381754826710585527
 DEFAULT_SOLUTION_IMAGE = "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg"
 
 
-def load_json(filename):
-    try:
-        with open(filename, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-
-def save_json(filename, data):
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=4)
 
 
 class SubmitSolutionView(View):
@@ -62,7 +48,7 @@ class SolutionModal(Modal, title="\U0001F4A1 Submit Your Solution"):
             description=f"**Riddle:** {riddle_text}\n\n**Submitted Solution:** {solution_text}",
             color=discord.Color.orange(),
             timestamp=datetime.utcnow()
-    )
+        )
 
         embed.set_footer(text=f"From: {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
 
@@ -89,7 +75,6 @@ class SolutionModal(Modal, title="\U0001F4A1 Submit Your Solution"):
         save_json(USER_STATS_FILE, user_stats)
 
         await interaction.response.send_message("\u2705 Solution submitted! The riddle creator has been notified.", ephemeral=True)
-# riddle_views.py (Teil 2)
 
 
 class CreatorDMView(View):
@@ -138,6 +123,7 @@ class CreatorDMView(View):
 
 
         await riddle_channel.send(embed=embed)
+
 
 class ModerationView(CreatorDMView):
     def __init__(self, riddle_id, submitter_id=None, submitted_solution=None):
@@ -225,3 +211,36 @@ class RiddleOptionsView(View):
         del riddles[self.riddle_id]
         save_json(RIDDLES_FILE, riddles)
         await interaction.response.send_message("🗑️ Riddle and all related messages deleted.", ephemeral=True)
+
+
+# === NEU: StatsView zum Anzeigen der User-Statistiken ===
+
+class StatsView(View):
+    def __init__(self, user: discord.User, stats: dict):
+        super().__init__(timeout=None)
+        self.user = user
+        self.stats = stats
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.message.delete()
+
+    async def on_timeout(self):
+        # View läuft nie aus, aber falls timeout gesetzt wird, löscht View die Nachricht
+        pass
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Nur der User selbst darf die Stats schließen
+        return interaction.user.id == self.user.id
+
+    async def send_stats(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title=f"Riddle Stats for {self.user.display_name}",
+            color=discord.Color.green(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_thumbnail(url=self.user.avatar.url if self.user.avatar else self.user.default_avatar.url)
+        embed.add_field(name="📝 Submitted Solutions", value=str(self.stats.get("submitted", 0)), inline=True)
+        embed.add_field(name="🏆 Solved Riddles", value=str(self.stats.get("solved", 0)), inline=True)
+
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
