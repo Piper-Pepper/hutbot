@@ -8,7 +8,7 @@ DEFAULT_IMAGE_URL = "https://example.com/default_pepper_image.jpg"  # Anpassen b
 special_roles_to_highlight = {
     1346428405368750122: "👮‍♂️ *(Mod Team)*",
     1346414581643219029: "💋 Your favourite...",
-    1375143857024401478: "*(XP Leader)*",
+    1375143857024401478: "*(XP 🍾 Leader)*",
     "Server Booster": "🚀 *(Hut-Boosters)*",
     1378442177763479654: "*(₃ᵣd 🎤Voice Time)*",
     1375481531426144266: "*(¹ˢᵗ 🎤Voice Time)*",
@@ -16,11 +16,11 @@ special_roles_to_highlight = {
     1381454281500262520: "*(¹ˢᵗ ✍️#msg)*",
     1381454805205258250: "*(₂ₙd ✍️#msg)*",
     1381455215215247481: "*(₃ᵣd ✍️#msg)*",
-    1379909107926171668: "*(🤖 My lil Bots)*",
+    1379909107926171668: "*(🤖 My lil' Goon-Bots)*",
     1346479048175652924: "*(Stream VJ)*",
     1361993080013717678: "*(**NO NSFW**)*",
     1379175952147546215: "*(Stream Alerts)*",
-    1346549280617271326: "*(more love💝letters by me📨)*",
+    1346549280617271326: "*(more Love💝Letters by me📨)*",
     1380610400416043089: "*(Riddler of the Hut)*"
 }
 
