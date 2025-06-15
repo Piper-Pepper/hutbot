@@ -20,7 +20,7 @@ special_roles_to_highlight = {
     1346479048175652924: "*(Stream VJ)*",
     1361993080013717678: "*(**NO NSFW**)*",
     1379175952147546215: "*(Stream Alerts)*",
-    1346549280617271326: "*(more Love💝Letters by me📨)*",
+    1346549280617271326: "*(more 📨 by me 💝)*",
     1380610400416043089: "*(Riddler of the Hut)*"
 }
 
