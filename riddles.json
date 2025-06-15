@@ -1,1 +1,20 @@
-{}
+{
+    "1749994533585": {
+        "id": "1749994533585",
+        "text": "fdsf",
+        "solution": "sadd",
+        "creator_id": 1292194320786522223,
+        "channel_id": 1346843244067160074,
+        "message_id": 1383832314412404786,
+        "created_at": "2025-06-15T15:35:33.585541",
+        "close_at": "2025-06-16T15:35:33.585541",
+        "image_url": "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg",
+        "solution_image": "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg",
+        "award": null,
+        "mention_group1_id": null,
+        "mention_group2_id": null,
+        "closed": false,
+        "creator_dm_message_id": null,
+        "log_message_id": null
+    }
+}
