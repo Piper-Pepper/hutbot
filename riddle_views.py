@@ -206,6 +206,8 @@ class RiddleOptionsView(View):
         save_json(RIDDLES_FILE, riddles)
         await interaction.response.send_message("🗑️ Riddle and all related messages deleted.", ephemeral=True)
 
+        await interaction.response.send_message(embed=embed, view=RiddleOptionsView(rid), ephemeral=True)
+
 
 # === NEU: StatsView zum Anzeigen der User-Statistiken ===
 

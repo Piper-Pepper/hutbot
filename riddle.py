@@ -127,8 +127,9 @@ class Riddle(commands.Cog):
             await interaction.response.send_message("No open riddles available.", ephemeral=True)
             return
 
-        view = RiddleListView(open_riddles)
+        view = RiddleListView(open_riddles, self.bot)  # pass bot here
         await interaction.response.send_message("Here are the open riddles:", view=view, ephemeral=True)
+
 
     async def close_riddle(self, riddle_id: str, winner: discord.User = None, submitted_solution: str = None):
         riddle = self.riddles.get(riddle_id)
