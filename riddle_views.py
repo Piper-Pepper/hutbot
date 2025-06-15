@@ -179,7 +179,7 @@ class RiddleListView(View):
             embed.add_field(name="Award", value=riddle["award"], inline=False)
         embed.set_footer(text=f"Created by <@{riddle['creator_id']}> | Closes at {datetime.fromisoformat(riddle['close_at']).strftime('%Y-%m-%d %H:%M UTC')}")
 
-        # Options view for this riddle: Close with winner / Close without winner / Delete riddle
+     
         options_view = RiddleOptionsView(riddle_id)
         await interaction.response.send_message(embed=embed, view=options_view, ephemeral=True)
 

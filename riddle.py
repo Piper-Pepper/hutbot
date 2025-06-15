@@ -230,6 +230,41 @@ class Riddle(commands.Cog):
 
         view = RiddleListView(open_riddles)
         await interaction.response.send_message("Hier sind die offenen Rätsel:", view=view, ephemeral=True)
-        
+
+    async def delete_riddle(self, riddle_id: str):
+        """ Delete a riddle completely, remove from memory and JSON """
+        if riddle_id in self.riddles:
+            riddle = self.riddles[riddle_id]
+            
+            # Optional: Versuche, die Nachricht im Channel zu löschen
+            channel = self.bot.get_channel(riddle["channel_id"])
+            if channel:
+                try:
+                    msg = await channel.fetch_message(riddle["message_id"])
+                    await msg.delete()
+                except discord.NotFound:
+                    pass
+            
+            # Optional: Lösche DM- und Log-Nachrichten mit Buttons, wie bei close_riddle
+            creator = await self.bot.fetch_user(riddle["creator_id"])
+            log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+            if riddle.get("creator_dm_message_id") and creator:
+                try:
+                    dm_channel = await creator.create_dm()
+                    dm_msg = await dm_channel.fetch_message(riddle["creator_dm_message_id"])
+                    await dm_msg.delete()
+                except Exception:
+                    pass
+            if riddle.get("log_message_id") and log_channel:
+                try:
+                    log_msg = await log_channel.fetch_message(riddle["log_message_id"])
+                    await log_msg.delete()
+                except Exception:
+                    pass
+            
+            # Dann aus self.riddles entfernen
+            del self.riddles[riddle_id]
+            save_json(RIDDLES_FILE, self.riddles)
+    
 async def setup(bot):
     await bot.add_cog(Riddle(bot))
