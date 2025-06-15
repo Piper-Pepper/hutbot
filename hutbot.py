@@ -20,7 +20,6 @@ tree = bot.tree
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1381375333491675217/idcard_small.png"
 DEFAULT_HUTMEMBER_IMAGE_URL = DEFAULT_IMAGE_URL
 
-
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -33,12 +32,11 @@ async def on_message(message):
             pass
     await bot.process_commands(message)
 
-
 @bot.event
 async def on_ready():
     print(f"✅ Bot connected as {bot.user}!")
     await bot.change_presence(activity=discord.Game(name=".. with her Cum-Kitty"))
-    
+    # Sync slash commands
     try:
         print("Starting to sync commands...")
         synced = await tree.sync()
@@ -46,13 +44,19 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
 
+    # Setup persistent riddle views if cog is loaded
+    riddle_cog = bot.get_cog("Riddle")
+    if riddle_cog:
+        riddle_cog.setup_persistent_views()
+        print("✅ Persistent Riddle Views registered.")
 
 async def main():
     async with bot:
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
-        await bot.start(TOKEN)
+        await bot.load_extension("riddle")  # Load the Riddle cog here
 
+        await bot.start(TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())
