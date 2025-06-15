@@ -69,7 +69,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
     for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
         role_highlight = special_roles_to_highlight.get(role.id) or special_roles_to_highlight.get(role.name)
         if role_highlight:
-            highlighted_roles.append(f"👉 {role.mention} / {role_highlight}")
+            highlighted_roles.append(f"{role.mention} 👉 {role_highlight}")
         elif role.id in level_roles:
             continue
         elif role.name in location_roles and not location_role:
