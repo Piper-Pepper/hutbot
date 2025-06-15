@@ -44,17 +44,12 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
 
-    # Setup persistent riddle views if cog is loaded
-    riddle_cog = bot.get_cog("Riddle")
-    if riddle_cog:
-        riddle_cog.setup_persistent_views()
-        print("✅ Persistent Riddle Views registered.")
-
 async def main():
     async with bot:
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
-        await bot.load_extension("riddle")  # Load the Riddle cog here
+        await bot.load_extension("riddle")
+ # ✅ Load the riddle cog directly
 
         await bot.start(TOKEN)
 

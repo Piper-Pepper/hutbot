@@ -1,217 +1,265 @@
-# riddle.py
-
 import discord
+from discord.ext import commands
 from discord import app_commands
-from discord.ext import commands, tasks
-import asyncio
+from discord import TextChannel
 import json
 import os
 import uuid
 from datetime import datetime, timedelta
-from riddle_view import RiddleSubmitView, end_riddle
 
-RIDDLE_GROUP_ID = 1380610400416043089
+from riddle_views import SubmitSolutionView, ModerationView, CreatorDMView
+
+RIDDLE_ROLE_ID = 1380610400416043089
+LOG_CHANNEL_ID = 1381754826710585527
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg"
 
-def load_json(path):
-    if not os.path.exists(path):
-        with open(path, "w") as f:
+RIDDLES_FILE = "riddles.json"
+USER_STATS_FILE = "user_stats.json"
+
+
+
+
+
+def load_json(filename):
+    if not os.path.exists(filename):
+        with open(filename, 'w') as f:
             json.dump({}, f)
-    with open(path, "r") as f:
+    with open(filename, 'r') as f:
         return json.load(f)
 
-def write_json(path, data):
-    with open(path, "w") as f:
+def save_json(filename, data):
+    with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
 
 class Riddle(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.riddles = load_json("riddles.json")
-        self.user_data = load_json("user_data.json")
-        self.check_expired_riddles.start()
-
-    def cog_unload(self):
-        self.check_expired_riddles.cancel()
+        self.riddles = load_json(RIDDLES_FILE)
+        self.user_stats = load_json(USER_STATS_FILE)
+        self.setup_persistent_views()
 
     def setup_persistent_views(self):
-        for riddle_id, data in self.riddles.items():
-            view = RiddleSubmitView(riddle_id, data["text"], data["creator_id"])
-            self.bot.add_view(view)
+        for riddle_id in self.riddles:
+            self.bot.add_view(SubmitSolutionView(riddle_id))
+            self.bot.add_view(ModerationView(riddle_id))
+            self.bot.add_view(CreatorDMView(riddle_id))
 
-    @tasks.loop(minutes=1)
-    async def check_expired_riddles(self):
-        now = datetime.utcnow()
-        to_close = []
-        for riddle_id, data in self.riddles.items():
-            expiry = datetime.fromisoformat(data["expires_at"])
-            if now >= expiry:
-                to_close.append(riddle_id)
-        for riddle_id in to_close:
-            await end_riddle(self.bot, riddle_id)
+    def save_data(self):
+        save_json(RIDDLES_FILE, self.riddles)
+        save_json(USER_STATS_FILE, self.user_stats)
 
-    @app_commands.command(name="riddle_add", description="Add a new riddle")
-    async def riddle_add(self, interaction: discord.Interaction,
+    def convert_newlines(self, text):
+        return text.replace("\\n", "\n")
+
+    async def close_riddle(self, riddle_id, winner=None, submitted_solution=None):
+        riddle = self.riddles.get(riddle_id)
+        if not riddle:
+            return
+
+        channel = self.bot.get_channel(riddle['channel_id'])
+        if not channel:
+            return
+
+        try:
+            message = await channel.fetch_message(riddle['message_id'])
+            await message.edit(view=None)
+
+            solution_image = riddle.get('solution_image') or DEFAULT_IMAGE_URL
+            creator = await self.bot.fetch_user(riddle['creator_id'])
+
+            mentions = f"<@&{RIDDLE_ROLE_ID}>"
+            if riddle.get('mention_group1'):
+                mentions += f" <@&{riddle['mention_group1']}>"
+            if riddle.get('mention_group2'):
+                mentions += f" <@&{riddle['mention_group2']}>"
+
+            embed = discord.Embed(
+                title="🎉 Goon Hut Riddle Closed!",
+                description=self.convert_newlines(riddle['text']),
+                color=discord.Color.gold(),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_thumbnail(url=creator.avatar.url if creator.avatar else DEFAULT_IMAGE_URL)
+            embed.set_image(url=solution_image)
+            embed.add_field(name="✅ Solution:", value=riddle['solution'], inline=False)
+
+            if winner:
+                embed.add_field(name="🏆 Winner:", value=f"{winner.mention}", inline=False)
+                embed.add_field(name="💬 Submitted Solution:", value=submitted_solution, inline=False)
+                # Update user stats
+                self.user_stats[str(winner.id)] = self.user_stats.get(str(winner.id), {"solved": 0, "submitted": 0})
+                self.user_stats[str(winner.id)]['solved'] += 1
+
+            else:
+                embed.add_field(name="😢", value="No winner this time.", inline=False)
+
+            if riddle.get('award'):
+                embed.add_field(name="🎁 Award:", value=riddle['award'], inline=False)
+
+            embed.set_footer(text=f"Created by {creator.name} | {channel.guild.name}", icon_url=channel.guild.icon.url if channel.guild.icon else None)
+
+            await channel.send(content=mentions, embed=embed)
+
+            # Cleanup: Remove thumbs buttons from DM and log
+            if 'creator_dm_message_id' in riddle:
+                try:
+                    dm = await creator.fetch_message(riddle['creator_dm_message_id'])
+                    await dm.edit(view=None)
+                except:
+                    pass
+
+            log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                try:
+                    log_message = await log_channel.fetch_message(riddle['log_message_id'])
+                    await log_message.edit(view=None)
+                except:
+                    pass
+
+            del self.riddles[riddle_id]
+            self.save_data()
+
+        except Exception as e:
+            print(f"Error closing riddle {riddle_id}: {e}")
+
+    @app_commands.command(name="riddle_add", description="➕ Add a new riddle (Admins only)")
+    async def add_riddle(self, interaction: discord.Interaction,
                          text: str,
                          solution: str,
-                         channel_name: str,
-                         image_url: str = None,
-                         mention_group1: discord.Role = None,
-                         mention_group2: discord.Role = None,
+                         channel: TextChannel,
+                         image_url: str = DEFAULT_IMAGE_URL,
+                         mention_group1: str = None,
+                         mention_group2: str = None,
                          solution_image: str = None,
                          length: int = 1,
                          award: str = None):
-
-        if RIDDLE_GROUP_ID not in [role.id for role in interaction.user.roles]:
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        target_channel = channel
+        if RIDDLE_ROLE_ID not in [role.id for role in interaction.user.roles]:
+            await interaction.response.send_message("❌ You don't have permission to add riddles.", ephemeral=True)
             return
 
-        channel = discord.utils.get(interaction.guild.text_channels, name=channel_name)
-        if not channel:
-            await interaction.response.send_message("❌ Could not find the specified channel.", ephemeral=True)
+        riddle_id = str(uuid.uuid4())
+        target_channel = discord.utils.get(interaction.guild.text_channels, name=channel_name)
+        if not target_channel:
+            await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
             return
 
-        riddle_id = str(uuid.uuid4())[:8]
-        expires_at = datetime.utcnow() + timedelta(days=length)
+        expires_at = (datetime.utcnow() + timedelta(days=length)).isoformat()
 
-        mention_text = f"<@&{RIDDLE_GROUP_ID}>"
-        if mention_group1:
-            mention_text += f" {mention_group1.mention}"
-        if mention_group2:
-            mention_text += f" {mention_group2.mention}"
-
-        image_url = image_url or DEFAULT_IMAGE_URL
-        text = text.replace("\\n", "\n")
-
-        embed = discord.Embed(
-            title=f"Goon Hut Riddle (Created: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')})",
-            description=text,
-            color=discord.Color.gold()
-        )
-        embed.set_image(url=image_url)
-        embed.set_footer(text=f"By {interaction.user.display_name} • Closes in {length} day(s)")
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.set_author(name=interaction.guild.name, icon_url=interaction.guild.icon.url)
-        if award:
-            embed.add_field(name="🏆 Award", value=award, inline=False)
-
-        view = RiddleSubmitView(riddle_id, text, interaction.user.id)
-        message = await channel.send(content=mention_text, embed=embed, view=view)
-
-        self.riddles[riddle_id] = {
+        riddle_data = {
+            "id": riddle_id,
             "text": text,
             "solution": solution,
-            "channel_id": str(channel.id),
-            "message_id": str(message.id),
             "creator_id": interaction.user.id,
-            "created_at": datetime.utcnow().isoformat(),
-            "expires_at": expires_at.isoformat(),
+            "channel_id": target_channel.id,
             "image_url": image_url,
+            "mention_group1": mention_group1,
+            "mention_group2": mention_group2,
             "solution_image": solution_image,
-            "award": award,
-            "mention_text": mention_text
+            "expires_at": expires_at,
+            "award": award
         }
 
-        write_json("riddles.json", self.riddles)
+        self.riddles[riddle_id] = riddle_data
+        self.save_data()
 
-        user_id = str(interaction.user.id)
-        self.user_data.setdefault(user_id, {"riddles_created": 0, "riddles_solved": 0})
-        self.user_data[user_id]["riddles_created"] += 1
-        write_json("user_data.json", self.user_data)
+        mentions = f"<@&{RIDDLE_ROLE_ID}>"
+        if mention_group1:
+            mentions += f" <@&{mention_group1}>"
+        if mention_group2:
+            mentions += f" <@&{mention_group2}>"
 
-        await interaction.response.send_message(f"✅ Riddle posted in {channel.mention}!", ephemeral=True)
+        embed = discord.Embed(
+            title=f"🧩 Goon Hut Riddle (Created: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')})",
+            description=self.convert_newlines(text),
+            color=discord.Color.purple()
+        )
+        embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else DEFAULT_IMAGE_URL)
+        embed.set_image(url=image_url)
+        if award:
+            embed.add_field(name="🎁 Award:", value=award, inline=False)
+        embed.set_footer(text=f"Created by {interaction.user.display_name} | Expires in {length} day(s)",
+                         icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-    @app_commands.command(name="riddle_list", description="List and manage active riddles")
-    async def riddle_list(self, interaction: discord.Interaction):
+        view = SubmitSolutionView(riddle_id)
+        riddle_message = await target_channel.send(content=mentions, embed=embed, view=view)
+        self.riddles[riddle_id]['message_id'] = riddle_message.id
+        self.save_data()
+
+        await interaction.response.send_message(f"✅ Riddle added in {target_channel.mention}!", ephemeral=True)
+
+    @app_commands.command(name="riddle_list", description="📜 List all active riddles")
+    async def list_riddles(self, interaction: discord.Interaction):
         if not self.riddles:
-            await interaction.response.send_message("There are no active riddles.", ephemeral=True)
+            await interaction.response.send_message("😅 There are no active riddles.", ephemeral=True)
             return
 
         options = []
-        for riddle_id, data in self.riddles.items():
-            label = f"{riddle_id} | {data['created_at'][:10]}"
-            options.append(discord.SelectOption(label=label, value=riddle_id))
+        for rid, data in self.riddles.items():
+            creator = await self.bot.fetch_user(data['creator_id'])
+            label = f"{rid[:8]} | {creator.display_name} | {data['text'][:30]}..."
+            options.append(discord.SelectOption(label=label, value=rid))
 
-        async def select_callback(select_interaction):
-            rid = select_interaction.data["values"][0]
-            data = self.riddles[rid]
-
+        async def select_callback(select_interaction: discord.Interaction):
+            selected_riddle_id = select.values[0]
+            riddle = self.riddles[selected_riddle_id]
+            creator = await self.bot.fetch_user(riddle['creator_id'])
             embed = discord.Embed(
-                title=f"Riddle #{rid}",
-                description=f"**Text:** {data['text']}\n\n**Solution:** {data['solution']}",
+                title=f"🧩 Riddle ID: {selected_riddle_id}",
+                description=self.convert_newlines(riddle['text']),
                 color=discord.Color.blue()
             )
-            embed.set_footer(text=f"By <@{data['creator_id']}>")
+            embed.set_thumbnail(url=creator.avatar.url if creator.avatar else DEFAULT_IMAGE_URL)
+            embed.add_field(name="✅ Solution:", value=riddle['solution'], inline=False)
+            embed.set_footer(text=f"Created by {creator.display_name}")
 
-            class ManageView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=60)
+            view = RiddleListOptionsView(self, selected_riddle_id)
 
-                @discord.ui.button(label="Close with Winner", style=discord.ButtonStyle.success)
-                async def close_with_winner(self, i, _):
-                    await i.response.send_modal(CloseWithWinnerModal(rid))
-
-                @discord.ui.button(label="Close without Winner", style=discord.ButtonStyle.secondary)
-                async def close_without_winner(self, i, _):
-                    await end_riddle(self.bot, rid)
-                    await i.response.send_message("Riddle closed without a winner.", ephemeral=True)
-
-                @discord.ui.button(label="Delete Riddle", style=discord.ButtonStyle.danger)
-                async def delete_riddle(self, i, _):
-                    await self.delete_riddle_data(rid)
-                    await i.response.send_message("Riddle deleted.", ephemeral=True)
-
-                async def delete_riddle_data(self, rid):
-                    try:
-                        ch = self.bot.get_channel(int(self.riddles[rid]["channel_id"]))
-                        msg = await ch.fetch_message(int(self.riddles[rid]["message_id"]))
-                        await msg.delete()
-                    except Exception:
-                        pass
-                    self.riddles.pop(rid, None)
-                    write_json("riddles.json", self.riddles)
-
-            await select_interaction.response.send_message(embed=embed, ephemeral=True, view=ManageView())
+            await select_interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
         select = discord.ui.Select(placeholder="Select a riddle", options=options)
         select.callback = select_callback
 
-        view = discord.ui.View(timeout=30)
+        view = discord.ui.View(timeout=300)
         view.add_item(select)
-        await interaction.response.send_message("Select a riddle to manage:", view=view, ephemeral=True)
 
-class CloseWithWinnerModal(discord.ui.Modal, title="Close Riddle with Winner"):
-    def __init__(self, riddle_id):
-        super().__init__(timeout=60)
+        await interaction.response.send_message("🗂️ Select a riddle to manage:", view=view, ephemeral=True)
+
+class RiddleListOptionsView(discord.ui.View):
+    def __init__(self, cog, riddle_id):
+        super().__init__(timeout=300)
+        self.cog = cog
         self.riddle_id = riddle_id
 
-        self.user_input = discord.ui.TextInput(
-            label="Winner (mention or ID)",
-            placeholder="Enter the user ID or mention of the winner",
-            required=True
-        )
-        self.add_item(self.user_input)
+    @discord.ui.button(label="✅ Close with Winner", style=discord.ButtonStyle.success)
+    async def close_with_winner(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Please mention the winner (e.g. @User):", ephemeral=True)
 
-    async def on_submit(self, interaction: discord.Interaction):
+        def check(m):
+            return m.author == interaction.user and m.channel == interaction.channel
+
         try:
-            user_id = int(self.user_input.value.strip("<@!> "))
-            self_riddles = load_json("riddles.json")
-            riddle = self_riddles.get(self.riddle_id)
-            if not riddle:
-                await interaction.response.send_message("Riddle not found or already closed.", ephemeral=True)
+            msg = await self.cog.bot.wait_for('message', timeout=60.0, check=check)
+            if not msg.mentions:
+                await interaction.followup.send("❌ No user mentioned. Aborted.", ephemeral=True)
                 return
-            riddle["winner_id"] = user_id
-            write_json("riddles.json", self_riddles)
 
-            user_data = load_json("user_data.json")
-            user_data.setdefault(str(user_id), {"riddles_created": 0, "riddles_solved": 0})
-            user_data[str(user_id)]["riddles_solved"] += 1
-            write_json("user_data.json", user_data)
+            winner = msg.mentions[0]
+            await self.cog.close_riddle(self.riddle_id, winner=winner, submitted_solution="Manually closed via list.")
+            await interaction.followup.send(f"✅ Riddle closed with winner: {winner.mention}", ephemeral=True)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("❌ Timed out waiting for mention.", ephemeral=True)
 
-            await end_riddle(interaction.client, self.riddle_id)
-            await interaction.response.send_message("✅ Riddle closed with winner!", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message("❌ Error closing riddle: " + str(e), ephemeral=True)
+    @discord.ui.button(label="❌ Close without Winner", style=discord.ButtonStyle.danger)
+    async def close_without_winner(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.close_riddle(self.riddle_id)
+        await interaction.response.send_message("✅ Riddle closed without a winner.", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Delete Riddle", style=discord.ButtonStyle.secondary)
+    async def delete_riddle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        del self.cog.riddles[self.riddle_id]
+        self.cog.save_data()
+        await interaction.response.send_message("🗑️ Riddle deleted successfully.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Riddle(bot))
