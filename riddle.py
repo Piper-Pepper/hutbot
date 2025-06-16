@@ -207,11 +207,11 @@ async def close_riddle(self, rid, winner=None):
         self.save_user_stats(stats)
 
         if channel:
-            await channel.send(f"🎉 Das Rätsel `{rid}` wurde von {winner.mention} gelöst! Glückwunsch! 🎊")
+            await channel.send(f"🎉 The Riddle `{rid}` has been solved by {winner.mention}! Congratulations! 🎊")
 
     log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
     if log_channel:
-        await log_channel.send(f"Riddle `{rid}` geschlossenclosed. Winner: {winner.mention if winner else 'Nobody'}.")
+        await log_channel.send(f"Riddle `{rid}` closed. Winner: {winner.mention if winner else 'Nobody'}.")
 
     if winner and channel:
         embed = discord.Embed(
@@ -248,7 +248,7 @@ async def close_riddle(self, rid, winner=None):
             self.save_riddles()
             log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
             if log_channel:
-                await log_channel.send(f"Rätsel `{rid}` wurde gelöscht.")
+                await log_channel.send(f"Riddle `{rid}` got deleted.")
 
     # Diese Methode wird aufgerufen, wenn ein User eine Lösung einreicht
     async def process_solution(self, user, rid, submitted_solution):
