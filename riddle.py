@@ -67,12 +67,12 @@ class Riddle(commands.Cog):
                          award: str = None):
         # Permissions check
         if RIDDLE_GROUP_ID not in [role.id for role in interaction.user.roles]:
-            await interaction.response.send_message("❌ Du hast nicht die Erlaubnis, dieses magische Rätsel zu erschaffen.", ephemeral=True)
+            await interaction.response.send_message("❌ You don't have permission to create this magical puzzle.", ephemeral=True)
             return
 
         # Cooldown check
         if self.is_on_cooldown(interaction.user.id):
-            await interaction.response.send_message(f"⏳ Chill mal, {interaction.user.mention}! Warte noch {COOLDOWN_SECONDS} Sekunden zwischen den Rätseln.", ephemeral=True)
+            await interaction.response.send_message(f"⏳ Chill , {interaction.user.mention}! Wait {COOLDOWN_SECONDS} between the Riddles.", ephemeral=True)
             return
         self.update_cooldown(interaction.user.id)
 
@@ -128,7 +128,7 @@ class Riddle(commands.Cog):
         stats[str(interaction.user.id)]["submitted"] += 1
         self.save_user_stats(stats)
 
-        await interaction.response.send_message("✅ Dein Rätsel wurde in die magische Welt hinausgesandt!", ephemeral=True)
+        await interaction.response.send_message("✅ Your riddle was sent out into the gooning world!", ephemeral=True)
 
     @app_commands.command(name="list", description="List all open riddles.")
     async def list_riddles(self, interaction: discord.Interaction):
@@ -139,7 +139,7 @@ class Riddle(commands.Cog):
         open_riddles = {rid: data for rid, data in riddle_cache.items() if not data.get("closed", False)}
 
         if not open_riddles:
-            await interaction.followup.send("🎉 Es gibt aktuell keine offenen Rätsel. Zeit, neue zu erschaffen!", ephemeral=True)
+            await interaction.followup.send("🎉 There are currently no open puzzles. Time to create new ones!", ephemeral=True)
             return
 
         options = []
@@ -155,7 +155,7 @@ class Riddle(commands.Cog):
                 selected_rid = self.values[0]
                 riddle_data = riddle_cache.get(selected_rid)
                 if not riddle_data:
-                    await select_interaction.response.send_message("❌ Dieses Rätsel existiert nicht mehr.", ephemeral=True)
+                    await select_interaction.response.send_message("❌ This riddle no longer exists.", ephemeral=True)
                     return
 
                 embed = discord.Embed(
@@ -168,8 +168,8 @@ class Riddle(commands.Cog):
                 embed.add_field(name="📅 Erstellt von", value=riddle_data['creator_name'], inline=True)
                 embed.set_footer(text=f"Erstellt am {riddle_data['created_at'][:10]}")
 
-                class WinnerModal(discord.ui.Modal, title="Rätsel schließen - Gewinner angeben"):
-                    winner_id = discord.ui.TextInput(label="Gewinner User-ID oder @mention", required=True)
+                class WinnerModal(discord.ui.Modal, title="Close puzzles - specify the winner"):
+                    winner_id = discord.ui.TextInput(label="Winner User-ID or @mention", required=True)
 
                     async def on_submit(inner_self, modal_interaction: discord.Interaction):
                         try:
@@ -178,29 +178,29 @@ class Riddle(commands.Cog):
                             if not winner:
                                 raise ValueError
                         except:
-                            await modal_interaction.response.send_message("❌ Ungültiger Nutzer.", ephemeral=True)
+                            await modal_interaction.response.send_message("❌ False Member.", ephemeral=True)
                             return
 
                         await self.close_riddle(selected_rid, winner=winner)
-                        await modal_interaction.response.send_message(f"✅ Rätsel {selected_rid} geschlossen mit Gewinner {winner.mention}", ephemeral=True)
+                        await modal_interaction.response.send_message(f"✅ Riddle {selected_rid} closed with a winner {winner.mention}", ephemeral=True)
 
                 class RiddleManageView(discord.ui.View):
                     def __init__(self):
                         super().__init__(timeout=60)
 
-                    @discord.ui.button(label="✅ Mit Gewinner schließen", style=discord.ButtonStyle.green)
+                    @discord.ui.button(label="✅ Close with Winner", style=discord.ButtonStyle.green)
                     async def close_with_winner(self, button: discord.ui.Button, button_interaction: discord.Interaction):
                         await button_interaction.response.send_modal(WinnerModal())
 
-                    @discord.ui.button(label="🔒 Ohne Gewinner schließen", style=discord.ButtonStyle.blurple)
+                    @discord.ui.button(label="🔒 Close without winner", style=discord.ButtonStyle.blurple)
                     async def close_without_winner(self, button: discord.ui.Button, button_interaction: discord.Interaction):
                         await self.close_riddle(selected_rid)
-                        await button_interaction.response.send_message(f"Rätsel {selected_rid} ohne Gewinner geschlossen.", ephemeral=True)
+                        await button_interaction.response.send_message(f"Riddle {selected_rid} closed without winner.", ephemeral=True)
 
                     @discord.ui.button(label="❌ Löschen", style=discord.ButtonStyle.danger)
                     async def delete_riddle(self, button: discord.ui.Button, button_interaction: discord.Interaction):
                         await self.delete_riddle(selected_rid)
-                        await button_interaction.response.send_message(f"Rätsel {selected_rid} gelöscht.", ephemeral=True)
+                        await button_interaction.response.send_message(f"Riddle {selected_rid} deleted.", ephemeral=True)
 
                     async def close_riddle(self_inner, rid, winner=None):
                         await self.cog.close_riddle(rid, winner)
@@ -211,13 +211,13 @@ class Riddle(commands.Cog):
                 view = RiddleManageView()
                 await select_interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-        await interaction.followup.send("Wähle ein Rätsel zur Ansicht und Verwaltung:", view=discord.ui.View(timeout=60).add_item(RiddleSelect()), ephemeral=True)
+        await interaction.followup.send("Choose a riddle to edit:", view=discord.ui.View(timeout=60).add_item(RiddleSelect()), ephemeral=True)
 
     @app_commands.command(name="leaderboard", description="Zeige die Top Riddle-Champions")
     async def leaderboard(self, interaction: discord.Interaction):
         stats = self.load_user_stats()
         if not stats:
-            await interaction.response.send_message("Niemand hat bisher Rätsel gelöst. Werde der Erste!", ephemeral=True)
+            await interaction.response.send_message("Nobody has solved my riddle so far. Become the first!", ephemeral=True)
             return
 
         # Sortiere nach gelöste Rätsel absteigend
@@ -227,7 +227,7 @@ class Riddle(commands.Cog):
         for i, (user_id, data) in enumerate(sorted_stats, 1):
             member = self.bot.get_user(int(user_id))
             name = member.display_name if member else f"User {user_id}"
-            embed.add_field(name=f"{i}. {name}", value=f"Gelöst: {data.get('solved', 0)} | Eingereicht: {data.get('submitted', 0)}", inline=False)
+            embed.add_field(name=f"{i}. {name}", value=f"GeSolvedlöst: {data.get('solved', 0)} | Submitted: {data.get('submitted', 0)}", inline=False)
 
         await interaction.response.send_message(embed=embed)
 
@@ -236,15 +236,15 @@ class Riddle(commands.Cog):
         stats = self.load_user_stats()
         user_data = stats.get(str(interaction.user.id))
         if not user_data or user_data.get("solved", 0) == 0:
-            await interaction.response.send_message("Du hast noch keine Rätsel gelöst. Zeit, deine grauen Zellen zu aktivieren! 🧠", ephemeral=True)
+            await interaction.response.send_message("You haven't solved any puzzles yet. Time to activate your gray cells! 🧠", ephemeral=True)
             return
 
         solved_count = user_data.get("solved", 0)
         submitted = user_data.get("submitted", 0)
 
         embed = discord.Embed(
-            title=f"🧠 Rätsel-Historie von {interaction.user.display_name}",
-            description=f"Du hast {solved_count} Rätsel gelöst und {submitted} Rätsel eingereicht.",
+            title=f"🧠 Riddle History of {interaction.user.display_name}",
+            description=f"you have solved {solved_count} riddles and submitted {submitted} riddles.",
             color=discord.Color.blurple()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -262,7 +262,7 @@ class Riddle(commands.Cog):
                 channel = self.bot.get_channel(data["channel_id"])
                 if channel:
                     try:
-                        await channel.send(f"⏰ Hey! Das Rätsel `{rid}` von {data['creator_name']} läuft bald ab. Hast du eine Lösung? 🤔")
+                        await channel.send(f"⏰ Hey! The riddle `{rid}` by {data['creator_name']} is running out soon... 🤔")
                     except Exception:
                         pass
 
@@ -293,21 +293,21 @@ async def close_riddle(self, rid, winner=None):
 
     log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
     if log_channel:
-        await log_channel.send(f"Rätsel `{rid}` geschlossen. Gewinner: {winner.mention if winner else 'Keiner'}.")
+        await log_channel.send(f"Riddle `{rid}` geschlossenclosed. Winner: {winner.mention if winner else 'Nobody'}.")
 
     if winner and channel:
         embed = discord.Embed(
             title="🎉 Rätsel gelöst!",
-            description=f"{winner.mention} hat das Rätsel geknackt!",
+            description=f"{winner.mention} has solved the Riddle!",
             color=discord.Color.green()
         )
         embed.set_thumbnail(url=winner.display_avatar.url)
-        embed.add_field(name="🧠 Eingereichte Lösung", value=riddle.get("solution", "Keine Lösung angegeben."), inline=False)
-        embed.add_field(name="✅ Offizielle Lösung", value=riddle.get("solution", "Keine Lösung."), inline=False)
+        embed.add_field(name="🧠 Submitted solution", value=riddle.get("solution", "No solution specified."), inline=False)
+        embed.add_field(name="✅ Official solution", value=riddle.get("solution", "No solution."), inline=False)
 
         award_text = riddle.get("award")
         if award_text:
-            embed.add_field(name="🏅 Preis", value=award_text, inline=False)
+            embed.add_field(name="🏅 Award", value=award_text, inline=False)
 
         embed.set_image(url=riddle.get("solution_image") or DEFAULT_IMAGE_URL)
 
@@ -336,11 +336,11 @@ async def close_riddle(self, rid, winner=None):
     async def process_solution(self, user, rid, submitted_solution):
         riddle = riddle_cache.get(rid)
         if not riddle or riddle.get("closed", False):
-            return False, "Dieses Rätsel ist bereits geschlossen."
+            return False, "This riddle is already closed."
 
         # Cooldown für Lösungseinreichung
         if self.is_on_cooldown(user.id):
-            return False, f"⏳ Warte bitte {COOLDOWN_SECONDS} Sekunden zwischen deinen Lösungseinreichungen."
+            return False, f"⏳ Wait {COOLDOWN_SECONDS} seconds between your solutions."
 
         self.update_cooldown(user.id)
 
@@ -358,7 +358,7 @@ async def close_riddle(self, rid, winner=None):
             stats[str(user.id)]["attempts"] += 1
             self.save_user_stats(stats)
 
-            return True, "🎉 Richtig! Du hast das Rätsel gelöst! Glückwunsch! 🎉"
+            return True, "🎉 Correct! You solved the riddle! Congratulations! 🎉"
         else:
             riddle["failed_attempts"] = riddle.get("failed_attempts", 0) + 1
 
@@ -369,7 +369,7 @@ async def close_riddle(self, rid, winner=None):
             self.save_user_stats(stats)
 
             self.save_riddles()
-            return False, "❌ Falsch! Versuch's nochmal, der Geist der Rätselwelt beobachtet dich... 👻"
+            return False, "❌ Incorrect! Try again, the spirit of the puzzle world watches you ... 👻"
 
 async def setup(bot):
     await bot.add_cog(Riddle(bot))

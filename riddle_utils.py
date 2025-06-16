@@ -36,9 +36,9 @@ async def close_riddle_with_winner(bot, riddle_id, winner, solution_text):
         final_embed = Embed(
             title="🎯 Rätsel gelöst!",
             description=f"**Rätsel:**\n{riddle_data['text']}\n\n"
-                        f"✅ **Eingereichte Lösung:**\n{solution_text}\n\n"
-                        f"📜 **Offizielle Lösung:**\n{riddle_data.get('solution', 'Nicht definiert.')}\n\n"
-                        f"👑 **Gewinner:** {winner.mention}",
+                        f"✅ **Submitted Solution:**\n{solution_text}\n\n"
+                        f"📜 **Official Soultion:**\n{riddle_data.get('solution', 'Nicht definiert.')}\n\n"
+                        f"👑 **Winner:** {winner.mention}",
             color=0xFFD700,
             timestamp=datetime.utcnow()
         )
@@ -48,12 +48,12 @@ async def close_riddle_with_winner(bot, riddle_id, winner, solution_text):
         # Bild einfügen (lösungsbild > standardbild)
         image_url = riddle_data.get("solution_image") or DEFAULT_IMAGE_URL
         final_embed.set_image(url=image_url)
-        final_embed.set_footer(text="🏆 Glückwunsch zum Knacken des Rätsels!")
+        final_embed.set_footer(text="🏆 Congratulations on solving the riddle!")
 
         await channel.send(content=mention_text, embed=final_embed)
 
     except Exception as e:
-        print(f"Fehler beim Senden des Gewinner-Posts: {e}")
+        print(f"Error when sending the winning post: {e}")
 
     # ✅ 3. riddles.json aktualisieren
     with open("riddles.json", "w", encoding="utf-8") as f:
