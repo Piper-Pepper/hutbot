@@ -149,7 +149,7 @@ class Riddle(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="history", description="Zeige deine gelösten Rätsel")
+    @app_commands.command(name="history", description="Show your solved riddles.")
     async def history(self, interaction: discord.Interaction):
         stats = self.load_user_stats()
         user_data = stats.get(str(interaction.user.id))
@@ -215,7 +215,7 @@ async def close_riddle(self, rid, winner=None):
 
     if winner and channel:
         embed = discord.Embed(
-            title="🎉 Rätsel gelöst!",
+            title="🎉 The Goon Riddle got solved!",
             description=f"{winner.mention} has solved the Riddle!",
             color=discord.Color.green()
         )
