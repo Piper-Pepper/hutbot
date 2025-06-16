@@ -89,7 +89,7 @@ class SubmitSolutionButton(Button):
         )
         embed.set_footer(text="Sadly, the proposed solution was not correct...!")
         embed.set_thumbnail(url=self.parent_view.submitter.display_avatar.url)
-        embed.set_image(url=DEFAULT_IMAGE_URL)
+  
 
         await riddle_channel.send(embed=embed)
 
