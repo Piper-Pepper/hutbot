@@ -3,7 +3,6 @@ from discord.ui import View, Button, Modal, TextInput
 import json
 import os
 from datetime import datetime
-
 from riddle_utils import riddle_cache, close_riddle_with_winner  # ✅ Hier die Fixes
 
 LOG_CHANNEL_ID = 1381754826710585527
