@@ -89,10 +89,7 @@ class SubmitSolutionButton(Button):
         )
         embed.set_footer(text="Sadly, the proposed solution was not correct...!")
         embed.set_thumbnail(url=self.parent_view.submitter.display_avatar.url)
-
-        # Optional: Wenn du ein Bild speicherst in riddles.json
-        if riddle_data.get("solution_image"):
-            embed.set_image(url=riddle_data["solution_image"])
+        embed.set_image(url=DEFAULT_IMAGE_URL)
 
         await riddle_channel.send(embed=embed)
 
@@ -168,8 +165,6 @@ class RejectButton(Button):
         embed.set_footer(text="Sadly, the proposed solution was not correct...!")
         embed.set_thumbnail(url=self.parent_view.submitter.display_avatar.url)
 
-        if riddle_data.get("solution_image"):
-            embed.set_image(url=riddle_data["solution_image"])
 
         await riddle_channel.send(embed=embed)
 
