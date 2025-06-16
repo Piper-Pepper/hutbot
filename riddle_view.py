@@ -1,163 +1,196 @@
-# riddle_view.py
-
 import discord
+from discord.ui import View, Button, Modal, TextInput
 import json
 import os
-from discord.ext import commands
+from datetime import datetime
 
-RIDDLE_LOG_CHANNEL_ID = 1381754826710585527
+from riddle_utils import riddle_cache, close_riddle_with_winner  # ✅ Hier die Fixes
+
+LOG_CHANNEL_ID = 1381754826710585527
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1346843244067160074/1382408027122172085/riddle_logo.jpg"
+RIDDLE_GROUP_ID = 1380610400416043089
 
-# Utility to load JSON data
-def load_json(path):
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            json.dump({}, f)
-    with open(path, "r") as f:
-        return json.load(f)
-
-# Utility to write JSON data
-def write_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=4)
-
-# Modal for solution submission
-class SolutionModal(discord.ui.Modal, title="Submit Your Riddle Solution"):
-    def __init__(self, riddle_id, riddle_text, creator_id):
-        super().__init__(timeout=None)
+# --- Solution Modal ---
+class SolutionModal(Modal, title="Submit Your Riddle Solution"):
+    def __init__(self, riddle_id: str, riddle_text: str, creator_id: int):
+        super().__init__()
         self.riddle_id = riddle_id
         self.riddle_text = riddle_text
         self.creator_id = creator_id
-
-        self.answer_input = discord.ui.TextInput(
-            label="Your solution:",
-            placeholder="Type your answer here...",
-            max_length=400,
-            required=True
-        )
-        self.add_item(self.answer_input)
+        self.solution_input = TextInput(label="Your Answer", style=discord.TextStyle.paragraph, max_length=500)
+        self.add_item(self.solution_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Solution submitted!", ephemeral=True)
-
         submitter = interaction.user
-        creator = await interaction.client.fetch_user(self.creator_id)
-
-        # Embed to send to the creator and mod log
         embed = discord.Embed(
-            title=f"Solution for Riddle #{self.riddle_id}",
-            description=f"**Submitted by:** {submitter.mention}\n\n**Riddle Text:**\n{self.riddle_text}\n\n**Answer:**\n{self.answer_input.value}",
-            color=discord.Color.blurple()
+            title=f"Solution Submission: Riddle ID {self.riddle_id}",
+            description=f"**Riddle:**\n{self.riddle_text}\n\n**Submitted Solution:**\n{self.solution_input.value}",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
         )
-        embed.set_thumbnail(url=submitter.display_avatar.url)
+        embed.set_author(name=submitter.display_name, icon_url=submitter.display_avatar.url)
 
-        view = JudgeButtons(self.riddle_id, submitter.id)
+        view = ApprovalButtonsView(
+            riddle_id=self.riddle_id,
+            submitter=submitter,
+            submitted_solution=self.solution_input.value
+        )
 
         try:
+            creator = await interaction.client.fetch_user(self.creator_id)
             await creator.send(embed=embed, view=view)
-        except discord.Forbidden:
-            pass  # Creator's DMs are closed
+        except:
+            pass
 
-        log_channel = interaction.client.get_channel(RIDDLE_LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(embed=embed, view=view)
-
-
-# Button view for judging a solution (DM + log)
-class JudgeButtons(discord.ui.View):
-    def __init__(self, riddle_id, submitter_id):
-        super().__init__(timeout=None)
-        self.riddle_id = str(riddle_id)
-        self.submitter_id = submitter_id
-
-    @discord.ui.button(label="✅ Accept Solution", style=discord.ButtonStyle.success, custom_id="judge_accept")
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        riddles = load_json("riddles.json")
-        riddle = riddles.get(self.riddle_id)
-        if not riddle:
-            await interaction.response.send_message("The riddle is already closed.", ephemeral=True)
-            return
-
-        riddle["winner_id"] = self.submitter_id
-        await end_riddle(interaction.client, self.riddle_id)
-        await interaction.response.send_message("Riddle has been closed with a winner!", ephemeral=True)
-
-    @discord.ui.button(label="❌ Reject Solution", style=discord.ButtonStyle.danger, custom_id="judge_reject")
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        riddles = load_json("riddles.json")
-        if self.riddle_id not in riddles:
-            await interaction.response.send_message("The riddle is already closed.", ephemeral=True)
-            return
-
-        submitter = await interaction.client.fetch_user(self.submitter_id)
         try:
-            await submitter.send("❌ Sorry, your solution was not correct!")
-        except discord.Forbidden:
-            pass  # Submitter's DMs are closed
+            channel = interaction.client.get_channel(LOG_CHANNEL_ID)
+            if channel:
+                await channel.send(embed=embed, view=view)
+        except:
+            pass
 
-        await interaction.message.delete()
-        await interaction.response.send_message("Rejected the solution and removed the message.", ephemeral=True)
+        await interaction.response.send_message("Your solution has been submitted!", ephemeral=True)
 
-
-# Button view for main riddle message
-class RiddleSubmitView(discord.ui.View):
-    def __init__(self, riddle_id, riddle_text, creator_id):
-        super().__init__(timeout=None)
+# --- Submit Button ---
+class SubmitSolutionButton(Button):
+    def __init__(self, riddle_id: str, riddle_text: str, creator_id: int):
+        super().__init__(label="Submit Solution", style=discord.ButtonStyle.primary, emoji="🧠", custom_id=f"submit_{riddle_id}")
         self.riddle_id = riddle_id
         self.riddle_text = riddle_text
         self.creator_id = creator_id
 
-    @discord.ui.button(label="Submit Solution", style=discord.ButtonStyle.primary, emoji="🧠", custom_id="submit_solution_button")
-    async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(SolutionModal(self.riddle_id, self.riddle_text, self.creator_id))
 
+        # 🔎 Hole den Rätsel-Channel
+        riddle_channel = interaction.guild.get_channel(riddle_data["channel_id"])
+        if not riddle_channel:
+            await interaction.response.send_message("Riddle channel not found.", ephemeral=True)
+            return
 
-# Close riddle and send solution embed
-async def end_riddle(bot, riddle_id: str):
-    riddles = load_json("riddles.json")
-    riddle = riddles.get(riddle_id)
-    if not riddle:
-        return
+        # 🧹 Alte Ablehnungen löschen
+        async for msg in riddle_channel.history(limit=100):
+            if (
+                msg.author == interaction.client.user and
+                msg.embeds and
+                msg.embeds[0].footer and
+                "Sadly, the proposed solution" in msg.embeds[0].footer.text and
+                msg.embeds[0].description == self.parent_view.submitted_solution
+            ):
+                try:
+                    await msg.delete()
+                except:
+                    pass
 
-    try:
-        channel = bot.get_channel(int(riddle["channel_id"]))
-        if not channel:
-            channel = await bot.fetch_channel(int(riddle["channel_id"]))
-        message = await channel.fetch_message(int(riddle["message_id"]))
-        await message.edit(view=None)
-    except Exception:
-        pass
+        # ✉️ Neues Embed der Ablehnung
+        embed = discord.Embed(
+            title="❌ Incorrect Solution",
+            description=self.parent_view.submitted_solution,
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sadly, the proposed solution was not correct...!")
+        embed.set_thumbnail(url=self.parent_view.submitter.display_avatar.url)
 
-    winner_id = riddle.get("winner_id")
-    winner = await bot.fetch_user(winner_id) if winner_id else None
-    solution_image = riddle.get("solution_image") or DEFAULT_IMAGE_URL
+        # Optional: Wenn du ein Bild speicherst in riddles.json
+        if riddle_data.get("solution_image"):
+            embed.set_image(url=riddle_data["solution_image"])
 
-    embed = discord.Embed(
-        title=f"🧩 Riddle Closed: #{riddle_id}",
-        description=f"**Riddle:**\n{riddle['text']}\n\n**Solution:** {riddle['solution']}",
-        color=discord.Color.green()
-    )
-    embed.set_image(url=solution_image)
-    if winner:
-        embed.add_field(name="✅ Winner", value=f"{winner.mention}", inline=False)
-        embed.set_thumbnail(url=winner.display_avatar.url)
-    else:
-        embed.add_field(name="❌ No Winner", value="Better luck next time!", inline=False)
+        await riddle_channel.send(embed=embed)
 
-    if riddle.get("award"):
-        embed.add_field(name="Award", value=riddle["award"], inline=False)
+        # 🔕 Direktnachricht
+        try:
+            await self.parent_view.submitter.send("❌ Sorry, your solution was not correct!")
+        except:
+            pass
 
-    embed.set_footer(text="Riddle closed")
+# --- Approval View ---
+class ApprovalButtonsView(View):
+    def __init__(self, riddle_id, submitter, submitted_solution):
+        super().__init__(timeout=None)
+        self.riddle_id = riddle_id
+        self.submitter = submitter
+        self.submitted_solution = submitted_solution
+        self.add_item(ApproveButton(self))
+        self.add_item(RejectButton(self))
 
-    await channel.send(content=riddle["mention_text"], embed=embed)
+class ApproveButton(Button):
+    def __init__(self, parent_view):
+        super().__init__(emoji="👍", style=discord.ButtonStyle.success, custom_id=f"approve_{parent_view.riddle_id}")
+        self.parent_view = parent_view
 
-    # Delete judge messages if any
-    log_channel = bot.get_channel(RIDDLE_LOG_CHANNEL_ID)
-    if log_channel:
-        async for msg in log_channel.history(limit=100):
-            if msg.embeds and f"Riddle #{riddle_id}" in msg.embeds[0].title:
-                await msg.delete()
+    async def callback(self, interaction: discord.Interaction):
+        if self.parent_view.riddle_id not in riddle_cache:
+            await interaction.response.send_message("The riddle is already closed.", ephemeral=True)
+            return
 
-    # Clean up
-    riddles.pop(riddle_id)
-    write_json("riddles.json", riddles)
+        await close_riddle_with_winner(
+            interaction.client,
+            self.parent_view.riddle_id,
+            self.parent_view.submitter,
+            self.parent_view.submitted_solution
+        )
+
+        await interaction.message.delete()
+
+class RejectButton(Button):
+    def __init__(self, parent_view):
+        super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id=f"reject_{parent_view.riddle_id}")
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        riddle_data = riddle_cache.get(self.parent_view.riddle_id)
+        if not riddle_data:
+            await interaction.response.send_message("Riddle not found or already closed.", ephemeral=True)
+            return
+
+        riddle_channel = interaction.guild.get_channel(riddle_data["channel_id"])
+        if not riddle_channel:
+            await interaction.response.send_message("Riddle channel not found.", ephemeral=True)
+            return
+
+        async for msg in riddle_channel.history(limit=100):
+            if (
+                msg.author == interaction.client.user and
+                msg.embeds and
+                msg.embeds[0].footer and
+                msg.embeds[0].footer.text == "Sadly, the proposed solution was not correct...!" and
+                msg.embeds[0].description == self.parent_view.submitted_solution
+            ):
+                try:
+                    await msg.delete()
+                except:
+                    pass
+
+        embed = discord.Embed(
+            title="❌ Incorrect Solution",
+            description=self.parent_view.submitted_solution,
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sadly, the proposed solution was not correct...!")
+        embed.set_thumbnail(url=self.parent_view.submitter.display_avatar.url)
+
+        if riddle_data.get("solution_image"):
+            embed.set_image(url=riddle_data["solution_image"])
+
+        await riddle_channel.send(embed=embed)
+
+        try:
+            await self.parent_view.submitter.send("❌ Sorry, your solution was not correct!")
+        except:
+            pass
+
+        await interaction.message.delete()
+# --- View Setup ---
+async def setup_persistent_views(bot):
+    if os.path.exists("riddles.json"):
+        with open("riddles.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            for riddle_id, riddle_data in data.items():
+                riddle_cache[riddle_id] = riddle_data
+                view = View(timeout=None)
+                view.add_item(SubmitSolutionButton(
+                    riddle_id=riddle_id,
+                    riddle_text=riddle_data['text'],
+                    creator_id=riddle_data['creator_id']
+                ))
+                bot.add_view(view)
