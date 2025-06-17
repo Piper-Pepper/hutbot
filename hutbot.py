@@ -7,8 +7,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 
-intents.members = True
-intents.message_content = True
+
 
 
 load_dotenv()
