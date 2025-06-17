@@ -5,7 +5,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-# from riddle_view import setup_persistent_views
 import os
 
 intents = discord.Intents.all()
@@ -47,17 +46,12 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
-    # Register persistent views (only if not already done in riddle.py init)
-    # wait setup_persistent_views(bot)  # <- wichtig für persistente Buttons nach Neustart
 
 # --- Bot Main Runner ---
 async def main():
     async with bot:
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
-        # await bot.load_extension("riddle")
-        # await bot.load_extension("riddle_reset")
-        # await bot.load_extension("riddle_admin_view")
         await bot.load_extension("dm_logger")
 
         await bot.start(TOKEN)
