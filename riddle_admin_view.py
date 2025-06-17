@@ -5,7 +5,7 @@ from discord.ui import View, Select, Button
 import json
 import os
 
-from riddle_utils import riddle_cache, close_riddle_no_winner
+from riddle_utils import riddle_cache, close_riddle_without_winner
 
 RIDDLE_FILE = "riddles.json"
 
