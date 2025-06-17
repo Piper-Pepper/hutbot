@@ -55,7 +55,7 @@ class SubmitSolutionButton(Button):
     def __init__(self, riddle_id: str, riddle_text: str, creator_id: int):
         super().__init__(label="Submit Solution", style=discord.ButtonStyle.primary, emoji="🧠", custom_id=f"submit_{riddle_id}")
         self.riddle_id = riddle_id
-        self.riddle_text = riddle_text
+        self.riddle_text = riddle_text.replace('\\n', '\n')
         self.creator_id = creator_id
 
     async def callback(self, interaction: discord.Interaction):

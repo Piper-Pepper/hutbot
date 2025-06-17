@@ -34,8 +34,8 @@ async def close_riddle_with_winner(bot, riddle_id, winner, solution_text):
         mention_text = riddle_data.get("mentions", "")
 
         final_embed = Embed(
-            title="🎯 Rätsel gelöst!",
-            description=f"**Rätsel:**\n{riddle_data['text']}\n\n"
+            title="🎯 Riddle solved!",
+            description=f"**RRiddle:**\n{riddle_data['text'].replace('\\n', '\n')}\n\n"
                         f"✅ **Submitted Solution:**\n{solution_text}\n\n"
                         f"📜 **Official Soultion:**\n{riddle_data.get('solution', 'Nicht definiert.')}\n\n"
                         f"👑 **Winner:** {winner.mention}",
