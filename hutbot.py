@@ -48,7 +48,7 @@ async def on_ready():
         print(f"❌ Failed to sync commands: {e}")
 
     # Register persistent views (only if not already done in riddle.py init)
-    await setup_persistent_views(bot)  # <- wichtig für persistente Buttons nach Neustart
+    # wait setup_persistent_views(bot)  # <- wichtig für persistente Buttons nach Neustart
 
 # --- Bot Main Runner ---
 async def main():
