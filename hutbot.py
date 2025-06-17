@@ -57,6 +57,7 @@ async def main():
         await bot.load_extension("hutmember")
         await bot.load_extension("riddle")
         await bot.load_extension("riddle_reset")
+        await bot.load_extension("riddle_admin_view")
         await bot.load_extension("dm_logger")
 
         await bot.start(TOKEN)

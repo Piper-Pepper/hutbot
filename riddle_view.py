@@ -1,3 +1,4 @@
+# riddle_view.py
 import discord
 from discord.ui import View, Button, Modal, TextInput
 import json
@@ -52,20 +53,23 @@ class SolutionModal(Modal, title="Submit Your Riddle Solution"):
 
 # --- Submit Button ---
 class SubmitSolutionButton(Button):
-    def __init__(self, riddle_id: str, riddle_text: str, creator_id: int):
+    def __init__(self, riddle_id: str, riddle_text: str, creator_id: int, riddle_data: dict):
         super().__init__(label="Submit Solution", style=discord.ButtonStyle.primary, emoji="🧠", custom_id=f"submit_{riddle_id}")
         self.riddle_id = riddle_id
         self.riddle_text = riddle_text.replace('\\n', '\n')
         self.creator_id = creator_id
+        self.riddle_data = riddle_data  # ✅ Speichere das komplette Riddle-Objekt
+
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(SolutionModal(self.riddle_id, self.riddle_text, self.creator_id))
 
-        # 🔎 Hole den Rätsel-Channel
-        riddle_channel = interaction.guild.get_channel(riddle_data["channel_id"])
+    # 🔎 Hole den Rätsel-Channel KORREKT
+        riddle_channel = interaction.guild.get_channel(self.riddle_data["channel_id"])
         if not riddle_channel:
             await interaction.response.send_message("Riddle channel not found.", ephemeral=True)
             return
+
 
         # 🧹 Alte Ablehnungen löschen
         async for msg in riddle_channel.history(limit=100):
@@ -185,6 +189,7 @@ async def setup_persistent_views(bot):
                 view.add_item(SubmitSolutionButton(
                     riddle_id=riddle_id,
                     riddle_text=riddle_data['text'],
-                    creator_id=riddle_data['creator_id']
+                    creator_id=riddle_data['creator_id'],
+                    riddle_data=riddle_data  # ✅ Hier übergeben
                 ))
                 bot.add_view(view)

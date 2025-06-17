@@ -28,6 +28,32 @@ async def close_riddle_with_winner(bot, riddle_id, winner, solution_text):
             await message.edit(embed=embed, view=None)
         except:
             pass
+    # riddle_utils.py
+
+async def close_riddle_without_winner(bot, riddle_id):
+    riddle_data = riddle_cache.get(riddle_id)
+    if not riddle_data:
+        return
+
+    channel = bot.get_channel(riddle_data["channel_id"])
+    if channel:
+        embed = discord.Embed(
+            title="❌ Riddle Closed Without Winner",
+            description=riddle_data['text'],
+            color=discord.Color.dark_gray()
+        )
+        await channel.send(embed=embed)
+
+    riddle_cache.pop(riddle_id, None)
+
+    # Auch aus JSON entfernen
+    if os.path.exists("riddles.json"):
+        with open("riddles.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if riddle_id in data:
+            del data[riddle_id]
+            with open("riddles.json", "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
 
     # ✅ 2. Neuer "Gewinner"-Post
     try:
