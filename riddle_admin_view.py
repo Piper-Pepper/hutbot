@@ -71,6 +71,7 @@ class DeleteRiddleButton(Button):
         await interaction.response.send_message(f"✅ Riddle `{self.riddle_id}` was deleted and closed.", ephemeral=True)
 
 
+
 class RiddleViewCommand(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -81,9 +82,13 @@ class RiddleViewCommand(commands.Cog):
             await interaction.response.send_message("There are no active riddles.", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True)  # ⬅️ Wichtig! Verhindert "app not responding"
+
         view = View(timeout=None)
         view.add_item(RiddleSelect(riddle_cache))
-        await interaction.response.send_message("Select a riddle to view its details:", view=view, ephemeral=True)
+
+        await interaction.followup.send("Select a riddle to view its details:", view=view, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(RiddleViewCommand(bot))
+
