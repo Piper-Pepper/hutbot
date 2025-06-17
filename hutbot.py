@@ -6,10 +6,10 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
-intents = discord.Intents.default()
+
+intents = discord.Intents.all()
 intents.members = True
 intents.message_content = True
-
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -53,6 +53,8 @@ async def main():
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
         await bot.load_extension("dm_logger")
+        await bot.load_extension("riddle")
+
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
