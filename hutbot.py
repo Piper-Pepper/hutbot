@@ -7,6 +7,11 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 
+intents = discord.Intents.default()
+intents.message_content = True  # falls du Nachrichteninhalt brauchst
+intents.guilds = True
+intents.messages = True
+intents.members = True  # falls du mit Mitgliederinformationen arbeitest
 
 
 
