@@ -34,7 +34,7 @@ level_roles = {
 }
 
 location_roles = {
-    "Europe", "North America", "Asia", "Oceania", "Africa", "South America", "Outer Goonverse"
+    "Europe", "North America", "Asia", "Oceania", "Africa", "South America", "Outer Gσσɳʋҽɾʂҽ"
 }
 
 gender_roles = {
