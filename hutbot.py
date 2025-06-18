@@ -8,9 +8,10 @@ from dotenv import load_dotenv
 import os
 
 intents = discord.Intents.default()
-intents.message_content = True  # falls du Nachrichteninhalt brauchst
-intents.guilds = True
 intents.messages = True
+intents.dm_messages = True
+intents.guilds = True
+intents.message_content = True 
 intents.members = True  # falls du mit Mitgliederinformationen arbeitest
 
 
@@ -59,6 +60,7 @@ async def main():
         await bot.load_extension("dm_logger")
         await bot.load_extension("anti-mommy")
         await bot.load_extension("auto_kick_mommy")
+        await bot.load_extension("dm_forwarder")
         # await bot.load_extension("riddle_commands")
         await bot.start(TOKEN)
 
