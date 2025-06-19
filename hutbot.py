@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
+from discord.ext import commands
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -61,6 +62,7 @@ async def main():
         await bot.load_extension("anti-mommy")
         await bot.load_extension("auto_kick_mommy")
         await bot.load_extension("dm_forwarder")
+        await bot.load_extension("ticket")
         # await bot.load_extension("riddle_commands")
         await bot.start(TOKEN)
 
