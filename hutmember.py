@@ -39,7 +39,7 @@ async def send_paginated_hutmember(interaction: discord.Interaction, role: disco
         lines = [format_member_line(m) for m in chunk]
 
         embed = discord.Embed(
-            title=f"🛖 Members of: {role.name}",
+            title=f"🛖 Members of: {role.name}\n*(name/top role/membership days)*",
             description="\n".join(lines),
             color=role.color if role.color != discord.Color.default() else discord.Color.dark_gold()
         )
