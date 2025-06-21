@@ -2,7 +2,7 @@ import asyncio
 from dotenv import load_dotenv
 from discord.ext import commands
 import discord
-from riddle_core import riddle_manager, Core  # Core für Konstanten und get_timestamp()
+from riddle_core import riddle_manager, Core  # Core.FIXED_CHANNEL_ID wird verwendet!
 
 load_dotenv()
 
@@ -36,7 +36,7 @@ def create_riddle_embed(riddle_id, author: discord.User, text, created_at,
 
     return embed
 
-# --- SubmitSolutionView und weitere Views/Modals ---
+# ---------------------- Views / Buttons / Modals ----------------------
 
 class SubmitSolutionView(discord.ui.View):
     def __init__(self, riddle_id, creator_id):
@@ -53,7 +53,6 @@ class SubmitSolutionView(discord.ui.View):
 
         modal = SolutionModal(self.riddle_id, self.creator_id)
         await interaction.response.send_modal(modal)
-        # Wichtig: keine weitere Antwort nach send_modal!
 
 class SolutionModal(discord.ui.Modal, title="Submit Riddle Solution"):
     def __init__(self, riddle_id, creator_id):
@@ -134,39 +133,13 @@ class EditRiddleModal(discord.ui.Modal, title="Edit Riddle"):
     def __init__(self, riddle_id):
         super().__init__()
         self.riddle_id = riddle_id
-
         riddle = riddle_manager.get_riddle(riddle_id)
 
-        self.text = discord.ui.TextInput(
-            label="Riddle Text", 
-            style=discord.TextStyle.paragraph, 
-            max_length=1000, 
-            default=riddle.get("text", "")
-        )
-        self.award = discord.ui.TextInput(
-            label="Award (optional)", 
-            required=False, 
-            max_length=100, 
-            default=riddle.get("award", "") or ""
-        )
-        self.image_url = discord.ui.TextInput(
-            label="Image URL (optional)", 
-            required=False, 
-            max_length=300, 
-            default=riddle.get("image_url", "") or ""
-        )
-        self.solution_image = discord.ui.TextInput(
-            label="Solution Image URL (optional)", 
-            required=False, 
-            max_length=300, 
-            default=riddle.get("solution_image", "") or ""
-        )
-        self.solution = discord.ui.TextInput(
-            label="Correct Solution", 
-            required=True, 
-            max_length=200, 
-            default=riddle.get("solution", "")
-        )
+        self.text = discord.ui.TextInput(label="Riddle Text", style=discord.TextStyle.paragraph, max_length=1000, default=riddle.get("text", ""))
+        self.award = discord.ui.TextInput(label="Award (optional)", required=False, max_length=100, default=riddle.get("award", "") or "")
+        self.image_url = discord.ui.TextInput(label="Image URL (optional)", required=False, max_length=300, default=riddle.get("image_url", "") or "")
+        self.solution_image = discord.ui.TextInput(label="Solution Image URL (optional)", required=False, max_length=300, default=riddle.get("solution_image", "") or "")
+        self.solution = discord.ui.TextInput(label="Correct Solution", required=True, max_length=200, default=riddle.get("solution", ""))
 
         self.add_item(self.text)
         self.add_item(self.award)
@@ -189,66 +162,93 @@ class EditRiddleModal(discord.ui.Modal, title="Edit Riddle"):
         await riddle_manager.save_data()
         await interaction.response.send_message("Riddle updated successfully!", ephemeral=True)
 
-# --- Riddle List Select & View ---
+class ActionButtonsView(discord.ui.View):
+    def __init__(self, riddle_id):
+        super().__init__(timeout=None)
+        self.riddle_id = riddle_id
+
+    @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary, custom_id="riddle_edit_button")
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditRiddleModal(self.riddle_id)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Post", style=discord.ButtonStyle.success, custom_id="riddle_post_button")
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        riddle = riddle_manager.get_riddle(self.riddle_id)
+        if not riddle:
+            await interaction.response.send_message("Rätsel nicht gefunden.", ephemeral=True)
+            return
+
+        channel = interaction.client.get_channel(Core.FIXED_CHANNEL_ID)
+        if not channel:
+            await interaction.response.send_message("Fixed channel not found.", ephemeral=True)
+            return
+
+        embed = create_riddle_embed(
+            self.riddle_id,
+            interaction.client.get_user(riddle["author_id"]),
+            riddle["text"],
+            riddle["created_at"],
+            image_url=riddle.get("image_url"),
+            award=riddle.get("award"),
+            solution_image=riddle.get("solution_image"),
+            status=riddle.get("status"),
+            winner=None
+        )
+        await channel.send(embed=embed)
+        await interaction.response.send_message("Riddle posted!", ephemeral=True)
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="riddle_delete_button")
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        riddle = riddle_manager.get_riddle(self.riddle_id)
+        if not riddle:
+            await interaction.response.send_message("Rätsel nicht gefunden.", ephemeral=True)
+            return
+
+        riddle_manager.remove_riddle(self.riddle_id)
+        await riddle_manager.save_data()
+        await interaction.response.send_message("Riddle deleted!", ephemeral=True)
+
+# ---------- Select View ----------
 
 class RiddleSelect(discord.ui.Select):
     def __init__(self, riddles: dict):
-        options = []
-        for rid, riddle in riddles.items():
-            label = rid
-            desc = riddle["text"][:50] + ("..." if len(riddle["text"]) > 50 else "")
-            options.append(discord.SelectOption(label=label, description=desc))
-        super().__init__(placeholder="Wähle ein Rätsel aus...", min_values=1, max_values=1, options=options)
+        options = [
+            discord.SelectOption(label=rid, description=(r["text"][:50] + ("..." if len(r["text"]) > 50 else "")))
+            for rid, r in riddles.items()
+        ]
+        super().__init__(placeholder="Wähle ein Rätsel aus...", min_values=1, max_values=1, options=options, custom_id="riddle_select_menu")
 
     async def callback(self, interaction: discord.Interaction):
-        try:
-            riddle_id = self.values[0]
-            riddle = riddle_manager.get_riddle(riddle_id)
-            if not riddle:
-                await interaction.response.send_message("Rätsel nicht gefunden.", ephemeral=True)
-                return
+        riddle_id = self.values[0]
+        riddle = riddle_manager.get_riddle(riddle_id)
+        if not riddle:
+            await interaction.response.send_message("Rätsel nicht gefunden.", ephemeral=True)
+            return
 
-            author = interaction.client.get_user(riddle["author_id"])
-            winner = interaction.client.get_user(riddle.get("winner_id")) if riddle.get("winner_id") else None
-            embed = create_riddle_embed(
-                riddle_id,
-                author,
-                riddle["text"],
-                riddle["created_at"],
-                image_url=riddle.get("image_url"),
-                award=riddle.get("award"),
-                mention1=None,
-                mention2=None,
-                solution_image=riddle.get("solution_image"),
-                status=riddle.get("status"),
-                winner=winner
-            )
+        author = interaction.client.get_user(riddle["author_id"])
+        winner = interaction.client.get_user(riddle.get("winner_id")) if riddle.get("winner_id") else None
+        embed = create_riddle_embed(riddle_id, author, riddle["text"], riddle["created_at"],
+                                    image_url=riddle.get("image_url"),
+                                    award=riddle.get("award"),
+                                    solution_image=riddle.get("solution_image"),
+                                    status=riddle.get("status"),
+                                    winner=winner)
 
-            class EditButtonView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=300)
-                    self.riddle_id = riddle_id
-
-                @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary)
-                async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
-                    modal = EditRiddleModal(self.riddle_id)
-                    await interaction.response.send_modal(modal)
-
-            view = EditButtonView()
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"Fehler: {e}", ephemeral=True)
-            print(f"[ERROR][RiddleSelect.callback]: {e}")
+        view = ActionButtonsView(riddle_id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
 class RiddleListView(discord.ui.View):
     def __init__(self, open_riddles: dict):
-        super().__init__(timeout=60)
+        super().__init__(timeout=None)
         self.add_item(RiddleSelect(open_riddles))
 
 async def setup_persistent_views(bot):
     for riddle_id, riddle in riddle_manager.cache.items():
         if riddle.get("status") == "open":
             bot.add_view(SubmitSolutionView(riddle_id, riddle["author_id"]))
+    open_riddles = {k: v for k, v in riddle_manager.cache.items() if v.get("status") == "open"}
+    bot.add_view(RiddleListView(open_riddles))
 
 async def setup(bot):
     from riddle_commands import setup as setup_riddle_commands

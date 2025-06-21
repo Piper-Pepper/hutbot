@@ -33,6 +33,16 @@ async def on_ready():
         except Exception as e:
             print(f"❌ Failed to sync commands: {e}")
 
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def preban(ctx, user_id: int, *, reason=None):
+    try:
+        user = await bot.fetch_user(user_id)
+        await ctx.guild.ban(user, reason=reason)
+        await ctx.send(f"🔨 User {user} was pre-banned.")
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+
 async def main():
     async with bot:
         # Lade alle Cogs/extensions
