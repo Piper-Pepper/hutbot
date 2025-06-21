@@ -36,7 +36,7 @@ async def on_ready():
 async def main():
     async with bot:
         # Lade alle Cogs/extensions
-        await bot.load_extension("generate_cleaner")  # dein Cog für /generate cleanup
+        await bot.load_extension("generate_cleaner")
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
         await bot.load_extension("dm_logger")
@@ -49,7 +49,7 @@ async def main():
         # Lade Riddle Daten & persistent views
         from riddle import riddle_manager, setup_persistent_views
         await riddle_manager.load_data()
-        await setup_persistent_views(bot)
+        await setup_persistent_views(bot)  # registriert persistent Views mit timeout=None & custom_id
 
         # Starte Bot
         await bot.start(TOKEN)

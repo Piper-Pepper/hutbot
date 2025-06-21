@@ -1,73 +1,12 @@
-import os
-import aiohttp
 import asyncio
 from dotenv import load_dotenv
 from discord.ext import commands
 import discord
-import uuid
-from datetime import datetime
+from riddle_core import riddle_manager, Core  # Core für Konstanten und get_timestamp()
 
 load_dotenv()
 
-JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
-JSONBIN_BIN_ID = os.getenv("JSONBIN_BIN_ID")
-JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-JSONBIN_HEADERS = {
-    "X-Master-Key": JSONBIN_API_KEY,
-    "Content-Type": "application/json"
-}
-
-RIDDLE_CREATOR_ROLE_ID = 1380610400416043089
 LOG_CHANNEL_ID = 1381754826710585527
-DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-DEFAULT_SOLUTION_IMAGE = "https://cdn.discordapp.com/attachments/1383652563408392232/1384295668176388229/zombie_piper.gif"
-
-def get_timestamp():
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-class RiddleManager:
-    def __init__(self):
-        self.cache = {}
-        self.lock = asyncio.Lock()
-
-    async def load_data(self):
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(JSONBIN_URL, headers=JSONBIN_HEADERS) as resp:
-                    if resp.status == 200:
-                        json_data = await resp.json()
-                        self.cache = json_data.get("record", {})
-                        print(f"[RiddleManager] Loaded {len(self.cache)} riddles from jsonbin.io")
-                    else:
-                        print(f"[RiddleManager] Failed to load data: HTTP {resp.status}")
-            except Exception as e:
-                print(f"[RiddleManager] Exception while loading data: {e}")
-
-    async def save_data(self):
-        async with self.lock:
-            async with aiohttp.ClientSession() as session:
-                try:
-                    async with session.put(JSONBIN_URL, headers=JSONBIN_HEADERS, json=self.cache) as resp:
-                        if resp.status in (200, 201):
-                            print(f"[RiddleManager] Saved {len(self.cache)} riddles to jsonbin.io")
-                        else:
-                            print(f"[RiddleManager] Failed to save data: HTTP {resp.status}")
-                except Exception as e:
-                    print(f"[RiddleManager] Exception while saving data: {e}")
-
-    def add_riddle(self, riddle_id: str, data: dict):
-        self.cache[riddle_id] = data
-
-    def get_riddle(self, riddle_id: str):
-        return self.cache.get(riddle_id)
-
-    def remove_riddle(self, riddle_id: str):
-        if riddle_id in self.cache:
-            del self.cache[riddle_id]
-
-riddle_manager = RiddleManager()
-
-# --- Embeds & Views helpers ---
 
 def create_riddle_embed(riddle_id, author: discord.User, text, created_at,
                         image_url=None, award=None, mention1=None, mention2=None,
@@ -77,8 +16,7 @@ def create_riddle_embed(riddle_id, author: discord.User, text, created_at,
         description=text,
         color=discord.Color.blue()
     )
-    embed.set_image(url=image_url or DEFAULT_IMAGE_URL)
-    # Safe check for author avatar
+    embed.set_image(url=image_url or Core.DEFAULT_IMAGE_URL)
     avatar_url = author.avatar.url if author and author.avatar else discord.utils.MISSING
     if avatar_url is not discord.utils.MISSING:
         embed.set_thumbnail(url=avatar_url)
@@ -98,7 +36,7 @@ def create_riddle_embed(riddle_id, author: discord.User, text, created_at,
 
     return embed
 
-# --- Submit Solution ---
+# --- SubmitSolutionView und weitere Views/Modals ---
 
 class SubmitSolutionView(discord.ui.View):
     def __init__(self, riddle_id, creator_id):
@@ -115,6 +53,7 @@ class SubmitSolutionView(discord.ui.View):
 
         modal = SolutionModal(self.riddle_id, self.creator_id)
         await interaction.response.send_modal(modal)
+        # Wichtig: keine weitere Antwort nach send_modal!
 
 class SolutionModal(discord.ui.Modal, title="Submit Riddle Solution"):
     def __init__(self, riddle_id, creator_id):
@@ -169,16 +108,11 @@ class SolutionDecisionView(discord.ui.View):
             await interaction.response.send_message("Riddle not found.", ephemeral=True)
             return
 
-        # Jeder darf editieren – Hinweis kann freiwillig sein
-        await interaction.response.send_modal(EditRiddleModal(self.riddle_id))
-
-
-        # Close the riddle and set winner
         riddle["status"] = "closed"
         riddle["winner_id"] = self.submitter_id
         await riddle_manager.save_data()
 
-        await interaction.response.send_message("Solution accepted, riddle closed!", ephemeral=True)
+        await interaction.response.send_modal(EditRiddleModal(self.riddle_id))
 
     @discord.ui.button(emoji="👎", style=discord.ButtonStyle.danger, custom_id="solution_reject")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -195,8 +129,6 @@ class SolutionDecisionView(discord.ui.View):
                 pass
 
         await interaction.response.send_message("Solution rejected.", ephemeral=True)
-
-# --- Edit Riddle Modal ---
 
 class EditRiddleModal(discord.ui.Modal, title="Edit Riddle"):
     def __init__(self, riddle_id):
@@ -215,19 +147,19 @@ class EditRiddleModal(discord.ui.Modal, title="Edit Riddle"):
             label="Award (optional)", 
             required=False, 
             max_length=100, 
-            default=riddle.get("award", "")
+            default=riddle.get("award", "") or ""
         )
         self.image_url = discord.ui.TextInput(
             label="Image URL (optional)", 
             required=False, 
             max_length=300, 
-            default=riddle.get("image_url", "")
+            default=riddle.get("image_url", "") or ""
         )
         self.solution_image = discord.ui.TextInput(
             label="Solution Image URL (optional)", 
             required=False, 
             max_length=300, 
-            default=riddle.get("solution_image", "")
+            default=riddle.get("solution_image", "") or ""
         )
         self.solution = discord.ui.TextInput(
             label="Correct Solution", 
@@ -248,17 +180,14 @@ class EditRiddleModal(discord.ui.Modal, title="Edit Riddle"):
             await interaction.response.send_message("Riddle not found.", ephemeral=True)
             return
 
-
-        # Update fields
         riddle["text"] = self.text.value
         riddle["award"] = self.award.value if self.award.value.strip() else None
-        riddle["image_url"] = self.image_url.value or DEFAULT_IMAGE_URL
+        riddle["image_url"] = self.image_url.value or Core.DEFAULT_IMAGE_URL
         riddle["solution_image"] = self.solution_image.value or None
         riddle["solution"] = self.solution.value.strip().lower()
 
         await riddle_manager.save_data()
         await interaction.response.send_message("Riddle updated successfully!", ephemeral=True)
-
 
 # --- Riddle List Select & View ---
 
@@ -302,8 +231,6 @@ class RiddleSelect(discord.ui.Select):
 
                 @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary)
                 async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
-                    riddle = riddle_manager.get_riddle(self.riddle_id)
-    
                     modal = EditRiddleModal(self.riddle_id)
                     await interaction.response.send_modal(modal)
 
@@ -318,90 +245,11 @@ class RiddleListView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(RiddleSelect(open_riddles))
 
-# --- Commands Cog ---
-
-class RiddleCommands(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @discord.app_commands.command(name="riddle_add", description="Create a new riddle")
-    @discord.app_commands.describe(text="Riddle text", solution="Solution to the riddle", channel_name="Channel to post the riddle")
-    async def riddle_add(self, interaction: discord.Interaction,
-                         text: str,
-                         solution: str,
-                         channel_name: discord.TextChannel,
-                         image_url: str = None,
-                         mention_group1: discord.Role = None,
-                         mention_group2: discord.Role = None,
-                         solution_image: str = None,
-                         award: str = None):
-        author = interaction.user
-        if RIDDLE_CREATOR_ROLE_ID not in [r.id for r in author.roles]:
-            await interaction.response.send_message("You don't have permission to add riddles.", ephemeral=True)
-            return
-
-        riddle_id = str(uuid.uuid4())[:8]
-        created_at = get_timestamp()
-
-        riddle_data = {
-            "author_id": author.id,
-            "text": text,
-            "solution": solution.lower(),
-            "channel_id": channel_name.id,
-            "created_at": created_at,
-            "status": "open",
-            "image_url": image_url or DEFAULT_IMAGE_URL,
-            "award": award,
-            "mention1": mention_group1.id if mention_group1 else None,
-            "mention2": mention_group2.id if mention_group2 else None,
-            "solution_image": solution_image
-        }
-
-        riddle_manager.add_riddle(riddle_id, riddle_data)
-        await riddle_manager.save_data()
-
-        embed = create_riddle_embed(
-            riddle_id,
-            author,
-            text,
-            created_at,
-            image_url=riddle_data["image_url"],
-            award=award,
-            mention1=mention_group1,
-            mention2=mention_group2,
-            solution_image=solution_image
-        )
-        mentions = f"<@&{RIDDLE_CREATOR_ROLE_ID}>"
-        if mention_group1:
-            mentions += f" {mention_group1.mention}"
-        if mention_group2:
-            mentions += f" {mention_group2.mention}"
-
-        view = SubmitSolutionView(riddle_id, author.id)
-
-        await channel_name.send(content=mentions, embed=embed, view=view)
-        await interaction.response.send_message(f"Riddle created with ID `{riddle_id}`.", ephemeral=True)
-
-    @discord.app_commands.command(name="riddle_list", description="List all riddles")
-    async def riddle_list(self, interaction: discord.Interaction):
-        open_riddles = {k: v for k, v in riddle_manager.cache.items() if v["status"] == "open"}
-        closed_riddles = {k: v for k, v in riddle_manager.cache.items() if v["status"] == "closed"}
-
-        embed = discord.Embed(title="Riddle List", color=discord.Color.teal())
-        embed.add_field(name=f"Open Riddles ({len(open_riddles)})",
-                        value="\n".join(f"`{k}` | {v['created_at']}" for k, v in open_riddles.items()) or "None",
-                        inline=False)
-        embed.add_field(name=f"Closed Riddles ({len(closed_riddles)})",
-                        value="\n".join(f"`{k}` | {v['created_at']}" for k, v in closed_riddles.items()) or "None",
-                        inline=False)
-
-        view = RiddleListView(open_riddles)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
 async def setup_persistent_views(bot):
     for riddle_id, riddle in riddle_manager.cache.items():
         if riddle.get("status") == "open":
             bot.add_view(SubmitSolutionView(riddle_id, riddle["author_id"]))
 
 async def setup(bot):
-    await bot.add_cog(RiddleCommands(bot))
+    from riddle_commands import setup as setup_riddle_commands
+    await setup_riddle_commands(bot)
