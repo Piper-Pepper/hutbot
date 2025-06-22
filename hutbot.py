@@ -3,6 +3,10 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
+import subprocess
+
+subprocess.run(["pip", "install", "--upgrade", "pip"])
+
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
