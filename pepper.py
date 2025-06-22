@@ -81,10 +81,14 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
         else:
             normal_roles.append(f"{role.mention}")
 
+
     level_roles_of_member = [
         f"{level_roles[role.id][0]}​{role.mention}​{level_roles[role.id][1]}"
-        for role in sorted_roles if role.id in level_roles
+        for role in sorted(member.roles, key=lambda r: r.position, reverse=True)
+        if role.id in level_roles
     ]
+
+
 
     embed_color = member.top_role.color if member.top_role.color.value else discord.Color.dark_gold()
     embed = discord.Embed(
