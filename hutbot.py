@@ -57,9 +57,10 @@ async def main():
         await bot.load_extension("riddle")  # Riddle Cog
 
         # Lade Riddle Daten & persistent views
-        from riddle import riddle_manager, setup_persistent_views
+        from riddle import riddle_manager, solution_manager, setup_persistent_views
         await riddle_manager.load_data()
-        await setup_persistent_views(bot)  # registriert persistent Views mit timeout=None & custom_id
+        await solution_manager.load_data()
+        await setup_persistent_views(bot)
 
         # Starte Bot
         await bot.start(TOKEN)

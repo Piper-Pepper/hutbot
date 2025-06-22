@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from discord.ext import commands
 import discord
 from riddle_core import riddle_manager, Core  # Core.FIXED_CHANNEL_ID wird verwendet!
+from solution_manager import solution_manager  # Lösungsspeicherung mit button_message_id
 
 load_dotenv()
 
@@ -69,29 +70,32 @@ class SolutionModal(discord.ui.Modal, title="Submit Riddle Solution"):
             await interaction.response.send_message("This riddle is already closed.", ephemeral=True)
             return
 
-        creator = interaction.client.get_user(self.creator_id)
-        if not creator:
-            await interaction.response.send_message("Could not find riddle creator.", ephemeral=True)
-            return
+        # Lösung speichern im solution_manager (inkl. button_message_id später)
+        solution_manager.add_solution(self.riddle_id, interaction.user.id, self.solution.value)
+        await solution_manager.save_data()
 
-        embed = discord.Embed(title=f"Solution Proposal for Riddle {self.riddle_id}",
-                              description=riddle["text"],
-                              color=discord.Color.green())
+        embed = discord.Embed(
+            title=f"Solution Proposal for Riddle {self.riddle_id}",
+            description=riddle["text"],
+            color=discord.Color.green()
+        )
         embed.add_field(name="Proposed Solution", value=self.solution.value, inline=False)
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
 
         view = SolutionDecisionView(self.riddle_id, interaction.user.id, self.solution.value)
 
-        try:
-            await creator.send(embed=embed, view=view)
-            log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-            if log_channel:
-                await log_channel.send(embed=embed)
-        except Exception:
-            await interaction.response.send_message("Failed to send your solution to the riddle creator.", ephemeral=True)
-            return
+        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            msg = await log_channel.send(embed=embed, view=view)
+            # Speichere die message.id der Daumen-Buttons für Persistenz
+            solution_manager.set_solution_button_message_id(self.riddle_id, interaction.user.id, msg.id)
+            await solution_manager.save_data()
 
-        await interaction.response.send_message("Your solution was sent to the riddle creator for approval.", ephemeral=True)
+            await interaction.response.send_message("Your solution was sent to the riddle creators for approval.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Log channel not found. Solution not sent.", ephemeral=True)
+
+# ------------------------------------------
 
 class SolutionDecisionView(discord.ui.View):
     def __init__(self, riddle_id, submitter_id, solution_text):
@@ -111,7 +115,28 @@ class SolutionDecisionView(discord.ui.View):
         riddle["winner_id"] = self.submitter_id
         await riddle_manager.save_data()
 
-        await interaction.response.send_modal(EditRiddleModal(self.riddle_id))
+        try:
+            await interaction.message.delete()
+        except Exception as e:
+            print(f"Failed to delete message: {e}")
+
+        channel = interaction.client.get_channel(Core.FIXED_CHANNEL_ID)
+        if channel:
+            winner = interaction.client.get_user(self.submitter_id)
+            embed = create_riddle_embed(
+                self.riddle_id,
+                interaction.client.get_user(riddle["author_id"]),
+                riddle["text"],
+                riddle["created_at"],
+                image_url=riddle.get("image_url"),
+                award=riddle.get("award"),
+                solution_image=riddle.get("solution_image"),
+                status=riddle.get("status"),
+                winner=winner
+            )
+            await channel.send(embed=embed)
+
+        await interaction.response.send_message("Riddle closed and solution posted!", ephemeral=True)
 
     @discord.ui.button(emoji="👎", style=discord.ButtonStyle.danger, custom_id="solution_reject")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -128,39 +153,6 @@ class SolutionDecisionView(discord.ui.View):
                 pass
 
         await interaction.response.send_message("Solution rejected.", ephemeral=True)
-
-class EditRiddleModal(discord.ui.Modal, title="Edit Riddle"):
-    def __init__(self, riddle_id):
-        super().__init__()
-        self.riddle_id = riddle_id
-        riddle = riddle_manager.get_riddle(riddle_id)
-
-        self.text = discord.ui.TextInput(label="Riddle Text", style=discord.TextStyle.paragraph, max_length=1000, default=riddle.get("text", ""))
-        self.award = discord.ui.TextInput(label="Award (optional)", required=False, max_length=100, default=riddle.get("award", "") or "")
-        self.image_url = discord.ui.TextInput(label="Image URL (optional)", required=False, max_length=300, default=riddle.get("image_url", "") or "")
-        self.solution_image = discord.ui.TextInput(label="Solution Image URL (optional)", required=False, max_length=300, default=riddle.get("solution_image", "") or "")
-        self.solution = discord.ui.TextInput(label="Correct Solution", required=True, max_length=200, default=riddle.get("solution", ""))
-
-        self.add_item(self.text)
-        self.add_item(self.award)
-        self.add_item(self.image_url)
-        self.add_item(self.solution_image)
-        self.add_item(self.solution)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        riddle = riddle_manager.get_riddle(self.riddle_id)
-        if not riddle:
-            await interaction.response.send_message("Riddle not found.", ephemeral=True)
-            return
-
-        riddle["text"] = self.text.value
-        riddle["award"] = self.award.value if self.award.value.strip() else None
-        riddle["image_url"] = self.image_url.value or Core.DEFAULT_IMAGE_URL
-        riddle["solution_image"] = self.solution_image.value or None
-        riddle["solution"] = self.solution.value.strip().lower()
-
-        await riddle_manager.save_data()
-        await interaction.response.send_message("Riddle updated successfully!", ephemeral=True)
 
 class ActionButtonsView(discord.ui.View):
     def __init__(self, riddle_id):
@@ -184,6 +176,13 @@ class ActionButtonsView(discord.ui.View):
             await interaction.response.send_message("Fixed channel not found.", ephemeral=True)
             return
 
+        mentions = [f"<@&1380610400416043089>"]
+        if riddle.get("mention1_id"):
+            mentions.append(f"<@&{riddle['mention1_id']}>")
+        if riddle.get("mention2_id"):
+            mentions.append(f"<@&{riddle['mention2_id']}>")
+        mention_text = " ".join(mentions)
+
         embed = create_riddle_embed(
             self.riddle_id,
             interaction.client.get_user(riddle["author_id"]),
@@ -195,8 +194,13 @@ class ActionButtonsView(discord.ui.View):
             status=riddle.get("status"),
             winner=None
         )
-        await channel.send(embed=embed)
-        await interaction.response.send_message("Riddle posted!", ephemeral=True)
+
+        view = SubmitSolutionView(self.riddle_id, riddle["author_id"])
+        await channel.send(content=mention_text, embed=embed, view=view)
+
+        interaction.client.add_view(view)
+
+        await interaction.response.send_message("Rätsel gepostet mit Submit-Button!", ephemeral=True)
 
     @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="riddle_delete_button")
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -243,13 +247,29 @@ class RiddleListView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(RiddleSelect(open_riddles))
 
+# ------------- PERSISTENT VIEWS SETUP -------------
+
 async def setup_persistent_views(bot):
+    # SubmitSolutionView für offene Rätsel
     for riddle_id, riddle in riddle_manager.cache.items():
         if riddle.get("status") == "open":
             bot.add_view(SubmitSolutionView(riddle_id, riddle["author_id"]))
+
+    # SolutionDecisionView für Lösungen mit gespeicherter Button-Message
+    for riddle_id, user_solutions in solution_manager.cache.items():
+        for user_id_str, sol in user_solutions.items():
+            message_id = sol.get("button_message_id")
+            if message_id is not None:
+                bot.add_view(
+                    SolutionDecisionView(riddle_id, int(user_id_str), sol["solution_text"]),
+                    message_id=message_id
+                )
+
     open_riddles = {k: v for k, v in riddle_manager.cache.items() if v.get("status") == "open"}
     bot.add_view(RiddleListView(open_riddles))
 
 async def setup(bot):
+    await solution_manager.load_data()
+    await setup_persistent_views(bot)
     from riddle_commands import setup as setup_riddle_commands
     await setup_riddle_commands(bot)
