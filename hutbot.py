@@ -54,6 +54,7 @@ async def main():
         await bot.load_extension("auto_kick_mommy")
         await bot.load_extension("dm_forwarder")
         await bot.load_extension("ticket")
+        await bot.load_extension("status_manager")
         await bot.load_extension("riddle")  # Riddle Cog
 
         # Lade Riddle Daten & persistent views
