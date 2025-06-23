@@ -23,7 +23,7 @@ synced_once = False  # sync slash commands nur einmal
 async def on_ready():
     global synced_once
     print(f"✅ Bot connected as {bot.user}!")
-    await bot.change_presence(activity=discord.Game(name=".. with her Cum-Kitty"))
+    await bot.change_presence(activity=discord.Game(name=""Hide & Seek with Goon-Mommies...""))
     if not synced_once:
         try:
             print("🔄 Syncing slash commands...")
