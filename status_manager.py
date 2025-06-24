@@ -26,12 +26,13 @@ class StatusManager(commands.Cog):
         (discord.ActivityType.playing, "Hide & Seek with Goon-Mommies"),
         (discord.ActivityType.playing, "with her 'lil green friend'"),
         (discord.ActivityType.listening, "to Piper’s law being enforced"),
+        (discord.ActivityType.listening, "to fapping sounds..."),
         (discord.ActivityType.watching, "over horny degenerates like a hawk"),
     ]
 
     status_night = [
         (discord.ActivityType.playing, "with slippery thoughts in the dark"),
-        (discord.ActivityType.playing, "Russion Roulette with a Goon-Mommy"),
+        (discord.ActivityType.playing, "Russian Roulette with a Goon-Mommy"),
         (discord.ActivityType.playing, "with her Cum-Kitty"),
         (discord.ActivityType.listening, "to forbidden late-night audio 📼"),
         (discord.ActivityType.watching, "your shameful midnight habits 👀"),
