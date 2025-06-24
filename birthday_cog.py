@@ -19,47 +19,42 @@ class BirthdayModal(discord.ui.Modal, title="Tell us your birthday!"):
         self.user_id = user_id
         self.timezone = timezone
 
-        default_month = str(month) if month else ""
-        default_day = str(day) if day else ""
-        default_year = str(year) if year else ""
-        default_image = image_url or ""
-
-        self.add_item(discord.ui.TextInput(
+        self.month_input = discord.ui.TextInput(
             label="Month (1–12)",
             placeholder="e.g. 6",
-            default=default_month,
             required=True,
-            custom_id="month_input"
-        ))
-        self.add_item(discord.ui.TextInput(
+            default=str(month) if month else ""
+        )
+        self.day_input = discord.ui.TextInput(
             label="Day (1–31)",
             placeholder="e.g. 24",
-            default=default_day,
             required=True,
-            custom_id="day_input"
-        ))
-        self.add_item(discord.ui.TextInput(
+            default=str(day) if day else ""
+        )
+        self.year_input = discord.ui.TextInput(
             label="Birth Year (optional)",
             placeholder="e.g. 1990",
-            default=default_year,
             required=False,
-            custom_id="year_input"
-        ))
-        self.add_item(discord.ui.TextInput(
+            default=str(year) if year else ""
+        )
+        self.image_input = discord.ui.TextInput(
             label="Image URL (optional)",
             placeholder="https://...",
-            default=default_image,
             required=False,
-            custom_id="image_input"
-        ))
+            default=image_url or ""
+        )
+
+        self.add_item(self.month_input)
+        self.add_item(self.day_input)
+        self.add_item(self.year_input)
+        self.add_item(self.image_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            inputs = {comp.custom_id: comp.value for comp in self.children}
-            month = int(inputs["month_input"])
-            day = int(inputs["day_input"])
-            year = int(inputs["year_input"]) if inputs["year_input"] else None
-            image_url = inputs["image_input"] if inputs["image_input"] else None
+            month = int(self.month_input.value)
+            day = int(self.day_input.value)
+            year = int(self.year_input.value) if self.year_input.value else None
+            image_url = self.image_input.value if self.image_input.value else None
 
             await birthday_edit(
                 user_id=self.user_id,
@@ -87,7 +82,7 @@ class BirthdayButtonView(discord.ui.View):
     @discord.ui.button(label="Send/Update Birthday", style=discord.ButtonStyle.primary, custom_id="birthday_button")
     async def send_birthday(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            timezone = "Europe/Berlin"
+            timezone = "Europe/Berlin"  # TODO: dynamisch ermitteln
             modal = BirthdayModal(interaction.user.id, timezone, image_url=self.image_url)
             await interaction.response.send_modal(modal)
 
@@ -187,12 +182,24 @@ class Birthday(commands.Cog):
             if not is_birthday_today(entry, entry.get("timezone", "UTC")):
                 continue
 
+            user = self.bot.get_user(int(user_id))
+            if not user:
+                continue
+
+            guild = discord.utils.get(self.bot.guilds, id=BIRTHDAY_CHANNELS[0])
+            timezone = entry.get("timezone", "UTC")
+            month = entry.get("month")
+            day = entry.get("day")
+
             embed = discord.Embed(
-                title="🎂 Happy Birthday!",
-                description=f"Let's all celebrate <@{user_id}> today! 🎉",
+                description=f"🎉 Let's all celebrate <@{user_id}> today!",
                 color=discord.Color.gold()
             )
             embed.set_image(url=entry.get("image_url") or STANDARD_IMAGE)
+            embed.add_field(name="🎈 Birthday", value=f"`{day}.{month}` ({timezone})", inline=False)
+            embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+            if guild:
+                embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
 
             for channel_id in BIRTHDAY_CHANNELS:
                 channel = self.bot.get_channel(channel_id)
