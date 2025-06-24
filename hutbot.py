@@ -51,7 +51,6 @@ async def main():
         await bot.load_extension("hutmember")
         await bot.load_extension("dm_logger")
         await bot.load_extension("anti-mommy")
-        await bot.load_extension("auto_kick_mommy")
         await bot.load_extension("dm_forwarder")
         await bot.load_extension("ticket")
         await bot.load_extension("status_manager")
