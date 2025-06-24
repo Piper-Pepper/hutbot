@@ -12,12 +12,12 @@ intents.messages = True
 intents.dm_messages = True
 intents.guilds = True
 intents.message_content = True
-intents.members = True  # falls mit Memberinfos gearbeitet wird
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
+synced_once = False  # Nur einmal Slash-Commands synchronisieren
 
-synced_once = False  # sync slash commands nur einmal
 
 @bot.event
 async def on_ready():
@@ -32,6 +32,7 @@ async def on_ready():
             synced_once = True
         except Exception as e:
             print(f"❌ Failed to sync commands: {e}")
+
 
 @bot.command()
 @commands.has_permissions(ban_members=True)
@@ -54,15 +55,20 @@ async def main():
         await bot.load_extension("dm_forwarder")
         await bot.load_extension("ticket")
         await bot.load_extension("status_manager")
-        await bot.load_extension("riddle")  # Riddle Cog
+        # await bot.load_extension("riddle")
 
-        # Lade Riddle Daten & persistent views
-        from riddle import riddle_manager, solution_manager, setup_persistent_views
-        await riddle_manager.load_data()
-        await solution_manager.load_data()
-        await setup_persistent_views(bot)
+        # Lade Riddle Views
+        # from riddle import riddle_manager, solution_manager, setup_persistent_views as setup_riddle_views
+        # await riddle_manager.load_data()
+        # await setup_riddle_views(bot)
 
-        # Starte Bot
+        # Lade Birthday Cog
+        await bot.load_extension("birthday_cog")
+
+        # Optional: persistent View für den Geburtstags-Button (falls nötig nach Neustart)
+        from birthday_cog import BirthdayButtonView
+        bot.add_view(BirthdayButtonView(bot))  # wichtig: kein await hier!
+
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
