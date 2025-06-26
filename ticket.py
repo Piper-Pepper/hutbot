@@ -50,11 +50,12 @@ class ReplyModal(Modal, title="Reply to User"):
         self.add_item(self.reply_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         try:
             await self.target_user.send(f"\U0001F4EC You received a reply from a moderator:\n\n{self.reply_input.value}")
-            await interaction.response.send_message("✅ Reply sent successfully.", ephemeral=True)
+            await interaction.followup.send("✅ Reply sent successfully.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Could not send DM – user might have DMs disabled.", ephemeral=True)
+            await interaction.followup.send("❌ Could not send DM – user might have DMs disabled.", ephemeral=True)
 
 class ReplyButton(Button):
     def __init__(self, user: discord.User):
