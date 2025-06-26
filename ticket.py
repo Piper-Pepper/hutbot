@@ -19,29 +19,25 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def load_button_data():
-    url = f"https://api.jsonbin.io/v3/b/{BIN_ID}/latest"
-    try:
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code == 200:
-            return response.json().get("record", {})
-        else:
-            print(f"❌ Failed to load button data: {response.status_code}")
-            return {}
-    except Exception as e:
-        print(f"❌ Exception during loading button data: {e}")
-        return {}
-
-def save_button_data(data):
+def save_buttons_data(data: dict):
     url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
-    try:
-        response = requests.put(url, json=data, headers=HEADERS)
-        if response.status_code == 200:
-            print("✅ Button data saved to JSONBin")
-        else:
-            print(f"❌ Failed to save button data: {response.status_code} {response.text}")
-    except Exception as e:
-        print(f"❌ Exception during saving button data: {e}")
+    print(f"[DEBUG] Saving data: {data}")
+    response = requests.put(url, json=data, headers=HEADERS)
+    if response.status_code == 200:
+        print(f"✅ Data saved to jsonbin.io successfully.")
+    else:
+        print(f"❌ Error saving data: {response.status_code} {response.text}")
+
+def load_buttons_data():
+    url = f"https://api.jsonbin.io/v3/b/{BIN_ID}/latest"
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        data = response.json().get('record', {})
+        print(f"[DEBUG] Loaded data from jsonbin.io: {data}")
+        return data
+    else:
+        print(f"❌ Error loading data: {response.status_code} {response.text}")
+        return {}
 
 class TicketModal(Modal, title="Submit Your Ticket"):
     def __init__(self, bot: commands.Bot):
@@ -72,63 +68,82 @@ class TicketModal(Modal, title="Submit Your Ticket"):
         await interaction.response.send_message("✅ Your ticket was sent!", ephemeral=True)
 
 class TicketButton(Button):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, channel_id: int):
         super().__init__(label="Open Ticket", style=discord.ButtonStyle.green)
         self.bot = bot
+        self.channel_id = channel_id
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(TicketModal(self.bot))
 
 class TicketView(View):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, channel_id: int):
         super().__init__(timeout=None)
         self.bot = bot
-        self.add_item(TicketButton(bot))
+        self.add_item(TicketButton(bot, channel_id))
 
 class TicketCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.post_buttons.start()
+        self.post_button_message.start()
 
     def cog_unload(self):
-        self.post_buttons.cancel()
+        self.post_button_message.cancel()
 
     @tasks.loop(count=1)
-    async def post_buttons(self):
+    async def post_button_message(self):
         await self.bot.wait_until_ready()
-        data = load_button_data()
+        channel = self.bot.get_channel(BUTTON_CHANNEL_ID)
+        if not channel:
+            print("❌ Button channel not found.")
+            return
 
-        for channel_id_str, msg_id in data.items():
-            channel_id = int(channel_id_str)
-            channel = self.bot.get_channel(channel_id)
-            if not channel:
-                print(f"❌ Channel {channel_id} not found.")
-                continue
+        data = load_buttons_data()
+
+        message_id = data.get(str(BUTTON_CHANNEL_ID))
+
+        if message_id is None:
+            print(f"[INFO] No saved message ID for channel {BUTTON_CHANNEL_ID}, sending new button...")
+            view = TicketView(self.bot, BUTTON_CHANNEL_ID)
+            msg = await channel.send("Click the button below to open a ticket:", view=view)
+            data[str(BUTTON_CHANNEL_ID)] = msg.id
+            save_buttons_data(data)
+            print(f"➕ New ticket button message posted: {msg.id}")
+        else:
             try:
-                message = await channel.fetch_message(int(msg_id))
-                await message.edit(view=TicketView(self.bot))
-                self.bot.add_view(TicketView(self.bot), message_id=message.id)
-                print(f"🔁 Reattached button in channel {channel_id} to message {message.id}")
+                message = await channel.fetch_message(message_id)
+                await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))
+                print(f"♻️ Loaded button message and attached view: {message_id}")
             except discord.NotFound:
-                print(f"⚠️ Message not found in channel {channel_id}. Reposting...")
-                view = TicketView(self.bot)
+                print(f"❌ Stored message {message_id} not found! Posting new button and updating JSON...")
+                view = TicketView(self.bot, BUTTON_CHANNEL_ID)
                 msg = await channel.send("Click the button below to open a ticket:", view=view)
-                data[str(channel.id)] = msg.id
-                save_button_data(data)
+                data[str(BUTTON_CHANNEL_ID)] = msg.id
+                save_buttons_data(data)
+                print(f"➕ New ticket button message posted: {msg.id}")
             except Exception as e:
-                print(f"❌ Error in channel {channel_id}: {e}")
+                print(f"⚠️ Error loading/editing message: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self):
-        data = load_button_data()
-        for channel_id_str, msg_id in data.items():
+        channel = self.bot.get_channel(BUTTON_CHANNEL_ID)
+        if not channel:
+            print("❌ Button channel not found on_ready")
+            return
+
+        data = load_buttons_data()
+        message_id = data.get(str(BUTTON_CHANNEL_ID))
+
+        if message_id:
             try:
-                channel = self.bot.get_channel(int(channel_id_str))
-                if channel:
-                    self.bot.add_view(TicketView(self.bot), message_id=int(msg_id))
-                    print(f"🔄 View reattached in channel {channel_id_str} to message {msg_id}")
-            except Exception as e:
-                print(f"❌ Failed to reattach view: {e}")
+                message = await channel.fetch_message(message_id)
+                self.bot.add_view(TicketView(self.bot, BUTTON_CHANNEL_ID), message_id=message.id)
+                print(f"🔄 View attached to message {message_id} on on_ready")
+            except discord.NotFound:
+                print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
+        else:
+            self.bot.add_view(TicketView(self.bot, BUTTON_CHANNEL_ID))
+            print("ℹ️ View added without message ID (no persistent button)")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TicketCog(bot))
