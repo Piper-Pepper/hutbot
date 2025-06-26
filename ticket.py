@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BUTTON_CHANNEL_ID = 1382079493711200549
 TICKET_CHANNEL_ID = 1381754826710585527
 TICKET_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1385054753754714162/ticket_small.jpg"
 
@@ -20,32 +19,25 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def save_message_id(message_id: int | None):
-    print(f"[DEBUG] Saving message ID: {message_id}")
-    data = {
-        "ticket_button_message_id": str(message_id) if message_id is not None else None
-    }
+def save_button_mapping(channel_id: int, message_id: int):
+    print(f"[DEBUG] Saving button message for channel {channel_id}: {message_id}")
+    data = load_all_data()
+    data[str(channel_id)] = message_id
     url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
     response = requests.put(url, json=data, headers=HEADERS)
     if response.status_code == 200:
-        print(f"✅ Message ID saved to jsonbin.io: {message_id}")
+        print(f"✅ Button message saved for channel {channel_id}")
     else:
-        print(f"❌ Error saving Message ID: {response.status_code} {response.text}")
+        print(f"❌ Error saving button message: {response.status_code} {response.text}")
 
-def load_message_id():
+def load_all_data():
     url = f"https://api.jsonbin.io/v3/b/{BIN_ID}/latest"
     response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
-        data = response.json()
-        raw_id = data['record'].get('ticket_button_message_id')
-        try:
-            return int(raw_id) if raw_id is not None else None
-        except ValueError:
-            print(f"❌ Invalid message ID format in jsonbin: {raw_id}")
-            return None
+        return response.json().get("record", {})
     else:
-        print(f"❌ Error loading Message ID: {response.status_code} {response.text}")
-        return None
+        print(f"❌ Error loading data: {response.status_code} {response.text}")
+        return {}
 
 class TicketModal(Modal, title="Submit Your Ticket"):
     def __init__(self, bot: commands.Bot):
@@ -92,58 +84,46 @@ class TicketView(View):
 class TicketCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.post_button_message.start()
+        self.post_button_messages.start()
 
     def cog_unload(self):
-        self.post_button_message.cancel()
+        self.post_button_messages.cancel()
 
     @tasks.loop(count=1)
-    async def post_button_message(self):
+    async def post_button_messages(self):
         await self.bot.wait_until_ready()
-        channel = self.bot.get_channel(BUTTON_CHANNEL_ID)
-        if not channel:
-            print("❌ Button channel not found.")
-            return
+        data = load_all_data()
 
-        message_id = load_message_id()
-
-        if message_id is None:
-            view = TicketView(self.bot)
-            msg = await channel.send("Click the button below to open a ticket:", view=view)
-            print(f"➕ New ticket button message posted: {msg.id}")
-            save_message_id(msg.id)
-        else:
+        for channel_id_str, message_id in data.items():
             try:
-                message = await channel.fetch_message(message_id)
-                await message.edit(view=TicketView(self.bot))
-                print(f"♻️ Loaded button message and attached view: {message_id}")
-            except discord.NotFound:
-                print(f"❌ Stored message {message_id} not found! Resetting message ID and reposting.")
-                save_message_id(None)
-                view = TicketView(self.bot)
-                msg = await channel.send("Click the button below to open a ticket:", view=view)
-                print(f"➕ New ticket button message posted: {msg.id}")
-                save_message_id(msg.id)
+                channel_id = int(channel_id_str)
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    print(f"❌ Channel {channel_id} not found.")
+                    continue
+                try:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.edit(view=TicketView(self.bot))
+                    print(f"♻️ Loaded button message in channel {channel_id}")
+                except discord.NotFound:
+                    view = TicketView(self.bot)
+                    msg = await channel.send("Click the button below to open a ticket:", view=view)
+                    save_button_mapping(channel.id, msg.id)
+                    print(f"➕ Reposted button in channel {channel.id}: {msg.id}")
             except Exception as e:
-                print(f"⚠️ Error loading/editing message: {e}")
+                print(f"⚠️ Error handling channel {channel_id_str}: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self):
-        channel = self.bot.get_channel(BUTTON_CHANNEL_ID)
-        if not channel:
-            print("❌ Button channel not found on_ready")
-            return
-        message_id = load_message_id()
-        if message_id:
+        data = load_all_data()
+        for channel_id_str, message_id in data.items():
             try:
-                message = await channel.fetch_message(message_id)
-                self.bot.add_view(TicketView(self.bot), message_id=message.id)
-                print(f"🔄 View attached to message {message_id} on on_ready")
-            except discord.NotFound:
-                print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
-        else:
-            self.bot.add_view(TicketView(self.bot))
-            print("ℹ️ View added without message ID (no persistent button)")
+                channel = self.bot.get_channel(int(channel_id_str))
+                if channel:
+                    self.bot.add_view(TicketView(self.bot), message_id=int(message_id))
+                    print(f"🔄 View re-attached for message {message_id} in channel {channel_id_str}")
+            except Exception as e:
+                print(f"⚠️ Could not reattach view for channel {channel_id_str}: {e}")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TicketCog(bot))
