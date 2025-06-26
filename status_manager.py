@@ -13,29 +13,40 @@ class StatusManager(commands.Cog):
 
     # 🌞 Status-Pools je Tageszeit
     status_morning = [
-        (discord.ActivityType.playing, "with wholesome morning goons ☕"),
-        (discord.ActivityType.listening, "to soft moans and birdsong 🕊️"),
-        (discord.ActivityType.watching, "the sunrise over the Goon Hut"),
-        (discord.ActivityType.watching, "YOU, while you stroking your cock"),
-        (discord.ActivityType.playing, "with her Cum-Kitty"),
+        (discord.ActivityType.playing, "☕with wholesome morning goons ☕"),
+        (discord.ActivityType.listening, "🕊️to soft moans and birdsong"),
+        (discord.ActivityType.watching, "🌄the sunrise over the Goon Hut"),
+        (discord.ActivityType.watching, "🌄the sunrise ober Goonsville"),
+        (discord.ActivityType.watching, "🌄the Goon Morning rising..."),
+        (discord.ActivityType.listening, "⁉️to something what you will never guess"),
+        (discord.ActivityType.watching, "☕her steamy goon-morning coffee"),
+        (discord.ActivityType.watching, "🚬her goon-morning joint getting rolled up"),
+        (discord.ActivityType.watching, "🚬her goon-morning cigarette smokin'"),
+        (discord.ActivityType.watching, "🐔your morning-woody grow"),
+
         
     ]
 
     status_day = [
-        (discord.ActivityType.playing, "the daily Goon Games"),
-        (discord.ActivityType.playing, "Hide & Seek with Goon-Mommies"),
-        (discord.ActivityType.playing, "with her 'lil green friend'"),
-        (discord.ActivityType.listening, "to Piper’s law being enforced"),
-        (discord.ActivityType.listening, "to fapping sounds..."),
-        (discord.ActivityType.watching, "over horny degenerates like a hawk"),
+        (discord.ActivityType.playing, "🏟️the daily Goon Games"),
+        (discord.ActivityType.playing, "🌞Hide & Seek with Goon-Mommies"),
+        (discord.ActivityType.playing, "🐸with her 'lil green friend'"),
+        (discord.ActivityType.listening, "🔫o Piper’s law being enforced"),
+        (discord.ActivityType.listening, "🫳to fapping sounds..."),
+        (discord.ActivityType.playing, "🌬️High-Noon with weed-smoking"),
+        (discord.ActivityType.listening, "🎧to some steamy PMV music on her green headphones"),
+        (discord.ActivityType.watching, "🦅over horny degenerates like a hawk"),
     ]
 
     status_night = [
-        (discord.ActivityType.playing, "with slippery thoughts in the dark"),
-        (discord.ActivityType.playing, "Russian Roulette with a Goon-Mommy"),
-        (discord.ActivityType.playing, "with her Cum-Kitty"),
-        (discord.ActivityType.listening, "to forbidden late-night audio 📼"),
-        (discord.ActivityType.watching, "your shameful midnight habits 👀"),
+        (discord.ActivityType.playing, "💦with slippery thoughts in the dark"),
+        (discord.ActivityType.playing, "🔫Russian Roulette with a Goon-Mommy"),
+        (discord.ActivityType.playing, "😺with her Cum-Kitty"),
+        (discord.ActivityType.watching, "🐔YOU, while you stroking your cock"),
+        (discord.ActivityType.listening, "📼to forbidden late-night audio"),
+        (discord.ActivityType.watching, "👀your shameful midnight habits"),
+        (discord.ActivityType.playing, "♣️Strip-Poker with you guys..."),
+        (discord.ActivityType.watching, "👀her good-night porn"),
     ]
 
     def get_status_by_time(self):
