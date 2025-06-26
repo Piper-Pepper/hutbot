@@ -45,7 +45,7 @@ class StatusManager(commands.Cog):
         (discord.ActivityType.watching, "🐔YOU, while you stroking your cock"),
         (discord.ActivityType.listening, "📼to forbidden late-night audio"),
         (discord.ActivityType.watching, "👀your shameful midnight habits"),
-        (discord.ActivityType.playing, "♣️Strip-Poker with you guys..."),🌄
+        (discord.ActivityType.playing, "♣️Strip-Poker with you guys..."),
         (discord.ActivityType.watching, "🌄her good-night porn"),
         (discord.ActivityType.watching, "🌄the sunset over the Goon Hut🛖"),
     ]
