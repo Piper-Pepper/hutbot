@@ -22,6 +22,7 @@ special_roles_to_highlight = {
     1379175952147546215: "*(Stream Alerts)*",
     1346549280617271326: "*(more 📨 by me...)*",
     1380610400416043089: "*(Riddler of the Hut)*"
+    1387850018471284760: "*(Open for DMs📬)*"
 }
 
 level_roles = {
