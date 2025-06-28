@@ -11,7 +11,7 @@ class GenerateCleaner(commands.Cog):
             return
         if message.content.startswith("/generate"):
             try:
-                await asyncio.sleep(13)
+                await asyncio.sleep(16)
                 await message.delete()
             except (discord.Forbidden, discord.HTTPException):
                 pass
