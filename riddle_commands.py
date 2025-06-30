@@ -1,8 +1,8 @@
-# riddle_commands.py
 import discord
 from discord import app_commands
 from discord.ext import commands
 import uuid
+from datetime import datetime
 
 from riddle_embeds import build_riddle_embed, build_solution_submission_embed, build_wrong_solution_embed, build_win_embed
 from riddle import riddle_cache, save_riddles, SubmitView, close_riddle_with_winner
@@ -133,6 +133,9 @@ class RiddleCommands(commands.Cog):
             "winner": None,
             "created_at": datetime.utcnow().isoformat()
         }
+
+        # Debugging-Ausgabe
+        print(f"Adding riddle: {riddle_data}")
 
         riddle_cache[riddle_id] = riddle_data
         save_riddles()
