@@ -21,7 +21,7 @@ HEADERS = {
 
 def save_buttons_data(data: dict):
     url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
-    print(f"[DEBUG] Saving data: {data}")
+    print(f"[DEBUG] Saving merged data: {data}")
     response = requests.put(url, json=data, headers=HEADERS)
     if response.status_code == 200:
         print(f"✅ Data saved to jsonbin.io successfully.")
@@ -33,7 +33,7 @@ def load_buttons_data():
     response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         data = response.json().get('record', {})
-        print(f"[DEBUG] Loaded data from jsonbin.io: {data}")
+        print(f"[DEBUG] RAW from JSONBin: {response.json()}")
         return data
     else:
         print(f"❌ Error loading data: {response.status_code} {response.text}")
@@ -106,19 +106,21 @@ class TicketCog(commands.Cog):
             print(f"[INFO] No saved message ID for channel {BUTTON_CHANNEL_ID}, sending new button...")
             view = TicketView(self.bot, BUTTON_CHANNEL_ID)
             msg = await channel.send("Click the button below to open a ticket:", view=view)
-            data[str(BUTTON_CHANNEL_ID)] = msg.id
+            # WICHTIG: ID als STRING speichern
+            data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
             save_buttons_data(data)
             print(f"➕ New ticket button message posted: {msg.id}")
         else:
             try:
-                message = await channel.fetch_message(message_id)
+                # INT konvertieren vor fetch_message
+                message = await channel.fetch_message(int(message_id))
                 await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))
                 print(f"♻️ Loaded button message and attached view: {message_id}")
             except discord.NotFound:
                 print(f"❌ Stored message {message_id} not found! Posting new button and updating JSON...")
                 view = TicketView(self.bot, BUTTON_CHANNEL_ID)
                 msg = await channel.send("Click the button below to open a ticket:", view=view)
-                data[str(BUTTON_CHANNEL_ID)] = msg.id
+                data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
                 save_buttons_data(data)
                 print(f"➕ New ticket button message posted: {msg.id}")
             except Exception as e:
@@ -136,8 +138,8 @@ class TicketCog(commands.Cog):
 
         if message_id:
             try:
-                message = await channel.fetch_message(message_id)
-                self.bot.add_view(TicketView(self.bot, BUTTON_CHANNEL_ID), message_id=message.id)
+                message = await channel.fetch_message(int(message_id))
+                self.bot.add_view(TicketView(self.bot, BUTTON_CHANNEL_ID), message_id=int(message_id))
                 print(f"🔄 View attached to message {message_id} on on_ready")
             except discord.NotFound:
                 print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")

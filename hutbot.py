@@ -34,22 +34,6 @@ async def on_ready():
         except Exception as e:
             print(f"❌ Failed to sync commands: {e}")
 
-    # Riddle persistent Views registrieren
-    # riddle_cog = bot.get_cog("RiddleCog")
-    # if riddle_cog:
-    #     await riddle_cog.setup_persistent_views()
-    #     print("🔁 Riddle persistent Views loaded.")
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def preban(ctx, user_id: int, *, reason=None):
-    try:
-        user = await bot.fetch_user(user_id)
-        await ctx.guild.ban(user, reason=reason)
-        await ctx.send(f"🔨 User {user} was pre-banned.")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
-
 async def main():
     async with bot:
         # 📦 Load all extensions
@@ -65,13 +49,13 @@ async def main():
         await bot.load_extension("hut_dm")
         await bot.load_extension("hut_dm_app")
 
-        # 🧩 Riddle Cog laden
-        # await bot.load_extension("riddle")
-        # await bot.load_extension("riddle_commands")
-
         # 🎂 Optional: persistent View für Geburtstag
         from birthday_cog import BirthdayButtonView
         bot.add_view(BirthdayButtonView(bot))
+
+        # 🧠 Load Riddle Cogs
+        await bot.load_extension("riddle")  # Hauptlogik (trigger/events/views)
+        await bot.load_extension("riddle_commands")  # Slash-Commands
 
         # 🚀 Start the bot
         await bot.start(TOKEN)
