@@ -36,7 +36,7 @@ async def on_ready():
 
     # 📌 Register persistent views for riddle system
     try:
-        from riddle_cog import setup_persistent_views  # <- Falls du `riddle.py` in `riddle_cog.py` umbenannt hast
+        from riddle import setup_persistent_views  # <- Falls du `riddle.py` in `riddle_cog.py` umbenannt hast
         await setup_persistent_views(bot)
         print("📌 Riddle Views registered.")
     except Exception as e:
