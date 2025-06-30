@@ -54,8 +54,8 @@ async def main():
         bot.add_view(BirthdayButtonView(bot))
 
         # 🧠 Load Riddle Cogs
-        await bot.load_extension("riddle")  # Hauptlogik (trigger/events/views)
-        await bot.load_extension("riddle_commands")  # Slash-Commands
+        # await bot.load_extension("riddle")  # Hauptlogik (trigger/events/views)
+        # await bot.load_extension("riddle_commands")  # Slash-Commands
 
         # 🚀 Start the bot
         await bot.start(TOKEN)
