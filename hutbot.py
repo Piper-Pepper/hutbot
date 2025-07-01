@@ -56,6 +56,7 @@ async def main():
         await bot.load_extension("birthday_cog")
         await bot.load_extension("hut_dm")
         await bot.load_extension("hut_dm_app")
+      
 
         # 🎂 Optional: persistent View für Geburtstag
         from birthday_cog import BirthdayButtonView
