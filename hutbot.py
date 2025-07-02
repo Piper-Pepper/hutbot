@@ -35,12 +35,12 @@ async def on_ready():
             print(f"❌ Failed to sync commands: {e}")
 
     # 📌 Register persistent views for riddle system
-    # try:
-    #    from riddle import setup_persistent_views  # <- Falls du `riddle.py` in `riddle_cog.py` umbenannt hast
-    #    await setup_persistent_views(bot)
-    #    print("📌 Riddle Views registered.")
-    # except Exception as e:
-    #    print(f"⚠️ Failed to register Riddle Views: {e}")
+    try:
+        from riddle import setup_persistent_views  # <- Falls du `riddle.py` in `riddle_cog.py` umbenannt hast
+        await setup_persistent_views(bot)
+        print("📌 Riddle Views registered.")
+    except Exception as e:
+        print(f"⚠️ Failed to register Riddle Views: {e}")
 
 async def main():
     async with bot:
@@ -63,8 +63,8 @@ async def main():
         bot.add_view(BirthdayButtonView(bot))
 
         # 🧠 Load Riddle Cogs
-        # await bot.load_extension("riddle")         # <- Dein riddle.py
-        # await bot.load_extension("riddle_commands")    # <- Slash-Befehle (riddle_add, riddle_list)
+        await bot.load_extension("riddle")         # <- Dein riddle.py
+        await bot.load_extension("riddle_commands")    # <- Slash-Befehle (riddle_add, riddle_list)
 
         # 🚀 Start the bot
         await bot.start(TOKEN)

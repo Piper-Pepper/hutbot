@@ -1,4 +1,3 @@
-# riddle.py
 import discord
 from discord.ext import commands
 from discord.ui import View, Button, Modal, TextInput
@@ -11,6 +10,7 @@ from riddle_embeds import build_riddle_embed, build_solution_submission_embed, b
 
 load_dotenv()
 
+# JSONBin Config
 RIDDLE_BIN_ID = os.getenv("RIDDLE_BIN_ID")
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 
@@ -25,7 +25,7 @@ MOD_ROLE_ID = 1380610400416043089
 
 riddle_cache = {}
 
-# Load riddle data from JSONBin
+# Load riddles from JSONBin
 def load_riddles():
     url = f"https://api.jsonbin.io/v3/b/{RIDDLE_BIN_ID}/latest"
     resp = requests.get(url, headers=HEADERS)
@@ -36,7 +36,7 @@ def load_riddles():
     else:
         print(f"❌ Failed to load riddles: {resp.status_code} {resp.text}")
 
-# Save riddle data to JSONBin
+# Save riddles to JSONBin
 def save_riddles():
     url = f"https://api.jsonbin.io/v3/b/{RIDDLE_BIN_ID}"
     response = requests.put(url, json=riddle_cache, headers=HEADERS)
@@ -45,7 +45,7 @@ def save_riddles():
     else:
         print(f"❌ Error saving riddles: {response.status_code} {response.text}")
 
-# ---------- Trigger: WIN ----------
+# Close riddle with winner and update message
 async def close_riddle_with_winner(bot, riddle_id, winner_id=None, solution_text=""):
     riddle = riddle_cache.get(riddle_id)
     if not riddle:
@@ -54,7 +54,7 @@ async def close_riddle_with_winner(bot, riddle_id, winner_id=None, solution_text
     riddle["winner"] = winner_id if winner_id else "none"
     save_riddles()
 
-    # Remove submit button
+    # Remove submit button from posted message
     if riddle.get("button_id") and riddle.get("channel_id"):
         try:
             channel = bot.get_channel(int(riddle["channel_id"]))
@@ -65,7 +65,7 @@ async def close_riddle_with_winner(bot, riddle_id, winner_id=None, solution_text
         except Exception as e:
             print(f"[WARN] Failed to update message button: {e}")
 
-    # Delete all solution suggestions
+    # Delete solution suggestion messages from log channel
     for suggestion in riddle.get("suggestions", []):
         try:
             log_channel = bot.get_channel(LOG_CHANNEL_ID)
@@ -74,7 +74,7 @@ async def close_riddle_with_winner(bot, riddle_id, winner_id=None, solution_text
         except:
             pass
 
-    # Post Win Embed
+    # Post Win embed in RIDDLE_CHANNEL
     channel = bot.get_channel(RIDDLE_CHANNEL_ID)
     mention_txt = f"<@&{MOD_ROLE_ID}>"
     for m in riddle.get("mentions", []):
@@ -85,7 +85,7 @@ async def close_riddle_with_winner(bot, riddle_id, winner_id=None, solution_text
     embed = build_win_embed(riddle, guild, winner, solution_text if winner else "")
     await channel.send(content=mention_txt, embed=embed)
 
-# ---------- Modal: Submit Lösung ----------
+# Modal for submitting a solution
 class SubmitSolutionModal(Modal, title="Submit Your Solution"):
     def __init__(self, bot, riddle_id):
         super().__init__()
@@ -112,7 +112,7 @@ class SubmitSolutionModal(Modal, title="Submit Your Solution"):
         save_riddles()
         await interaction.followup.send("✅ Your solution has been submitted for review.", ephemeral=True)
 
-# ---------- View: Submit Button ----------
+# Submit Button and View
 class SubmitButton(Button):
     def __init__(self, bot, riddle_id):
         super().__init__(label="Submit Solution", style=discord.ButtonStyle.blurple, custom_id=f"submit_{riddle_id}")
@@ -127,7 +127,7 @@ class SubmitView(View):
         super().__init__(timeout=None)
         self.add_item(SubmitButton(bot, riddle_id))
 
-# ---------- View: Vote Buttons (Daumen) ----------
+# Vote Buttons (Thumbs Up/Down)
 class VoteView(View):
     def __init__(self, bot, riddle_id, user_id, solution_text):
         super().__init__(timeout=None)
@@ -163,13 +163,13 @@ class VoteButton(Button):
             embed = build_wrong_solution_embed(riddle, interaction.user, self.solution_text, interaction.guild)
             await self.bot.get_channel(RIDDLE_CHANNEL_ID).send(content=f"<@{self.user_id}>", embed=embed)
 
-        # Delete the vote message from log
+        # Delete vote message to keep channel clean
         try:
             await interaction.message.delete()
         except:
             pass
 
-# ---------- Setup persistent views ----------
+# Setup persistent views on bot startup
 async def setup_persistent_views(bot: commands.Bot):
     load_riddles()
     for riddle_id, data in riddle_cache.items():
@@ -180,6 +180,6 @@ async def setup_persistent_views(bot: commands.Bot):
                 for s in data["suggestions"]:
                     bot.add_view(VoteView(bot, riddle_id, int(s["user_id"]), s["solution"]))
 
-# ---------- Export ----------
+# Setup function for bot extension loading
 async def setup(bot: commands.Bot):
     await setup_persistent_views(bot)

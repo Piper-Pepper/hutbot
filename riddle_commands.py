@@ -10,6 +10,31 @@ from riddle import riddle_cache, save_riddles, SubmitView, close_riddle_with_win
 MOD_ROLE_ID = 1380610400416043089
 RIDDLE_CHANNEL_ID = 1346843244067160074
 
+# -------- Hilfsfunktion für zentrales Edit-Modal --------
+async def open_riddle_edit_modal(bot, interaction: discord.Interaction, riddle_id: str):
+    """Öffnet das Editier-Modal für ein bestimmtes Riddle."""
+    await interaction.response.send_modal(RiddleEditModal(bot, riddle_id))
+
+
+# --------- List-View mit Buttons ---------
+class RiddleListView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+        for riddle_id, r in list(riddle_cache.items())[:20]:
+            label = r["text"][:20].replace("\n", " ")
+            self.add_item(RiddleButton(bot, riddle_id, label))
+
+class RiddleButton(discord.ui.Button):
+    def __init__(self, bot, riddle_id, label):
+        super().__init__(label=label, style=discord.ButtonStyle.secondary)
+        self.bot = bot
+        self.riddle_id = riddle_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await open_riddle_edit_modal(self.bot, interaction, self.riddle_id)
+
+
 # -------- Modal for Editing Riddle --------
 class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
     def __init__(self, bot, riddle_id):
@@ -41,6 +66,7 @@ class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
         await interaction.followup.send("✅ Riddle updated.", ephemeral=True)
         await interaction.user.send(embed=build_riddle_embed(r, interaction.guild, interaction.user), view=RiddleEditView(self.bot, self.riddle_id))
 
+
 # -------- View: Edit, Post, Close, Delete Buttons --------
 class RiddleEditView(discord.ui.View):
     def __init__(self, bot, riddle_id):
@@ -57,7 +83,7 @@ class EditRiddleButton(discord.ui.Button):
         self.riddle_id = riddle_id
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(RiddleEditModal(self.bot, self.riddle_id))
+        await open_riddle_edit_modal(self.bot, interaction, self.riddle_id)
 
 class PostRiddleButton(discord.ui.Button):
     def __init__(self, bot, riddle_id):
@@ -102,6 +128,7 @@ class DeleteRiddleButton(discord.ui.Button):
             save_riddles()
         await interaction.followup.send("🗑️ Riddle deleted.", ephemeral=True)
 
+
 # -------- Main Cog --------
 class RiddleCommands(commands.Cog):
     def __init__(self, bot):
@@ -134,7 +161,6 @@ class RiddleCommands(commands.Cog):
             "created_at": datetime.utcnow().isoformat()
         }
 
-        # Debugging-Ausgabe
         print(f"Adding riddle: {riddle_data}")
 
         riddle_cache[riddle_id] = riddle_data
@@ -143,20 +169,21 @@ class RiddleCommands(commands.Cog):
         embed = build_riddle_embed(riddle_data, interaction.guild, interaction.user)
         await interaction.followup.send("🧩 Riddle created. Here’s your preview:", embed=embed, view=RiddleEditView(self.bot, riddle_id), ephemeral=True)
 
-    @app_commands.command(name="riddle_list", description="List all riddles")
+    @app_commands.command(name="riddle_list", description="List all riddles with buttons")
     async def riddle_list(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        lines = []
-        for rid, r in list(riddle_cache.items())[:20]:
-            creator = f"<@{r['ersteller']}>"
-            preview = r['text'][:30].replace("\n", " ") + "..."
-            line = f"• [`{rid}`] by {creator} — {preview}"
-            lines.append(line)
+        embed = discord.Embed(title="🧩 Active Riddles", description="Select a riddle below to edit it.", color=discord.Color.blurple())
 
-        desc = "\n".join(lines) if lines else "No riddles available."
-        embed = discord.Embed(title="🧩 Active Riddles", description=desc, color=discord.Color.blurple())
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        try:
+            view = RiddleListView(self.bot)
+        except Exception as e:
+            print(f"❌ Error building riddle list: {e}")
+            embed.description = "⚠️ Failed to load riddles."
+            view = None
+
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RiddleCommands(bot))
