@@ -36,22 +36,6 @@ def load_riddles():
     else:
         print(f"❌ Failed to load riddles: {resp.status_code} {resp.text}")
 
-# Save riddles to JSONBin
-def save_riddles():
-    url = f"https://api.jsonbin.io/v3/b/{RIDDLE_BIN_ID}"
-    
-    payload = {
-        "record": riddle_cache
-    }
-    
-    response = requests.put(url, json=payload, headers=HEADERS)
-    
-    if response.status_code == 200:
-        print("✅ Riddles saved to JSONBin.")
-    else:
-        print(f"❌ Error saving riddles: {response.status_code} {response.text}")
-
-
 # Close riddle with winner and update message
 async def close_riddle_with_winner(bot, riddle_id, winner_id=None, solution_text=""):
     riddle = riddle_cache.get(riddle_id)
