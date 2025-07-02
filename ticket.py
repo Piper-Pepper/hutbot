@@ -69,7 +69,7 @@ class TicketModal(Modal, title="Submit Your Ticket"):
 
 class TicketButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(label="Open Ticket", style=discord.ButtonStyle.green)
+        super().__init__(label="Open Ticket", style=discord.ButtonStyle.green, custom_id="ticket_open_button")  # ✅ custom_id hinzugefügt
         self.bot = bot
         self.channel_id = channel_id
 
@@ -78,7 +78,7 @@ class TicketButton(Button):
 
 class TicketView(View):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # ✅ View ohne Timeout (persistent)
         self.bot = bot
         self.add_item(TicketButton(bot, channel_id))
 
@@ -139,12 +139,16 @@ class TicketCog(commands.Cog):
         if message_id:
             try:
                 message = await channel.fetch_message(int(message_id))
-                self.bot.add_view(TicketView(self.bot, BUTTON_CHANNEL_ID), message_id=int(message_id))
+                # Verwende .add_view korrekt
+                await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))  # View hinzufügen
                 print(f"🔄 View attached to message {message_id} on on_ready")
             except discord.NotFound:
                 print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
         else:
-            self.bot.add_view(TicketView(self.bot, BUTTON_CHANNEL_ID))
+            view = TicketView(self.bot, BUTTON_CHANNEL_ID)
+            msg = await channel.send("Click the button below to open a ticket:", view=view)
+            data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
+            save_buttons_data(data)
             print("ℹ️ View added without message ID (no persistent button)")
 
 async def setup(bot: commands.Bot):

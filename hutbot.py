@@ -57,8 +57,7 @@ async def main():
 
         # 🧠 Load Riddle Cogs
         await bot.load_extension("riddle")         # <- Dein riddle.py
-        # await bot.load_extension("riddle_commands")    # <- Slash-Befehle (riddle_add, riddle_list)
-
+        await bot.load_extension("riddle_post")   
         # 🚀 Start the bot
         await bot.start(TOKEN)
 
