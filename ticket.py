@@ -7,9 +7,9 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
+ 
 BUTTON_CHANNEL_ID = 1382079493711200549
-TICKET_CHANNEL_ID = 1381754826710585527
+TICKET_CHANNEL_ID = 1390430555124007145
 TICKET_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1385054753754714162/ticket_small.jpg"
 
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")

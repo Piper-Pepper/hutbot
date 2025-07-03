@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 
-TARGET_CHANNEL_ID = 1381754826710585527  # Replace with your target channel ID
+TARGET_CHANNEL_ID = 1390430555124007145  # Replace with your target channel ID
 
 class DMForwarder(commands.Cog):
     def __init__(self, bot):
