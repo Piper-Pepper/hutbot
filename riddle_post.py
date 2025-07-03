@@ -1,6 +1,8 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord import Interaction, SelectOption
+
 import aiohttp
 
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
@@ -279,10 +281,12 @@ class RiddleCog(commands.Cog):
         async with aiohttp.ClientSession() as session:
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
-    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel.")
-    async def riddle_post(self, interaction: discord.Interaction):
+    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel and mention a role if provided.")
+    @app_commands.describe(role="Optional role to mention in the riddle post")
+    async def riddle_post(self, interaction: discord.Interaction, role: discord.Role = None):
         await interaction.response.defer(ephemeral=True)
 
+        # Fetch riddle from JSONBin
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 if response.status != 200:
@@ -294,7 +298,10 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
+        # Fallback image URL
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+
+        # Build the embed
         embed = discord.Embed(
             title="Goon Hut Riddle of the Day",
             description=f">{riddle.get('text', 'No text')}",
@@ -304,10 +311,16 @@ class RiddleCog(commands.Cog):
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=SubmitButtonView())
-            await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
+        # Mention the role if provided
+        if role:
+            await riddle_channel.send(content=f"{role.mention}", embed=embed, view=SubmitButtonView())
+        else:
+            await riddle_channel.send(content="Click to check out the riddle!", embed=embed, view=SubmitButtonView())
+
+        # Send confirmation to user
+        await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
+
+# Setup the cog
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
