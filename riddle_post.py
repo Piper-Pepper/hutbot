@@ -59,9 +59,9 @@ class RiddleCloseButton(discord.ui.Button):
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
 class VoteButtons(discord.ui.View):
-    def __init__(self, submitter: discord.User = None):
+    def __init__(self, submitter: discord.User):
         super().__init__(timeout=None)
-        self.submitter = submitter
+        self.submitter = submitter  # Store the submitter's user for downvote action
         self.add_item(VoteSuccessButton())
         self.add_item(VoteFailButton())
 
@@ -235,7 +235,8 @@ class RiddleCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         bot.add_view(SubmitButtonView())
-        bot.add_view(VoteButtons())
+        bot.add_view(VoteButtons(submitter=None))  # ✅ Jetzt okay
+
 
     @app_commands.command(name="riddle_close", description="Close the current riddle and mark it as unsolved.")
     async def riddle_close(self, interaction: discord.Interaction):
