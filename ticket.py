@@ -1,5 +1,6 @@
+import asyncio
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands, tasks  # tasks hier importieren
 from discord.ui import View, Button, Modal, TextInput
 from datetime import datetime
 import requests
@@ -7,7 +8,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
- 
+
 BUTTON_CHANNEL_ID = 1382079493711200549
 TICKET_CHANNEL_ID = 1390430555124007145
 TICKET_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1385054753754714162/ticket_small.jpg"
@@ -69,12 +70,14 @@ class TicketModal(Modal, title="Submit Your Ticket"):
 
 class TicketButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(label="Open Ticket", style=discord.ButtonStyle.green, custom_id="ticket_open_button")  # ✅ custom_id hinzugefügt
+        super().__init__(label="Open Ticket", style=discord.ButtonStyle.green, custom_id="ticket_open_button")
         self.bot = bot
         self.channel_id = channel_id
 
     async def callback(self, interaction: discord.Interaction):
+        # Direkt Modal senden, ohne defer
         await interaction.response.send_modal(TicketModal(self.bot))
+
 
 class TicketView(View):
     def __init__(self, bot: commands.Bot, channel_id: int):
