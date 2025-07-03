@@ -297,12 +297,12 @@ class RiddleCog(commands.Cog):
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
         embed = discord.Embed(
             title="Goon Hut Riddle of the Day",
-            description=f"> **Riddle:** {riddle.get('text', 'No text')}",
+            description=f"> **Riddle:**\n {riddle.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
         embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
         embed.set_image(url=image_url)
-        embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+        embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
