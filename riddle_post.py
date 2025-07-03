@@ -11,52 +11,20 @@ HEADERS = {"X-Master-Key": API_KEY}
 RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 
-class RiddleCloseButton(discord.ui.Button):
+class RoleSelect(discord.ui.Select):
     def __init__(self):
-        super().__init__(emoji="🔒", style=discord.ButtonStyle.danger, custom_id="riddle_close")
+        options = [
+            discord.SelectOption(label="None", value="none"),
+            discord.SelectOption(label="Role A", value="role_a"),
+            discord.SelectOption(label="Role B", value="role_b"),
+            # Add other roles here as needed
+        ]
+        super().__init__(placeholder="Select an additional role to mention", min_values=0, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        # Store the selected role (none or one of the roles)
+        self.view.selected_role = self.values[0] if self.values else "none"
         await interaction.response.defer(ephemeral=True)
-
-        # Hole die Daten der aktuellen Rätselfrage
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                riddle_data = data.get("record", {})
-
-        # Wenn keine Rätselfrage vorhanden, breche ab
-        if not riddle_data.get("text"):
-            await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
-            return
-
-        # Erstelle das "Closed"-Embed mit Bild
-        solution_url = riddle_data.get("solution-url", "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg")
-        closed_embed = discord.Embed(
-            title="🔒 Riddle Closed",
-            description="Sadly, nobody could solve the Riddle in time...",
-            color=discord.Color.red()
-        )
-        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
-        closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-        closed_embed.set_image(url=solution_url)
-        closed_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
-
-        # Sende das Embed in den Rätselkanal
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
-
-        # Setze alle Rätselfelder auf Null
-        await self.clear_riddle_data()
-
-        await interaction.followup.send("✅ The riddle has been closed, and all data has been cleared.", ephemeral=True)
-
-    # Methode zum Zurücksetzen der Rätselfelder
-    async def clear_riddle_data(self):
-        empty = {"text": None, "solution": None, "award": None, "image-url": None, "solution-url": None, "button-id": None}
-        async with aiohttp.ClientSession() as session:
-            await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
 class VoteButtons(discord.ui.View):
     def __init__(self):
@@ -205,7 +173,14 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
         embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
         embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
 
-        await channel.send(embed=embed, view=VoteButtons())
+        # Check if a role is selected and mention it
+        mentioned_roles = "<@&1380610400416043089>"  # Always mention this role
+        if interaction.view.selected_role == "role_a":
+            mentioned_roles += " <@&ROLE_A_ID>"  # Replace with actual role ID
+        elif interaction.view.selected_role == "role_b":
+            mentioned_roles += " <@&ROLE_B_ID>"  # Replace with actual role ID
+
+        await channel.send(embed=embed, content=mentioned_roles, view=VoteButtons())
         await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
 
 class SubmitButton(discord.ui.Button):
@@ -219,70 +194,18 @@ class SubmitButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(SubmitButton())
+        self.add_item(RoleSelect())  # Add the role select dropdown
 
 class RiddleCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         bot.add_view(SubmitButtonView())
-        bot.add_view(VoteButtons())
-
-    @app_commands.command(name="riddle_close", description="Close the current riddle and mark it as unsolved.")
-    async def riddle_close(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        # Hole die Daten des aktuellen Rätsels
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                riddle_data = data.get("record", {})
-
-        # Wenn kein Rätsel existiert, breche ab
-        if not riddle_data.get("text"):
-            await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
-            return
-        # Hole das Bild aus den Riddle-Daten oder setze das Standardbild, falls nicht vorhanden
-        solution_url = riddle_data.get("solution-url")
-        # Falls keine solution-url vorhanden ist oder ungültig, setze das Standardbild
-        if not solution_url or not solution_url.startswith("http"):
-            solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-
-        # Erstelle das "Closed"-Embed mit Bild
-        closed_embed = discord.Embed(
-            title="🔒 Riddle Closed",
-            description="Sadly, nobody could solve the Riddle in time...",
-            color=discord.Color.red()
-        )
-        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
-        closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-        closed_embed.set_image(url=solution_url)
-        closed_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
-
-        # Sende das Embed in den Rätselkanal
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
-
-        # Sende das Embed in den Rätselkanal
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
-
-        # Setze alle Rätseldaten auf Null
-        await self.clear_riddle_data()
-
-        await interaction.followup.send("✅ The riddle has been closed, and all data has been cleared.", ephemeral=True)
-
-    # Methode zum Zurücksetzen der Rätselfelder
-    async def clear_riddle_data(self):
-        empty = {"text": None, "solution": None, "award": None, "image-url": None, "solution-url": None, "button-id": None}
-        async with aiohttp.ClientSession() as session:
-            await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
     @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel.")
     async def riddle_post(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        # Get the current riddle data
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 if response.status != 200:
@@ -304,22 +227,18 @@ class RiddleCog(commands.Cog):
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+        # Check if a role is selected and mention it
+        mentioned_roles = "<@&1380610400416043089>"  # Always mention this role
+        if interaction.view.selected_role == "role_a":
+            mentioned_roles += " <@&ROLE_A_ID>"  # Replace with actual role ID
+        elif interaction.view.selected_role == "role_b":
+            mentioned_roles += " <@&ROLE_B_ID>"  # Replace with actual role ID
+
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=SubmitButtonView())
+            await riddle_channel.send(content=mentioned_roles, embed=embed, view=SubmitButtonView())
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
-# Utility Functions
-def get_field_value(embed: discord.Embed, field_name: str):
-    for field in embed.fields:
-        if field.name.strip().startswith(field_name.strip()):
-            return field.value
-    return None
-
-def extract_from_embed(desc: str):
-    if desc and "> **Riddle:** " in desc:
-        return desc.split("> **Riddle:** ")[-1]
-    return desc or ""
-
+# 🚀 Setup function
 async def setup(bot: commands.Bot):
     await bot.add_cog(RiddleCog(bot))
