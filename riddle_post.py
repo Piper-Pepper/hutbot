@@ -64,7 +64,6 @@ class VoteButtons(discord.ui.View):
         self.add_item(VoteSuccessButton())
         self.add_item(VoteFailButton())
 
-
 class VoteSuccessButton(discord.ui.Button):
     def __init__(self):
         super().__init__(emoji="👍", style=discord.ButtonStyle.success, custom_id="riddle_upvote")
@@ -157,20 +156,16 @@ class VoteFailButton(discord.ui.Button):
             await interaction.followup.send("❌ Couldn't find the original riddle data.", ephemeral=True)
             return
 
-        # Use the submitter's information stored in the view
-        submitter_id = get_field_value(embed, "🔒 Submitter ID")
-        submitter = interaction.guild.get_member(int(submitter_id)) if submitter_id else None
-
         riddle_text = extract_from_embed(embed.description)
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
 
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
-            description=f"**{submitter.mention}**'s solution was incorrect.",
+            description=f"**Solution was incorrect.",
             color=discord.Color.red()
         )
-        failed_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
+        failed_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         failed_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         failed_embed.add_field(name="❌ Sadly, the submitted solution was not correct.", value="*Better luck next time!*", inline=False)
@@ -210,8 +205,7 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
         embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
         embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
 
-        # Store the submitter's user for later use in the downvote
-        await channel.send(embed=embed, view=VoteButtons(submitter=interaction.user))
+        await channel.send(embed=embed, view=VoteButtons())
         await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
 
 class SubmitButton(discord.ui.Button):
@@ -289,7 +283,6 @@ class RiddleCog(commands.Cog):
     async def riddle_post(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Fetch the riddle from the JSON bin
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 if response.status != 200:
@@ -301,26 +294,21 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
-        # Fallback Bild
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-
-        # Baue das Embed
         embed = discord.Embed(
-            title="🧠 Goon Hut Riddle of the Day",
-            description=f"> **Riddle:** {riddle.get('text', 'No text')}",
+            title="Goon Hut Riddle of the Day",
+            description=f">{riddle.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
         embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        # Riddle wird mit SubmitButtonView gepostet – nicht mit VoteButtons!
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
             await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=SubmitButtonView())
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
-            
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
     for field in embed.fields:
@@ -332,14 +320,6 @@ def extract_from_embed(desc: str):
     if desc and "> **Riddle:** " in desc:
         return desc.split("> **Riddle:** ")[-1]
     return desc or ""
-
-def get_field_value(embed: discord.Embed, field_name: str):
-    # Iterate through all fields in the embed and search for the field that matches the field_name
-    for field in embed.fields:
-        if field.name.strip().startswith(field_name.strip()):
-            return field.value  # Return the value of the matching field
-    return None  # Return None if no matching field is found
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RiddleCog(bot))
