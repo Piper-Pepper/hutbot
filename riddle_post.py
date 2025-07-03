@@ -198,7 +198,7 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
 
         embed = discord.Embed(
             title="📜 New Solution Submitted!",
-            description=f"> **Riddle:** {riddle.get('text', 'No riddle')}",
+            description=f"🧩**Riddle:**\n\n{riddle.get('text', 'No riddle')}",
             color=discord.Color.gold()
         )
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
