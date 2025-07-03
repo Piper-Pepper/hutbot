@@ -301,23 +301,25 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
+        # Fallback Bild
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+
+        # Baue das Embed
         embed = discord.Embed(
-            title="Goon Hut Riddle of the Day",
-            description=f">{riddle.get('text', 'No text')}",
+            title="🧠 Goon Hut Riddle of the Day",
+            description=f"> **Riddle:** {riddle.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
         embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        # Add the vote buttons, passing the submitter (interaction.user)
-        view = VoteButtons(submitter=interaction.user)
-
+        # Riddle wird mit SubmitButtonView gepostet – nicht mit VoteButtons!
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=view)
+            await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=SubmitButtonView())
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
+
             
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
