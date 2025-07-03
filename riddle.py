@@ -117,14 +117,18 @@ class RiddleEditor(commands.Cog):
                     data = await response.json()
                     logger.info(f"[GET] Successfully loaded: {data}")
 
+                    # Check if the record exists and is valid
+                    if "record" not in data or not data["record"]:
+                        logger.error("Received invalid or empty record data.")
+                        await interaction.response.send_message("❌ No riddle data found.", ephemeral=True)
+                        return
+
                     modal = RiddleEditModal(data=data["record"])
                     await interaction.response.send_modal(modal)
 
             except aiohttp.ClientError as e:
                 logger.exception("Network error while loading:")
                 await interaction.response.send_message(f"❌ Network error while loading: {e}", ephemeral=True)
-
-
 
 # 🚀 Setup Function
 async def setup(bot: commands.Bot):
