@@ -104,6 +104,14 @@ class RiddleEditor(commands.Cog):
 
     @app_commands.command(name="riddle", description="Load and edit the current riddle.")
     async def riddle(self, interaction: discord.Interaction):
+        # Check if the user has the required role
+        required_role_id = 1380610400416043089  # Replace with your desired role ID
+        has_role = any(role.id == required_role_id for role in interaction.user.roles)
+
+        if not has_role:
+            await interaction.response.send_message("❌ You do not have the necessary permissions to use this command.", ephemeral=True)
+            return
+
         logger.info(f"[Slash Command] /riddle by {interaction.user}")
 
         async with aiohttp.ClientSession() as session:
