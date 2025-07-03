@@ -59,11 +59,11 @@ class RiddleCloseButton(discord.ui.Button):
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
 class VoteButtons(discord.ui.View):
-    def __init__(self, submitter: discord.User):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.submitter = submitter  # Store the submitter's user for downvote action
         self.add_item(VoteSuccessButton())
         self.add_item(VoteFailButton())
+
 
 class VoteSuccessButton(discord.ui.Button):
     def __init__(self):
@@ -157,7 +157,7 @@ class VoteFailButton(discord.ui.Button):
             await interaction.followup.send("❌ Couldn't find the original riddle data.", ephemeral=True)
             return
 
-        # 📌 Versuche zuerst, die User-ID aus dem Embed auszulesen
+        # Use the submitter's information stored in the view
         submitter_id = get_field_value(embed, "🔒 Submitter ID")
         submitter = interaction.guild.get_member(int(submitter_id)) if submitter_id else None
 
@@ -167,13 +167,10 @@ class VoteFailButton(discord.ui.Button):
 
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
-            description=f"**{submitter.mention if submitter else 'The user'}**'s solution was incorrect.",
+            description=f"**{submitter.mention}**'s solution was incorrect.",
             color=discord.Color.red()
         )
-
-        if submitter:
-            failed_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
-
+        failed_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
         failed_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         failed_embed.add_field(name="❌ Sadly, the submitted solution was not correct.", value="*Better luck next time!*", inline=False)
@@ -190,13 +187,11 @@ class VoteFailButton(discord.ui.Button):
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
 
-
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
     solution = discord.ui.TextInput(label="Your Answer", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 riddle = (await response.json()).get("record", {})
@@ -214,8 +209,8 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
         embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
-        embed.add_field(name="🔒 Submitter ID", value=str(interaction.user.id), inline=False)  # ← hier kommt die Magie
 
+        # Store the submitter's user for later use in the downvote
         await channel.send(embed=embed, view=VoteButtons(submitter=interaction.user))
         await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
 
@@ -235,8 +230,7 @@ class RiddleCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         bot.add_view(SubmitButtonView())
-        bot.add_view(VoteButtons(submitter=None))  # ✅ Jetzt okay
-
+        bot.add_view(VoteButtons())
 
     @app_commands.command(name="riddle_close", description="Close the current riddle and mark it as unsolved.")
     async def riddle_close(self, interaction: discord.Interaction):
