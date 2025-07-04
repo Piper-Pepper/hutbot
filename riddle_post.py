@@ -4,12 +4,14 @@ from discord.ext import commands
 import aiohttp
 from datetime import datetime
 
-RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
-SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
-API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
-HEADERS = {"X-Master-Key": API_KEY}
+RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"
+HEADERS = {"X-Master-Key": "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"}
+VOTE_CHANNEL_ID = 1346843244067160074  # Channel for solution voting
+RIDDLE_CHANNEL_ID = 1346843244067160074  # Channel for solved riddles
+PING_ROLE_ID = 1380610400416043089  # <@&...> to ping on solved
 
-RIDDLE_CHANNEL_ID = 1349697597232906292
+
+RIDDLE_CHANNEL_ID = 1346843244067160074
 VOTE_CHANNEL_ID = 1381754826710585527
 
 
@@ -100,20 +102,25 @@ class VoteSuccessButton(discord.ui.Button):
             await interaction.followup.send("❌ Couldn't find the original riddle data.", ephemeral=True)
             return
 
+        # Werte aus dem Embed
         riddle_text = extract_from_embed(embed.description)
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
         award = get_field_value(embed, "🏆 Award")
 
-        # Get solution image from riddle bin
+        # Werte aus JSONBin laden
         async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                solution_url = data.get("record", {}).get("solution-url", "")
+            async with session.get(f"{RIDDLE_BIN_URL}/latest", headers=HEADERS) as resp:
+                data = await resp.json()
+                record = data.get("record", {})
+                solution_url = record.get("solution-url", "")
+                submitter_id = record.get("submitter_id")
+                submitter_role = record.get("submitter_role")
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
+        # Solved‑Embed bauen
         solved_embed = discord.Embed(
             title="🎉 Riddle Solved!",
             description=f"**{interaction.user.mention}** solved the riddle!",
@@ -127,13 +134,30 @@ class VoteSuccessButton(discord.ui.Button):
         solved_embed.set_image(url=solution_url)
         solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+        # Rolle + Submitter pingen
+        mention_parts = [f"<@&{PING_ROLE_ID}>"]
+        if submitter_role:
+            mention_parts.append(f"<@&{submitter_role}>")
+        if submitter_id:
+            mention_parts.append(f"<@{submitter_id}>")
+        mention_text = " ".join(mention_parts)
+
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(content=f"<@&1380610400416043089> {interaction.user.mention}", embed=solved_embed)
+            await riddle_channel.send(content=mention_text, embed=solved_embed)
 
+        # Alte Daten/Message aufräumen (deine bestehenden Methoden)
         await self.clear_riddle_data()
         await self.update_user_riddle_count(interaction.user.id)
 
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            print("❌ Failed to delete the solution message.")
+
+        await interaction.followup.send("✅ Marked as solved, riddle data cleared, and user riddle count updated!", ephemeral=True)
+
+# -----------------------------------------------
         # 🔥 Delete the original message with the buttons
         try:
             await message.delete()
@@ -210,26 +234,47 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                riddle = (await response.json()).get("record", {})
 
-        channel = interaction.client.get_channel(VOTE_CHANNEL_ID)
-        if not channel:
+        # 1) Lade aktuelles Rätsel aus JSONBin
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{RIDDLE_BIN_URL}/latest", headers=HEADERS) as resp:
+                data = await resp.json()
+                record = data.get("record", {})
+
+        # 2) Ergänze Submitter‑Infos
+        record["submitter_id"] = str(interaction.user.id)
+        submitter_role = next((str(role.id) for role in interaction.user.roles if role.name != "@everyone"), None)
+        if submitter_role:
+            record["submitter_role"] = submitter_role
+        # Speichere außerdem die vorgeschlagene Antwort (optional)
+        record["user_answer"] = self.solution.value
+
+        # 3) Speichere zurück
+        async with aiohttp.ClientSession() as session:
+            async with session.put(RIDDLE_BIN_URL, headers=HEADERS, json={"record": record}) as resp:
+                if resp.status not in (200, 201):
+                    await interaction.followup.send("❌ Could not save your submission.", ephemeral=True)
+                    return
+
+        # 4) Sende Embed für Voting
+        vote_channel = interaction.client.get_channel(VOTE_CHANNEL_ID)
+        if not vote_channel:
             await interaction.followup.send("❌ Could not find the submission channel.", ephemeral=True)
             return
 
         embed = discord.Embed(
             title="📜 New Solution Submitted!",
-            description=f"> **Riddle:** {riddle.get('text', 'No riddle')}",
+            description=f"> **Riddle:** {record.get('text', 'No riddle')}",
             color=discord.Color.gold()
         )
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
-        embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
+        embed.add_field(name="✅ Correct Solution", value=record.get("solution", "*Not provided*"), inline=False)
 
-        await channel.send(embed=embed, view=VoteButtons())
+        await vote_channel.send(embed=embed, view=VoteButtons())
         await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
+
+# --------------------------------------------------
 
 class SubmitButton(discord.ui.Button):
     def __init__(self):
@@ -238,11 +283,12 @@ class SubmitButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(SubmitSolutionModal())
 
+
 class SubmitButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(SubmitButton())
-
+        
 class RiddleCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
