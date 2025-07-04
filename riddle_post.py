@@ -166,27 +166,38 @@ class VoteFailButton(discord.ui.Button):
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
 
+        # 🕵️‍♂️ Hole Einreicher-ID aus verstecktem Feld
+        submitter_id_str = get_field_value(embed, "🆔 User ID")
+        submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
+        submitter = await interaction.client.fetch_user(submitter_id)
+
+        # ❌ Erstelle das „Fehlgeschlagen“-Embed mit dem echten Einreicher
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
-            description=f"**{interaction.user.mention}**'s solution was incorrect.",
+            description=f"**{submitter.mention}**'s solution was incorrect.",
             color=discord.Color.red()
         )
-        failed_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+        failed_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
         failed_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
-        failed_embed.add_field(name="❌ Sadly, the submitted solution was not correct.", value="*Better luck next time!*", inline=False)
+        failed_embed.add_field(
+            name="❌ Sadly, the submitted solution was not correct.",
+            value="*Better luck next time!*",
+            inline=False
+        )
 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
             await riddle_channel.send(embed=failed_embed)
 
-        # 💣 Delete the original vote message
+        # 💣 Lösche Original-Vote-Message
         try:
             await message.delete()
         except discord.HTTPException:
             print("❌ Failed to delete the vote message.")
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
+
 
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
     solution = discord.ui.TextInput(label="Your Answer", style=discord.TextStyle.paragraph)
