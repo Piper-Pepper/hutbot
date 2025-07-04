@@ -40,10 +40,14 @@ def load_buttons_data():
         print(f"❌ Error loading data: {response.status_code} {response.text}")
         return {}
 
+# ... alles oben bleibt gleich ...
+
 class TicketModal(Modal, title="Submit Your Ticket"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, title_prefix: str = "", image_url: str = TICKET_IMAGE_URL):
         super().__init__()
         self.bot = bot
+        self.title_prefix = title_prefix
+        self.image_url = image_url
         self.message_input = TextInput(label="Your Message", style=discord.TextStyle.paragraph, required=True)
         self.add_item(self.message_input)
 
@@ -54,11 +58,12 @@ class TicketModal(Modal, title="Submit Your Ticket"):
             return
 
         embed = discord.Embed(
+            title=self.title_prefix if self.title_prefix else None,
             description=self.message_input.value,
-            color=discord.Color.blurple(),
+            color=discord.Color.green() if self.title_prefix else discord.Color.blurple(),
             timestamp=datetime.utcnow()
         )
-        embed.set_image(url=TICKET_IMAGE_URL)
+        embed.set_image(url=self.image_url)
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.set_footer(
             text=interaction.guild.name if interaction.guild else "Unknown Guild",
@@ -66,7 +71,8 @@ class TicketModal(Modal, title="Submit Your Ticket"):
         )
 
         await channel.send(content=f"{interaction.user.mention} submitted a ticket:", embed=embed)
-        await interaction.response.send_message("✅ Your ticket was sent!", ephemeral=True)
+        await interaction.response.send_message("✅ Your request was sent!", ephemeral=True)
+
 
 class TicketButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
@@ -75,15 +81,31 @@ class TicketButton(Button):
         self.channel_id = channel_id
 
     async def callback(self, interaction: discord.Interaction):
-        # Direkt Modal senden, ohne defer
-        await interaction.response.send_modal(TicketModal(self.bot))
+        await interaction.response.send_modal(TicketModal(self.bot))  # Kein Prefix
+
+class ApplyPMVJButton(Button):
+    def __init__(self, bot: commands.Bot, channel_id: int):
+        super().__init__(label="Apply for PMVJ", style=discord.ButtonStyle.blurple, custom_id="apply_pm_button")
+        self.bot = bot
+        self.channel_id = channel_id
+        self.pmvj_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1383839288235397292/goon_tv_party.gif"
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            TicketModal(
+                bot=self.bot,
+                title_prefix="Apply for PMVJ",
+                image_url=self.pmvj_image
+            )
+        )
 
 
 class TicketView(View):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(timeout=None)  # ✅ View ohne Timeout (persistent)
+        super().__init__(timeout=None)
         self.bot = bot
         self.add_item(TicketButton(bot, channel_id))
+        self.add_item(ApplyPMVJButton(bot, channel_id))
 
 class TicketCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -108,7 +130,7 @@ class TicketCog(commands.Cog):
         if message_id is None:
             print(f"[INFO] No saved message ID for channel {BUTTON_CHANNEL_ID}, sending new button...")
             view = TicketView(self.bot, BUTTON_CHANNEL_ID)
-            msg = await channel.send("Click the button below to open a ticket:", view=view)
+            msg = await channel.send("... so...🫦 what do you want, darlin'?♥️", view=view)
             # WICHTIG: ID als STRING speichern
             data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
             save_buttons_data(data)
@@ -122,7 +144,7 @@ class TicketCog(commands.Cog):
             except discord.NotFound:
                 print(f"❌ Stored message {message_id} not found! Posting new button and updating JSON...")
                 view = TicketView(self.bot, BUTTON_CHANNEL_ID)
-                msg = await channel.send("Click the button below to open a ticket:", view=view)
+                msg = await channel.send("... so...🫦 what do you want, darlin'?♥️", view=view)
                 data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
                 save_buttons_data(data)
                 print(f"➕ New ticket button message posted: {msg.id}")
