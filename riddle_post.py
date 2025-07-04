@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from typing import Optional
 import aiohttp
 
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
@@ -109,6 +110,8 @@ class VoteSuccessButton(discord.ui.Button):
         solved_embed.set_image(url=solution_url)
         solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+
+        # Mention 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
             await riddle_channel.send(content=f"<@&1380610400416043089> {submitter.mention}", embed=solved_embed)
@@ -297,9 +300,26 @@ class RiddleCog(commands.Cog):
         async with aiohttp.ClientSession() as session:
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
-    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel.")
-    async def riddle_post(self, interaction: discord.Interaction):
+    @app_commands.command(
+        name="riddle_post",
+        description="Post the current riddle in a selected channel."
+    )
+    @app_commands.describe(
+        ping_role="Optional role to ping along with the riddle group"
+    )
+    async def riddle_post(
+        self,
+        interaction: discord.Interaction,
+        ping_role: Optional[discord.Role] = None  # 👈 neues optionales Feld
+    ):
+
         await interaction.response.defer(ephemeral=True)
+        # Standard‑Ping für die Riddle‑Gruppe
+        content = "<@&1380610400416043089>"
+
+        # Optional zusätzliche Rolle anhängen
+        if ping_role:
+            content += f" {ping_role.mention}"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
@@ -324,7 +344,14 @@ class RiddleCog(commands.Cog):
 
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=SubmitButtonView())
+            allowed_mentions = discord.AllowedMentions(roles=True, users=False, everyone=False)
+            await riddle_channel.send(
+                content=content,
+                embed=embed,
+                view=SubmitButtonView(),
+                allowed_mentions=allowed_mentions
+            )
+
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
 # Utility Functions
