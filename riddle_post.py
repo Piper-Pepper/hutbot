@@ -334,42 +334,36 @@ class RiddleCog(commands.Cog):
     async def riddle_post(
         self,
         interaction: discord.Interaction,
-        ping_role: Optional[discord.Role] = None  # 👈 neues optionales Feld
+        ping_role: Optional[discord.Role] = None
     ):
         await interaction.response.defer(ephemeral=True)
-        
-        # Speichere die Ping-Rolle in die JSON, wenn sie gesetzt ist
-        riddle_data = {}
-        if ping_role:
-            riddle_data['ping_role_id'] = ping_role.id
-        else:
-            riddle_data['ping_role_id'] = None
 
+        # 🔄 Riddle-Daten laden
         async with aiohttp.ClientSession() as session:
-            # Riddle-Daten abrufen
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 if response.status != 200:
                     await interaction.followup.send(f"❌ Error loading riddle: {response.status}", ephemeral=True)
                     return
-                riddle_data.update((await response.json()).get("record", {}))
+                riddle_data = (await response.json()).get("record", {})
 
-        # Wenn kein aktives Riddle vorhanden ist
+        # ❌ Kein gültiges Riddle?
         if not riddle_data.get("text") or not riddle_data.get("solution"):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
-        # Speichere die Ping-Rolle ID in die JSON
+        # 💾 Ping-Rolle ID setzen (wird später z.B. von den Vote-Buttons verwendet)
+        riddle_data["ping_role_id"] = ping_role.id if ping_role else None
+
+        # 🔄 Riddle-Daten aktualisieren und zurückschreiben
         async with aiohttp.ClientSession() as session:
             await session.put(RIDDLE_BIN_URL, json={"record": riddle_data}, headers=HEADERS)
 
-        # Standard‑Ping für die Riddle‑Gruppe
-        content = "<@&1380610400416043089>"
-
-        # Optional zusätzliche Rolle anhängen
+        # 👥 Rollen-Mentions vorbereiten
+        ping_text = "<@&1380610400416043089>"  # Standard Riddle-Gruppe
         if ping_role:
-            content += f" {ping_role.mention}"
+            ping_text += f" {ping_role.mention}"
 
-        # Riddle-Daten für das Embed vorbereiten
+        # 🖼️ Embed bauen
         image_url = riddle_data.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
         embed = discord.Embed(
             title="Goon Hut Riddle of the Day",
@@ -380,17 +374,18 @@ class RiddleCog(commands.Cog):
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+        # 📡 Nachricht senden
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
             allowed_mentions = discord.AllowedMentions(roles=True, users=False, everyone=False)
             await riddle_channel.send(
-                content=content,
+                content=ping_text,
                 embed=embed,
                 view=SubmitButtonView(),
                 allowed_mentions=allowed_mentions
             )
-
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
+
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
