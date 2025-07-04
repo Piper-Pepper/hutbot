@@ -93,7 +93,11 @@ class VoteSuccessButton(discord.ui.Button):
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
                 solution_url = data.get("record", {}).get("solution-url", "")
-                ping_role_id = data.get("record", {}).get("ping_role_id")
+                if ping_role_id:
+                    ping_role = interaction.guild.get_role(int(ping_role_id))  # 👈 zurück zu int casten!
+                    if ping_role:
+                        content += f" {ping_role.mention}"
+
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
@@ -373,8 +377,8 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
-        # 💾 Ping-Rolle ID setzen (wird später z.B. von den Vote-Buttons verwendet)
-        riddle_data["ping_role_id"] = ping_role.id if ping_role else None
+        riddle_data["ping_role_id"] = str(ping_role.id) if ping_role else None
+
 
         # 🔄 Riddle-Daten aktualisieren und zurückschreiben
         async with aiohttp.ClientSession() as session:
