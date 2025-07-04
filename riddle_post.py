@@ -93,11 +93,7 @@ class VoteSuccessButton(discord.ui.Button):
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
                 solution_url = data.get("record", {}).get("solution-url", "")
-                if ping_role_id:
-                    ping_role = interaction.guild.get_role(int(ping_role_id))  # 👈 zurück zu int casten!
-                    if ping_role:
-                        content += f" {ping_role.mention}"
-
+                ping_role_id = data.get("record", {}).get("ping_role_id")
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
