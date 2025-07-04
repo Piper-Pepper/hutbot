@@ -167,7 +167,6 @@ class VoteFailButton(discord.ui.Button):
             description=f"**Solution was incorrect.",
             color=discord.Color.red()
         )
-        failed_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         failed_embed.add_field(name="⁉️", value=riddle_text or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         failed_embed.add_field(name="❌ Sadly, the submitted solution was not correct.", value="*Better luck next time!*", inline=False)
