@@ -1,8 +1,6 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord import Interaction, SelectOption
-
 import aiohttp
 
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
@@ -10,7 +8,7 @@ SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösu
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 HEADERS = {"X-Master-Key": API_KEY}
 
-RIDDLE_CHANNEL_ID = 1346843244067160074
+RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 
 class RiddleCloseButton(discord.ui.Button):
@@ -38,7 +36,7 @@ class RiddleCloseButton(discord.ui.Button):
             description="Sadly, nobody could solve the Riddle in time...",
             color=discord.Color.red()
         )
-        closed_embed.add_field(name="⁉️", value=riddle_data.get("text", "*Unknown*"), inline=False)
+        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
         closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         closed_embed.set_image(url=solution_url)
@@ -99,7 +97,7 @@ class VoteSuccessButton(discord.ui.Button):
             color=discord.Color.green()
         )
         solved_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        solved_embed.add_field(name="⁉️", value=riddle_text or "*Unknown*", inline=False)
+        solved_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
         solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         solved_embed.add_field(name="✅ Correct Solution", value=correct_solution or "*None*", inline=False)
         solved_embed.add_field(name="🏆 Award", value=award or "*None*", inline=False)
@@ -164,10 +162,11 @@ class VoteFailButton(discord.ui.Button):
 
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
-            description=f"**Solution was incorrect.",
+            description=f"**{interaction.user.mention}**'s solution was incorrect.",
             color=discord.Color.red()
         )
-        failed_embed.add_field(name="⁉️", value=riddle_text or "*Unknown*", inline=False)
+        failed_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+        failed_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         failed_embed.add_field(name="❌ Sadly, the submitted solution was not correct.", value="*Better luck next time!*", inline=False)
 
@@ -199,7 +198,7 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
 
         embed = discord.Embed(
             title="📜 New Solution Submitted!",
-            description=f"🧩\n{riddle.get('text', 'No riddle')}",
+            description=f"> **Riddle:** {riddle.get('text', 'No riddle')}",
             color=discord.Color.gold()
         )
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
@@ -253,11 +252,16 @@ class RiddleCog(commands.Cog):
             description="Sadly, nobody could solve the Riddle in time...",
             color=discord.Color.red()
         )
-        closed_embed.add_field(name="⁉️", value=riddle_data.get("text", "*Unknown*"), inline=False)
+        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
         closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         closed_embed.set_image(url=solution_url)
         closed_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+
+        # Sende das Embed in den Rätselkanal
+        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
+        if riddle_channel:
+            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
 
         # Sende das Embed in den Rätselkanal
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
@@ -275,12 +279,10 @@ class RiddleCog(commands.Cog):
         async with aiohttp.ClientSession() as session:
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
-    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel and mention a role if provided.")
-    @app_commands.describe(role="Optional role to mention in the riddle post")
-    async def riddle_post(self, interaction: discord.Interaction, role: discord.Role = None):
+    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel.")
+    async def riddle_post(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Fetch riddle from JSONBin
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 if response.status != 200:
@@ -292,10 +294,7 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
-        # Fallback image URL
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-
-        # Build the embed
         embed = discord.Embed(
             title="Goon Hut Riddle of the Day",
             description=f">{riddle.get('text', 'No text')}",
@@ -305,16 +304,10 @@ class RiddleCog(commands.Cog):
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        # Mention the role if provided
-        if role:
-            await riddle_channel.send(content=f"{role.mention}", embed=embed, view=SubmitButtonView())
-        else:
-            await riddle_channel.send(content="Click to check out the riddle!", embed=embed, view=SubmitButtonView())
-
-        # Send confirmation to user
-        await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
-
-# Setup the cog
+        riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
+        if riddle_channel:
+            await riddle_channel.send(content="<@&1380610400416043089>", embed=embed, view=SubmitButtonView())
+            await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
