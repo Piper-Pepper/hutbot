@@ -174,6 +174,24 @@ class VoteFailButton(discord.ui.Button):
         submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
         submitter = await interaction.client.fetch_user(submitter_id)
 
+        # Hole die gespeicherte Ping-Rolle aus der JSON (sofern vorhanden)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
+                data = await response.json()
+                ping_role_id = data.get("record", {}).get("ping_role_id", None)
+
+        # Standard‑Ping für die Riddle‑Gruppe
+        content = "<@&1380610400416043089>"
+
+        # Ping für den submitter (der die Lösung falsch hatte)
+        content += f" {submitter.mention}"
+
+        # Optional die zusätzliche Rolle (falls gesetzt)
+        if ping_role_id:
+            ping_role = interaction.guild.get_role(ping_role_id)
+            if ping_role:
+                content += f" {ping_role.mention}"
+
         # ❌ Erstelle das „Fehlgeschlagen“-Embed mit dem echten Einreicher
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
@@ -191,7 +209,12 @@ class VoteFailButton(discord.ui.Button):
 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(embed=failed_embed)
+            allowed_mentions = discord.AllowedMentions(roles=True, users=True, everyone=False)
+            await riddle_channel.send(
+                content=content,
+                embed=failed_embed,
+                allowed_mentions=allowed_mentions
+            )
 
         # 💣 Lösche Original-Vote-Message
         try:
@@ -200,6 +223,7 @@ class VoteFailButton(discord.ui.Button):
             print("❌ Failed to delete the vote message.")
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
+
 
 
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
@@ -312,8 +336,32 @@ class RiddleCog(commands.Cog):
         interaction: discord.Interaction,
         ping_role: Optional[discord.Role] = None  # 👈 neues optionales Feld
     ):
-
         await interaction.response.defer(ephemeral=True)
+        
+        # Speichere die Ping-Rolle in die JSON, wenn sie gesetzt ist
+        riddle_data = {}
+        if ping_role:
+            riddle_data['ping_role_id'] = ping_role.id
+        else:
+            riddle_data['ping_role_id'] = None
+
+        async with aiohttp.ClientSession() as session:
+            # Riddle-Daten abrufen
+            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
+                if response.status != 200:
+                    await interaction.followup.send(f"❌ Error loading riddle: {response.status}", ephemeral=True)
+                    return
+                riddle_data.update((await response.json()).get("record", {}))
+
+        # Wenn kein aktives Riddle vorhanden ist
+        if not riddle_data.get("text") or not riddle_data.get("solution"):
+            await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
+            return
+
+        # Speichere die Ping-Rolle ID in die JSON
+        async with aiohttp.ClientSession() as session:
+            await session.put(RIDDLE_BIN_URL, json={"record": riddle_data}, headers=HEADERS)
+
         # Standard‑Ping für die Riddle‑Gruppe
         content = "<@&1380610400416043089>"
 
@@ -321,24 +369,14 @@ class RiddleCog(commands.Cog):
         if ping_role:
             content += f" {ping_role.mention}"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                if response.status != 200:
-                    await interaction.followup.send(f"❌ Error loading riddle: {response.status}", ephemeral=True)
-                    return
-                riddle = (await response.json()).get("record", {})
-
-        if not riddle.get("text") or not riddle.get("solution"):
-            await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
-            return
-
-        image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+        # Riddle-Daten für das Embed vorbereiten
+        image_url = riddle_data.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
         embed = discord.Embed(
             title="Goon Hut Riddle of the Day",
-            description=f">{riddle.get('text', 'No text')}",
+            description=f">{riddle_data.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
-        embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
+        embed.add_field(name="🏆 Award", value=riddle_data.get("award", "None"), inline=False)
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
