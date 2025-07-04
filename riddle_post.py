@@ -38,7 +38,7 @@ class RiddleCloseButton(discord.ui.Button):
             description="Sadly, nobody could solve the Riddle in time...",
             color=discord.Color.red()
         )
-        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
+        closed_embed.add_field(name="⁉️", value=riddle_data.get("text", "*Unknown*"), inline=False)
         closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         closed_embed.set_image(url=solution_url)
@@ -99,7 +99,7 @@ class VoteSuccessButton(discord.ui.Button):
             color=discord.Color.green()
         )
         solved_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        solved_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
+        solved_embed.add_field(name="⁉️", value=riddle_text or "*Unknown*", inline=False)
         solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         solved_embed.add_field(name="✅ Correct Solution", value=correct_solution or "*None*", inline=False)
         solved_embed.add_field(name="🏆 Award", value=award or "*None*", inline=False)
@@ -168,7 +168,7 @@ class VoteFailButton(discord.ui.Button):
             color=discord.Color.red()
         )
         failed_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        failed_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
+        failed_embed.add_field(name="⁉️", value=riddle_text or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         failed_embed.add_field(name="❌ Sadly, the submitted solution was not correct.", value="*Better luck next time!*", inline=False)
 
@@ -200,7 +200,7 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
 
         embed = discord.Embed(
             title="📜 New Solution Submitted!",
-            description=f"🧩**Riddle:**\n\n{riddle.get('text', 'No riddle')}",
+            description=f"🧩\n{riddle.get('text', 'No riddle')}",
             color=discord.Color.gold()
         )
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
@@ -254,7 +254,7 @@ class RiddleCog(commands.Cog):
             description="Sadly, nobody could solve the Riddle in time...",
             color=discord.Color.red()
         )
-        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
+        closed_embed.add_field(name="⁉️", value=riddle_data.get("text", "*Unknown*"), inline=False)
         closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         closed_embed.set_image(url=solution_url)
