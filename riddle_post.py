@@ -264,11 +264,6 @@ class RiddleCog(commands.Cog):
         if riddle_channel:
             await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
 
-        # Sende das Embed in den Rätselkanal
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
-
         # Setze alle Rätseldaten auf Null
         await self.clear_riddle_data()
 
