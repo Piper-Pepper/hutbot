@@ -1,5 +1,2 @@
---upgrade
---prefix=.local
-pip==25.1.1
 discord.py
 python-dotenv
