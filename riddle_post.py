@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from typing import Optional
 import aiohttp
+from datetime import datetime
 
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
@@ -377,9 +378,10 @@ class RiddleCog(commands.Cog):
         content = " ".join(content_parts)
 
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+        date_str = datetime.now().strftime("%Y/%m/%d")
         embed = discord.Embed(
-            title="Goon Hut Riddle of the Day",
-            description=f">{riddle.get('text', 'No text')}",
+            title=f"Goon Hut🛖\n\n🧠ℝ𝕚𝕕𝕕𝕝𝕖 𝕠𝕗 𝕥𝕙𝕖 𝔻𝕒𝕪 — {date_str}",
+            description=f"{riddle.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
         embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
