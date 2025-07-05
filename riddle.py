@@ -36,14 +36,7 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
         self.add_item(self.image_url)
         self.add_item(self.solution_url)
 
-        self.button_id = data.get("button-id", "")
-        if self.button_id:
-            role = discord.utils.get(guild.roles, id=int(self.button_id))
-            display = role.name if role else f"(Role ID: {self.button_id})"
-            self.button_display = TextInput(
-                label="Assigned Group (uneditable)", default=display, required=False
-            )
-            self.add_item(self.button_display)
+        self.button_id = data.get("button-id", "")  # 👈 merken für später
 
     async def on_submit(self, interaction: discord.Interaction):
         updated_data = {
@@ -52,7 +45,7 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
             "award": self.award.value,
             "image-url": self.image_url.value,
             "solution-url": self.solution_url.value,
-            "button-id": self.button_id  # unverändert übernommen
+            "button-id": self.button_id  # bleibt unverändert erhalten
         }
 
         logger.info(f"[Modal Submit] New Data: {updated_data}")
@@ -60,14 +53,15 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
             try:
                 async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=updated_data) as response:
                     if response.status == 200:
-                        await interaction.response.send_message("✅ Riddle successfully updated!", ephemeral=True)
+                        # 🎯 Footer-Antwort mit Erwähnung der Gruppe, falls gesetzt
+                        group_note = f"\n🔖 Assigned Group: <@&{self.button_id}>" if self.button_id else ""
+                        await interaction.response.send_message(f"✅ Riddle successfully updated!{group_note}", ephemeral=True)
                     else:
                         logger.error(f"Error saving: {response.status} – {await response.text()}")
                         await interaction.response.send_message(f"❌ Error saving: {response.status}", ephemeral=True)
             except aiohttp.ClientError as e:
                 logger.exception("Network error while saving:")
                 await interaction.response.send_message(f"❌ Network error: {e}", ephemeral=True)
-
 
 class RiddleEditor(commands.Cog):
     def __init__(self, bot):

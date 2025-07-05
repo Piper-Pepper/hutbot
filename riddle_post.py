@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from typing import Optional
 import aiohttp
+import re
 
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
@@ -155,9 +156,22 @@ class VoteSuccessButton(discord.ui.Button):
 
 RIDDLE_ROLE = 1380610400416043089  # fest definierte Rolle
 
+import re
+
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
         super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id="riddle_downvote")
+
+    def extract_role_id(self, role_str: str):
+        if role_str.isdigit():
+            return int(role_str)
+        match = re.search(r'<@&(\d+)>', role_str)
+        if match:
+            return int(match.group(1))
+        match = re.search(r'\((\d+)\)', role_str)
+        if match:
+            return int(match.group(1))
+        return None
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -194,21 +208,11 @@ class VoteFailButton(discord.ui.Button):
 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            # Hole Guild vom Channel (alternativ interaction.guild)
             guild = riddle_channel.guild
 
-            # Rolle aus JSON "button-id" aus Embed (oder "record")
             button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
-            # Falls die role-id als Zahl irgendwo in embed-Feld steht, sonst parse aus JSON falls möglich
-            # Alternativ aus embed footer oder extra speichern
-            # Hier nehmen wir einfach mal die "button-id" direkt aus embed-Feld (du kannst das anpassen)
-            try:
-                button_role_id = int(button_role_id_str)
-            except ValueError:
-                # Falls das Feld nicht ID ist, setze None
-                button_role_id = None
+            button_role_id = self.extract_role_id(button_role_id_str)
 
-            # Rolle des Submitters (höchste Rolle außer @everyone)
             member = guild.get_member(submitter_id)
             if member:
                 member_roles = [r for r in member.roles if r.id != guild.id]
@@ -216,20 +220,17 @@ class VoteFailButton(discord.ui.Button):
             else:
                 submitter_role_id = None
 
-            # Sammle Rollen zum Pingen
             ping_roles = [RIDDLE_ROLE]
             if submitter_role_id:
                 ping_roles.append(submitter_role_id)
             if button_role_id:
                 ping_roles.append(button_role_id)
 
-            # Erstelle Content mit Role-Mentions (ohne Duplikate)
-            unique_role_ids = list(dict.fromkeys(ping_roles))  # Reihenfolge behalten & doppelte entfernen
+            unique_role_ids = list(dict.fromkeys(ping_roles))
             content = " ".join(f"<@&{rid}>" for rid in unique_role_ids)
 
             await riddle_channel.send(content=content, embed=failed_embed, allowed_mentions=discord.AllowedMentions(roles=True))
 
-        # 💣 Lösche Original-Vote-Message
         try:
             await message.delete()
         except discord.HTTPException:
