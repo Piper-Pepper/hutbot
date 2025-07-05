@@ -14,7 +14,7 @@ SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösu
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 HEADERS = {"X-Master-Key": API_KEY}
 
-RIDDLE_CHANNEL_ID = 1349697597232906292
+RIDDLE_CHANNEL_ID = 1346843244067160074
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 
@@ -426,6 +426,63 @@ class RiddleCog(commands.Cog):
 
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
+    @app_commands.command(name="riddle_view", description="View the current riddle and winner preview (private).")
+    async def riddle_view(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        # Fetch the current riddle data
+        async with aiohttp.ClientSession() as session:
+            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
+                if response.status != 200:
+                    await interaction.followup.send("❌ Couldn't fetch riddle data.", ephemeral=True)
+                    return
+                riddle_data = (await response.json()).get("record", {})
+
+        if not riddle_data.get("text"):
+            await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
+            return
+
+        # Image fallback
+        image_url = riddle_data.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+        if not image_url.startswith("http"):
+            image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+
+        solution_url = riddle_data.get("solution-url") or image_url
+        if not solution_url.startswith("http"):
+            solution_url = image_url
+
+        # Erstelle Riddle-Embed (ohne Pings)
+        date_str = datetime.now().strftime("%Y/%m/%d")
+        riddle_embed = discord.Embed(
+            title=f"🧠 Goon Hut ℝ𝕚𝕕𝕕𝕝𝕖 𝕠𝕗 𝕥𝕙𝕖 𝔻𝕒𝕪\n{date_str}",
+            description=riddle_data.get("text", "*No text*"),
+            color=discord.Color.blurple()
+        )
+        riddle_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "None"), inline=False)
+        riddle_embed.set_image(url=image_url)
+        riddle_embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+
+        # Erstelle Gewinner-Embed (ohne Pings)
+        solved_embed = discord.Embed(
+            title="🎉 Riddle Solved!",
+            description=f"**SomeUser** solved the riddle!",  # Platzhalter für Vorschau
+            color=discord.Color.green()
+        )
+        solved_embed.set_author(name="User#1234", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
+        solved_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
+        solved_embed.add_field(name="🔍 Proposed Solution", value=riddle_data.get("solution", "*None*"), inline=False)
+        solved_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
+        solved_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
+        solved_embed.set_image(url=solution_url)
+        solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+
+        # Antwort senden – alles nur für den Benutzer sichtbar
+        await interaction.followup.send(
+            content="🧪 Here is your private riddle preview:",
+            embeds=[riddle_embed, solved_embed],
+            view=RiddlePreviewButtons(),
+            ephemeral=True
+        )
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
