@@ -154,7 +154,6 @@ class VoteSuccessButton(discord.ui.Button):
         )
 
 
-
     async def clear_riddle_data(self):
         empty = {
             "text": None,
