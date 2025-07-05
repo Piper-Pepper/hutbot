@@ -163,15 +163,22 @@ class VoteSuccessButton(discord.ui.Button):
 
     async def update_user_riddle_count(self, user_id: int):
         async with aiohttp.ClientSession() as session:
+            # 1. Aktuelle Daten aus der Solutions-Bin holen
             async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
                 users = data.get("record", {})
-                uid = str(user_id)
-                if uid in users:
-                    users[uid]["solved_riddles"] += 1
-                else:
-                    users[uid] = {"solved_riddles": 1}
+
+            uid = str(user_id)
+
+            # 2. User Count updaten oder neu anlegen
+            if uid in users:
+                users[uid]["solved_riddles"] += 1
+            else:
+                users[uid] = {"solved_riddles": 1}
+
+            # 3. Kompletten updated record zurückschreiben, ohne verschachteltes "record"
             await session.put(SOLVED_BIN_URL, json={"record": users}, headers=HEADERS)
+
 
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
