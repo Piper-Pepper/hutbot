@@ -1,75 +1,49 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Modal, TextInput, Button, View
-import aiohttp  # For asynchronous HTTP requests
+from discord.ui import Modal, TextInput
+import aiohttp
 import logging
+from typing import Optional
 
 # 🔐 JSONBin Configuration
 JSONBIN_BIN_ID = "685442458a456b7966b13207"
 JSONBIN_API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 JSONBIN_BASE_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-
 HEADERS = {
     "X-Master-Key": JSONBIN_API_KEY,
     "Content-Type": "application/json"
 }
 
-# 🪵 Logging for debugging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 📤 Modal for Riddle Editing
 class RiddleEditModal(Modal, title="Edit Riddle"):
-    def __init__(self, data):
+    def __init__(self, data, guild: discord.Guild):
         super().__init__()
+        self.guild = guild
 
-        # Required inputs
-        self.text = TextInput(
-            label="Text", 
-            default=data.get("text", ""), 
-            required=True, 
-            style=discord.TextStyle.paragraph
-        )
-        self.solution = TextInput(
-            label="Solution", 
-            default=data.get("solution", ""), 
-            required=True
-        )
-        
-        # Optional inputs
-        self.award = TextInput(
-            label="Award", 
-            default=data.get("award", ""), 
-            required=False
-        )
-        self.image_url = TextInput(
-            label="Image URL", 
-            default=data.get("image-url", ""), 
-            required=False
-        )
-        self.solution_url = TextInput(
-            label="Solution Image URL", 
-            default=data.get("solution-url", ""), 
-            required=False
-        )
-        
-        # Add items to modal
+        self.text = TextInput(label="Text", default=data.get("text", ""), required=True, style=discord.TextStyle.paragraph)
+        self.solution = TextInput(label="Solution", default=data.get("solution", ""), required=True)
+        self.award = TextInput(label="Award", default=data.get("award", ""), required=False)
+        self.image_url = TextInput(label="Image URL", default=data.get("image-url", ""), required=False)
+        self.solution_url = TextInput(label="Solution Image URL", default=data.get("solution-url", ""), required=False)
+
         self.add_item(self.text)
         self.add_item(self.solution)
         self.add_item(self.award)
         self.add_item(self.image_url)
         self.add_item(self.solution_url)
 
-        # Only add button_id if it exists and is not empty
-        button_id_value = data.get("button-id", "")
-        if button_id_value:
-            self.button_id = TextInput(
-                label="Button ID", 
-                default=button_id_value, 
-                required=False
+        self.button_id = data.get("button-id", "")
+        if self.button_id:
+            role = discord.utils.get(guild.roles, id=int(self.button_id))
+            display = role.name if role else f"(Role ID: {self.button_id})"
+            self.button_display = TextInput(
+                label="Assigned Group (uneditable)", default=display, required=False
             )
-            self.add_item(self.button_id)
+            self.add_item(self.button_display)
 
     async def on_submit(self, interaction: discord.Interaction):
         updated_data = {
@@ -78,12 +52,10 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
             "award": self.award.value,
             "image-url": self.image_url.value,
             "solution-url": self.solution_url.value,
-            "button-id": self.button_id.value if hasattr(self, 'button_id') else ""  # Handle absence of button_id
+            "button-id": self.button_id  # unverändert übernommen
         }
 
         logger.info(f"[Modal Submit] New Data: {updated_data}")
-
-        # Use aiohttp for asynchronous HTTP requests
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=updated_data) as response:
@@ -91,25 +63,24 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
                         await interaction.response.send_message("✅ Riddle successfully updated!", ephemeral=True)
                     else:
                         logger.error(f"Error saving: {response.status} – {await response.text()}")
-                        await interaction.response.send_message(f"❌ Error saving: {response.status} – {await response.text()}", ephemeral=True)
+                        await interaction.response.send_message(f"❌ Error saving: {response.status}", ephemeral=True)
             except aiohttp.ClientError as e:
                 logger.exception("Network error while saving:")
                 await interaction.response.send_message(f"❌ Network error: {e}", ephemeral=True)
 
 
-# 🔧 Cog Class
 class RiddleEditor(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(name="riddle", description="Load and edit the current riddle.")
-    async def riddle(self, interaction: discord.Interaction):
-        # Check if the user has the required role
-        required_role_id = 1380610400416043089  # Replace with your desired role ID
+    @app_commands.describe(mention="Optional group to tag (will be stored)")
+    async def riddle(self, interaction: discord.Interaction, mention: Optional[discord.Role] = None):
+        required_role_id = 1380610400416043089
         has_role = any(role.id == required_role_id for role in interaction.user.roles)
 
         if not has_role:
-            await interaction.response.send_message("❌ You do not have the necessary permissions to use this command.", ephemeral=True)
+            await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
             return
 
         logger.info(f"[Slash Command] /riddle by {interaction.user}")
@@ -123,20 +94,27 @@ class RiddleEditor(commands.Cog):
                         return
 
                     data = await response.json()
-                    logger.info(f"[GET] Successfully loaded: {data}")
+                    record = data.get("record", {})
 
-                    # Check if the record exists and is valid
-                    if "record" not in data or not data["record"]:
-                        logger.error("Received invalid or empty record data.")
+                    if not record:
                         await interaction.response.send_message("❌ No riddle data found.", ephemeral=True)
                         return
 
-                    modal = RiddleEditModal(data=data["record"])
+                    if mention:
+                        logger.info(f"Saving mention role {mention.name} ({mention.id}) as button-id")
+                        record["button-id"] = str(mention.id)
+                        async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=record) as update_response:
+                            if update_response.status != 200:
+                                await interaction.response.send_message("❌ Failed to store role mention.", ephemeral=True)
+                                return
+
+                    modal = RiddleEditModal(data=record, guild=interaction.guild)
                     await interaction.response.send_modal(modal)
 
             except aiohttp.ClientError as e:
                 logger.exception("Network error while loading:")
                 await interaction.response.send_message(f"❌ Network error while loading: {e}", ephemeral=True)
+
     @app_commands.command(name="riddle_preview", description="Show a preview of the current riddle from JSONBin.")
     async def riddle_preview(self, interaction: discord.Interaction):
         logger.info(f"[Slash Command] /riddle_preview by {interaction.user}")
@@ -156,7 +134,6 @@ class RiddleEditor(commands.Cog):
                         await interaction.response.send_message("❌ The riddle data is incomplete or missing.", ephemeral=True)
                         return
 
-                    # Embed erstellen
                     embed = discord.Embed(
                         title="🧩 Riddle Preview",
                         description=record["text"],
@@ -175,6 +152,6 @@ class RiddleEditor(commands.Cog):
                 logger.exception("Network error while loading preview:")
                 await interaction.response.send_message(f"❌ Network error: {e}", ephemeral=True)
 
-# 🚀 Setup Function
+# 🚀 Setup
 async def setup(bot: commands.Bot):
     await bot.add_cog(RiddleEditor(bot))
