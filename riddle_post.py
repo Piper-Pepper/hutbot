@@ -11,6 +11,7 @@ HEADERS = {"X-Master-Key": API_KEY}
 
 RIDDLE_CHANNEL_ID = 1346843244067160074
 VOTE_CHANNEL_ID = 1381754826710585527
+RIDDLE_ROLE = 1380610400416043089
 
 class RiddleCloseButton(discord.ui.Button):
     def __init__(self):
@@ -152,6 +153,8 @@ class VoteSuccessButton(discord.ui.Button):
                     users[uid] = {"solved_riddles": 1}
             await session.put(SOLVED_BIN_URL, json={"record": users}, headers=HEADERS)
 
+RIDDLE_ROLE = 1380610400416043089  # fest definierte Rolle
+
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
         super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id="riddle_downvote")
@@ -191,7 +194,40 @@ class VoteFailButton(discord.ui.Button):
 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(embed=failed_embed)
+            # Hole Guild vom Channel (alternativ interaction.guild)
+            guild = riddle_channel.guild
+
+            # Rolle aus JSON "button-id" aus Embed (oder "record")
+            button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
+            # Falls die role-id als Zahl irgendwo in embed-Feld steht, sonst parse aus JSON falls möglich
+            # Alternativ aus embed footer oder extra speichern
+            # Hier nehmen wir einfach mal die "button-id" direkt aus embed-Feld (du kannst das anpassen)
+            try:
+                button_role_id = int(button_role_id_str)
+            except ValueError:
+                # Falls das Feld nicht ID ist, setze None
+                button_role_id = None
+
+            # Rolle des Submitters (höchste Rolle außer @everyone)
+            member = guild.get_member(submitter_id)
+            if member:
+                member_roles = [r for r in member.roles if r.id != guild.id]
+                submitter_role_id = member_roles[-1].id if member_roles else None
+            else:
+                submitter_role_id = None
+
+            # Sammle Rollen zum Pingen
+            ping_roles = [RIDDLE_ROLE]
+            if submitter_role_id:
+                ping_roles.append(submitter_role_id)
+            if button_role_id:
+                ping_roles.append(button_role_id)
+
+            # Erstelle Content mit Role-Mentions (ohne Duplikate)
+            unique_role_ids = list(dict.fromkeys(ping_roles))  # Reihenfolge behalten & doppelte entfernen
+            content = " ".join(f"<@&{rid}>" for rid in unique_role_ids)
+
+            await riddle_channel.send(content=content, embed=failed_embed, allowed_mentions=discord.AllowedMentions(roles=True))
 
         # 💣 Lösche Original-Vote-Message
         try:
