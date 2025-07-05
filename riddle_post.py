@@ -18,6 +18,13 @@ RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 
+
+def truncate_text(text: str, max_length: int = 50) -> str:
+    """Kürzt den Text nach max_length Zeichen und fügt '[...]' hinzu."""
+    if text and len(text) > max_length:
+        return text[:max_length] + "[...]"
+    return text
+
 async def callback(self, interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
@@ -211,7 +218,7 @@ class VoteFailButton(discord.ui.Button):
             color=discord.Color.red()
         )
         failed_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
-        failed_embed.add_field(name="🧩 Riddle", value=riddle_text or "*Unknown*", inline=False)
+        failed_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
         failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
         failed_embed.add_field(
             name="❌ Sadly, the submitted solution was not correct.",
