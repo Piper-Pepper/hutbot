@@ -89,11 +89,16 @@ class VoteSuccessButton(discord.ui.Button):
         submitter = await interaction.client.fetch_user(submitter_id)
 
         # 🖼️ Lösungsbild und Ping-Rolle aus JSON laden
+        # JSON laden
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
-                solution_url = data.get("record", {}).get("solution-url", "")
-                ping_role_id = data.get("record", {}).get("ping_role_id")
+                record = data.get("record", {})
+                riddle_text = record.get("text", "*Unknown*")
+                correct_solution = record.get("solution", "*None*")
+                solution_url = record.get("solution-url", "")
+                ping_role_id = record.get("ping_role_id")
+
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
