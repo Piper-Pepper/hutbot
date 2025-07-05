@@ -83,27 +83,20 @@ class VoteSuccessButton(discord.ui.Button):
         correct_solution = get_field_value(embed, "✅ Correct Solution")
         award = get_field_value(embed, "🏆 Award")
         
-        # 👤 Submitter aus verstecktem Feld ziehen
+        # Get submitter from hidden field
         submitter_id_str = get_field_value(embed, "🆔 User ID")
         submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
         submitter = await interaction.client.fetch_user(submitter_id)
 
-        # 🖼️ Lösungsbild und Ping-Rolle aus JSON laden
-        # JSON laden
+        # Get solution image from riddle bin
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
-                record = data.get("record", {})
-                riddle_text = record.get("text", "*Unknown*")
-                correct_solution = record.get("solution", "*None*")
-                solution_url = record.get("solution-url", "")
-                ping_role_id = record.get("ping_role_id")
-
+                solution_url = data.get("record", {}).get("solution-url", "")
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
-        # 🎉 Embed bauen
         solved_embed = discord.Embed(
             title="🎉 Riddle Solved!",
             description=f"**{submitter.mention}** solved the riddle!",
@@ -115,43 +108,24 @@ class VoteSuccessButton(discord.ui.Button):
         solved_embed.add_field(name="✅ Correct Solution", value=correct_solution or "*None*", inline=False)
         solved_embed.add_field(name="🏆 Award", value=award or "*None*", inline=False)
         solved_embed.set_image(url=solution_url)
-        solved_embed.set_footer(
-            text=f"Guild: {interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-        )
+        solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        # 🛎️ Content für Ping bauen
-        content = "<@&1380610400416043089>"  # Riddle-Standardgruppe
-        content += f" {submitter.mention}"   # Gewinner
-        if ping_role_id:
-            ping_role = interaction.guild.get_role(int(ping_role_id))
-            if ping_role:
-                content += f" {ping_role.mention}"
 
-        # 📣 Nachricht senden
+        # Mention 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            allowed_mentions = discord.AllowedMentions(roles=True, users=True, everyone=False)
-            await riddle_channel.send(
-                content=content,
-                embed=solved_embed,
-                allowed_mentions=allowed_mentions
-            )
+            await riddle_channel.send(content=f"<@&1380610400416043089> {submitter.mention}", embed=solved_embed)
 
-        # 🔄 State aktualisieren
         await self.clear_riddle_data()
-        await self.update_user_riddle_count(submitter.id)
+        await self.update_user_riddle_count(submitter.id)  # Wichtig: submitter.id, nicht interaction.user.id
 
-        # 🔥 Alte Nachricht löschen
+        # 🔥 Delete the original message with the buttons
         try:
             await message.delete()
         except discord.HTTPException:
             print("❌ Failed to delete the solution message.")
 
-        await interaction.followup.send(
-            "✅ Marked as solved, riddle data cleared, and user riddle count updated!",
-            ephemeral=True
-        )
+        await interaction.followup.send("✅ Marked as solved, riddle data cleared, and user riddle count updated!", ephemeral=True)
 
 
     async def clear_riddle_data(self):
@@ -200,23 +174,7 @@ class VoteFailButton(discord.ui.Button):
         submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
         submitter = await interaction.client.fetch_user(submitter_id)
 
-        # 📥 Ping-Rolle aus JSON abrufen
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                ping_role_id = data.get("record", {}).get("ping_role_id")
-
-        # 🏷️ Build mention content
-        content = "<@&1380610400416043089>"  # Standard Riddle-Role
-        content += f" {submitter.mention}"   # Der Nutzer, dessen Lösung falsch war
-
-        # 🔔 Zusätzliche gespeicherte Ping-Rolle anhängen (wenn vorhanden)
-        if ping_role_id:
-            ping_role = interaction.guild.get_role(int(ping_role_id))
-            if ping_role:
-                content += f" {ping_role.mention}"
-
-        # ❌ Embed für fehlgeschlagene Lösung
+        # ❌ Erstelle das „Fehlgeschlagen“-Embed mit dem echten Einreicher
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
             description=f"**{submitter.mention}**'s solution was incorrect.",
@@ -231,25 +189,17 @@ class VoteFailButton(discord.ui.Button):
             inline=False
         )
 
-        # 📣 In Riddle-Channel posten
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            allowed_mentions = discord.AllowedMentions(roles=True, users=True, everyone=False)
-            await riddle_channel.send(
-                content=content,
-                embed=failed_embed,
-                allowed_mentions=allowed_mentions
-            )
+            await riddle_channel.send(embed=failed_embed)
 
-        # 🧨 Lösche ursprüngliche Button-Nachricht
+        # 💣 Lösche Original-Vote-Message
         try:
             await message.delete()
         except discord.HTTPException:
             print("❌ Failed to delete the vote message.")
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
-
-
 
 
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
@@ -360,58 +310,49 @@ class RiddleCog(commands.Cog):
     async def riddle_post(
         self,
         interaction: discord.Interaction,
-        ping_role: Optional[discord.Role] = None
+        ping_role: Optional[discord.Role] = None  # 👈 neues optionales Feld
     ):
-        await interaction.response.defer(ephemeral=True)
 
-        # 🔄 Riddle-Daten laden
+        await interaction.response.defer(ephemeral=True)
+        # Standard‑Ping für die Riddle‑Gruppe
+        content = "<@&1380610400416043089>"
+
+        # Optional zusätzliche Rolle anhängen
+        if ping_role:
+            content += f" {ping_role.mention}"
+
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 if response.status != 200:
                     await interaction.followup.send(f"❌ Error loading riddle: {response.status}", ephemeral=True)
                     return
-                riddle_data = (await response.json()).get("record", {})
+                riddle = (await response.json()).get("record", {})
 
-        # ❌ Kein gültiges Riddle?
-        if not riddle_data.get("text") or not riddle_data.get("solution"):
+        if not riddle.get("text") or not riddle.get("solution"):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
-        riddle_data["ping_role_id"] = str(ping_role.id) if ping_role else None
-
-
-        # 🔄 Riddle-Daten aktualisieren und zurückschreiben
-        async with aiohttp.ClientSession() as session:
-            await session.put(RIDDLE_BIN_URL, json={"record": riddle_data}, headers=HEADERS)
-
-        # 👥 Rollen-Mentions vorbereiten
-        ping_text = "<@&1380610400416043089>"  # Standard Riddle-Gruppe
-        if ping_role:
-            ping_text += f" {ping_role.mention}"
-
-        # 🖼️ Embed bauen
-        image_url = riddle_data.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+        image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
         embed = discord.Embed(
             title="Goon Hut Riddle of the Day",
-            description=f">{riddle_data.get('text', 'No text')}",
+            description=f">{riddle.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
-        embed.add_field(name="🏆 Award", value=riddle_data.get("award", "None"), inline=False)
+        embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
         embed.set_image(url=image_url)
         embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        # 📡 Nachricht senden
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
             allowed_mentions = discord.AllowedMentions(roles=True, users=False, everyone=False)
             await riddle_channel.send(
-                content=ping_text,
+                content=content,
                 embed=embed,
                 view=SubmitButtonView(),
                 allowed_mentions=allowed_mentions
             )
-            await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
+            await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
