@@ -4,19 +4,21 @@ from discord.ext import commands
 from typing import Optional
 import aiohttp
 from datetime import datetime
-
 import aiohttp
 
 
-
-RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
-SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 HEADERS = {"X-Master-Key": API_KEY}
+PUT_HEADERS = {**HEADERS, "Content-Type": "application/json"}
 
-RIDDLE_CHANNEL_ID = 1346843244067160074
+ARCHIVE_BIN_URL = "https://api.jsonbin.io/v3/b/6869a6fa8960c979a5b7c527"
+RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
+SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
+
+RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
+NOBODY_ROLE = "11111111111111111"
 
 
 def truncate_text(text: str, max_length: int = 60) -> str:
@@ -25,57 +27,79 @@ def truncate_text(text: str, max_length: int = 60) -> str:
         return text[:max_length] + "[...]"
     return text
 
+
 async def callback(self, interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    # Fetch current riddle data
+    # 📦 Riddle laden
     async with aiohttp.ClientSession() as session:
-        async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-            data = await response.json()
-            riddle_data = data.get("record", {})
+        async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as resp:
+            riddle_wrap = await resp.json()
+            riddle_data = riddle_wrap.get("record", {})
 
     if not riddle_data.get("text"):
         await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
         return
 
-    # Get the roles to ping
-    guild = interaction.guild
-    riddle_role = guild.get_role(1380610400416043089)  # Your main riddle role ID
+    # 🔖 optionale Gruppenrolle
     button_role_id = riddle_data.get("button-id")
-    button_role = guild.get_role(int(button_role_id)) if button_role_id else None
+    mentions = [f"<@&{RIDDLE_ROLE}>"]
+    if button_role_id:
+        mentions.append(f"<@&{button_role_id}>")
+    mention_text = " ".join(mentions)
 
-    # Build the mention strings (only if roles exist)
-    mentions = []
-    if riddle_role:
-        mentions.append(riddle_role.mention)
-    if button_role:
-        mentions.append(button_role.mention)
+    # 🛑 Closed‑Embed bauen
+    solution_url = riddle_data.get("solution-url") or \
+        "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
-    mention_text = " ".join(mentions) if mentions else None
-
-    # Prepare the closed embed
-    solution_url = riddle_data.get("solution-url", "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg")
-    closed_embed = discord.Embed(
-        title="🔒 Riddle Closed",
-        description="Sadly, nobody could solve the Riddle in time...",
-        color=discord.Color.red()
+    closed_embed = (
+        discord.Embed(
+            title="🔒 Riddle Closed",
+            description="Sadly, nobody could solve the Riddle in time...",
+            color=discord.Color.red()
+        )
+        .add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
+        .add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
+        .add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
+        .set_image(url=solution_url)
+        .set_footer(text=f"Guild: {interaction.guild.name}",
+                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
     )
-    closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-    closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
-    closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-    closed_embed.set_image(url=solution_url)
-    closed_embed.set_footer(text=f"Guild: {guild.name}", icon_url=guild.icon.url if guild.icon else None)
 
-    # Send the embed + mentions in the riddle channel
+    # 📬 Einmalig posten
     riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
     if riddle_channel:
         await riddle_channel.send(content=mention_text, embed=closed_embed)
 
-    # Clear riddle data
+    # 📚 Neues Archiv-Item vorbereiten
+    archive_entry = {
+        "text": riddle_data.get("text", "*Unknown*"),
+        "solution": riddle_data.get("solution", "*None*"),
+        "date": datetime.utcnow().strftime("%Y-%m-%d")
+    }
+# 📤 An Archiv-Bin anhängen
+    async with aiohttp.ClientSession() as session:
+        # Hole die aktuellen Daten aus dem Archiv
+        async with session.get(ARCHIVE_BIN_URL + "/latest", headers=HEADERS) as resp:
+            archive_wrap = await resp.json()
+            archive_list = archive_wrap if isinstance(archive_wrap, list) else []
+
+        # Füge den neuen Eintrag zu den bestehenden hinzu
+        archive_list.append(archive_entry)
+
+        # Speichere das Archiv mit dem neuen Eintrag zurück, ohne "record"
+        async with session.put(
+            ARCHIVE_BIN_URL,
+            headers=PUT_HEADERS,
+            json=archive_list  # Direkt die Liste ohne "record"
+        ) as put_resp:
+            if put_resp.status == 200 or put_resp.status == 201:
+                print(f"✅ Archived riddle added: {archive_entry}")
+            else:
+                print(f"❌ Failed to archive riddle: {put_resp.status}")
+
+    # 🧹 Riddle‑Bin leeren
     await self.clear_riddle_data()
-
-    await interaction.followup.send("✅ The riddle has been closed, and all data has been cleared.", ephemeral=True)
-
 
 class VoteButtons(discord.ui.View):
     def __init__(self):
@@ -188,6 +212,8 @@ class VoteSuccessButton(discord.ui.Button):
                     print(f"✅ Updated solved_riddles for user {uid}")
                 else:
                     print(f"❌ Failed to update: {put_resp.status}")
+
+                    
 
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
@@ -304,27 +330,27 @@ class RiddleCog(commands.Cog):
         bot.add_view(SubmitButtonView())
         bot.add_view(VoteButtons())
 
+    from datetime import datetime
+
+
     @app_commands.command(name="riddle_close", description="Close the current riddle and mark it as unsolved.")
     async def riddle_close(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Hole die Daten des aktuellen Rätsels
+        # 📦 Fetch current riddle data
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
                 riddle_data = data.get("record", {})
 
-        # Wenn kein Rätsel existiert, breche ab
         if not riddle_data.get("text"):
             await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
             return
-        # Hole das Bild aus den Riddle-Daten oder setze das Standardbild, falls nicht vorhanden
-        solution_url = riddle_data.get("solution-url")
-        # Falls keine solution-url vorhanden ist oder ungültig, setze das Standardbild
-        if not solution_url or not solution_url.startswith("http"):
-            solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
-        # Erstelle das "Closed"-Embed mit Bild
+        # 🧩 Build the "Closed" embed
+        solution_url = riddle_data.get("solution-url") or \
+            "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+
         closed_embed = discord.Embed(
             title="🔒 Riddle Closed",
             description="Sadly, nobody could solve the Riddle in time...",
@@ -334,22 +360,40 @@ class RiddleCog(commands.Cog):
         closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         closed_embed.set_image(url=solution_url)
-        closed_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+        closed_embed.set_footer(
+            text=f"Guild: {interaction.guild.name}",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
 
-        # Sende das Embed in den Rätselkanal
+        # 📬 Send to riddle channel
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
+            await riddle_channel.send(content=f"<@&{RIDDLE_ROLE}>", embed=closed_embed)
 
-        # Sende das Embed in den Rätselkanal
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content="<@&1380610400416043089>", embed=closed_embed)
+        # 🗃️ Archive the riddle before clearing
+        archive_entry = {
+            "text": riddle_data.get("text", "*Unknown*"),
+            "solution": riddle_data.get("solution", "*None*"),
+            "date": datetime.utcnow().strftime("%Y-%m-%d")
+        }
 
-        # Setze alle Rätseldaten auf Null
+        async with aiohttp.ClientSession() as session:
+            async with session.get(ARCHIVE_BIN_URL + "/latest", headers=HEADERS) as resp:
+                archive_wrap = await resp.json()
+                archive_list = archive_wrap.get("record", [])
+                archive_list = archive_list if isinstance(archive_list, list) else []
+
+            archive_list.append(archive_entry)
+
+            await session.put(
+                ARCHIVE_BIN_URL,
+                headers=PUT_HEADERS,
+                json=archive_list
+            )
+
+        # 🧹 Clear riddle data
         await self.clear_riddle_data()
-
-        await interaction.followup.send("✅ The riddle has been closed, and all data has been cleared.", ephemeral=True)
+        await interaction.followup.send("✅ The riddle has been closed, archived, and marked as unsolved.", ephemeral=True)
 
     # Methode zum Zurücksetzen der Rätselfelder
     async def clear_riddle_data(self):
@@ -480,7 +524,6 @@ class RiddleCog(commands.Cog):
         await interaction.followup.send(
             content="🧪 Here is your private riddle preview:",
             embeds=[riddle_embed, solved_embed],
-            view=RiddlePreviewButtons(),
             ephemeral=True
         )
 

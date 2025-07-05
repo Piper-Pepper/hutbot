@@ -109,42 +109,6 @@ class RiddleEditor(commands.Cog):
                 logger.exception("Network error while loading:")
                 await interaction.response.send_message(f"❌ Network error while loading: {e}", ephemeral=True)
 
-    @app_commands.command(name="riddle_preview", description="Show a preview of the current riddle from JSONBin.")
-    async def riddle_preview(self, interaction: discord.Interaction):
-        logger.info(f"[Slash Command] /riddle_preview by {interaction.user}")
-
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(JSONBIN_BASE_URL + "/latest", headers=HEADERS) as response:
-                    if response.status != 200:
-                        logger.error(f"Error loading: {response.status} – {await response.text()}")
-                        await interaction.response.send_message("❌ Error loading the riddle.", ephemeral=True)
-                        return
-
-                    data = await response.json()
-                    record = data.get("record", {})
-
-                    if not record or "text" not in record or "solution" not in record:
-                        await interaction.response.send_message("❌ The riddle data is incomplete or missing.", ephemeral=True)
-                        return
-
-                    embed = discord.Embed(
-                        title="🧩 Riddle Preview",
-                        description=record["text"],
-                        color=discord.Color.blurple()
-                    )
-                    embed.add_field(name="✅ Correct Solution", value=record.get("solution", "*None*"), inline=False)
-                    if record.get("award"):
-                        embed.add_field(name="🏆 Award", value=record["award"], inline=False)
-                    if record.get("image-url"):
-                        embed.set_image(url=record["image-url"])
-                    embed.set_footer(text="Preview from JSONBin")
-
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-            except aiohttp.ClientError as e:
-                logger.exception("Network error while loading preview:")
-                await interaction.response.send_message(f"❌ Network error: {e}", ephemeral=True)
 
 # 🚀 Setup
 async def setup(bot: commands.Bot):
