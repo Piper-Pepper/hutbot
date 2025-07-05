@@ -5,12 +5,16 @@ from typing import Optional
 import aiohttp
 from datetime import datetime
 
+import aiohttp
+
+
+
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 HEADERS = {"X-Master-Key": API_KEY}
 
-RIDDLE_CHANNEL_ID = 1346843244067160074
+RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 
@@ -88,8 +92,7 @@ class VoteSuccessButton(discord.ui.Button):
         riddle_text = extract_from_embed(embed.description)
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
-       
-        
+
         # Get submitter from hidden field
         submitter_id_str = get_field_value(embed, "🆔 User ID")
         submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
@@ -101,7 +104,6 @@ class VoteSuccessButton(discord.ui.Button):
                 data = await response.json()
                 solution_url = data.get("record", {}).get("solution-url", "")
                 award = data.get("record", {}).get("award", "*None*")
-
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
@@ -147,8 +149,6 @@ class VoteSuccessButton(discord.ui.Button):
 
         await interaction.followup.send("✅ Marked as solved, riddle data cleared, and user riddle count updated!", ephemeral=True)
 
-
-
     async def clear_riddle_data(self):
         empty = {
             "text": None,
@@ -162,23 +162,25 @@ class VoteSuccessButton(discord.ui.Button):
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
     async def update_user_riddle_count(self, user_id: int):
+        uid = str(user_id)
         async with aiohttp.ClientSession() as session:
-            # 1. Aktuelle Daten aus der Solutions-Bin holen
-            async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                users = data.get("record", {})
+            # 1. Daten laden
+            async with session.get(f"{SOLVED_BIN_URL}/latest", headers=HEADERS) as resp:
+                data = await resp.json()
+                users = data.get("record", {})  # ✅ Das ist korrekt
 
-            uid = str(user_id)
-
-            # 2. User Count updaten oder neu anlegen
+            # 2. Count updaten oder anlegen
             if uid in users:
                 users[uid]["solved_riddles"] += 1
             else:
                 users[uid] = {"solved_riddles": 1}
 
-            # 3. Kompletten updated record zurückschreiben, ohne verschachteltes "record"
-            await session.put(SOLVED_BIN_URL, json={"record": users}, headers=HEADERS)
-
+            # ✅ 3. Direkt users schicken, ohne zusätzliches "record"
+            async with session.put(SOLVED_BIN_URL, json=users, headers=HEADERS) as put_resp:
+                if put_resp.status == 200 or put_resp.status == 201:
+                    print(f"✅ Updated solved_riddles for user {uid}")
+                else:
+                    print(f"❌ Failed to update: {put_resp.status}")
 
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
@@ -391,7 +393,10 @@ class RiddleCog(commands.Cog):
 
         content = " ".join(content_parts)
 
-        image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+        image_url = riddle.get("image-url")
+        if not image_url or not image_url.startswith("http"):
+            image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+
         date_str = datetime.now().strftime("%Y/%m/%d")
         embed = discord.Embed(
             title=f"🧠Goon Hut ℝ𝕚𝕕𝕕𝕝𝕖 𝕠𝕗 𝕥𝕙𝕖 𝔻𝕒𝕪\n{date_str}",
