@@ -10,7 +10,7 @@ SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösu
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 HEADERS = {"X-Master-Key": API_KEY}
 
-RIDDLE_CHANNEL_ID = 1346843244067160074
+RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 
@@ -88,7 +88,7 @@ class VoteSuccessButton(discord.ui.Button):
         riddle_text = extract_from_embed(embed.description)
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
-  
+       
         
         # Get submitter from hidden field
         submitter_id_str = get_field_value(embed, "🆔 User ID")
@@ -100,6 +100,8 @@ class VoteSuccessButton(discord.ui.Button):
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
                 data = await response.json()
                 solution_url = data.get("record", {}).get("solution-url", "")
+                award = data.get("record", {}).get("award", "*None*")
+
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
