@@ -163,6 +163,7 @@ class VoteFailButton(discord.ui.Button):
         super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id="riddle_downvote")
 
     def extract_role_id(self, role_str: str):
+        import re
         if role_str.isdigit():
             return int(role_str)
         match = re.search(r'<@&(\d+)>', role_str)
@@ -186,12 +187,12 @@ class VoteFailButton(discord.ui.Button):
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
 
-        # 🕵️‍♂️ Hole Einreicher-ID aus verstecktem Feld
+        # Einreicher-ID aus verstecktem Feld
         submitter_id_str = get_field_value(embed, "🆔 User ID")
         submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
         submitter = await interaction.client.fetch_user(submitter_id)
 
-        # ❌ Erstelle das „Fehlgeschlagen“-Embed mit dem echten Einreicher
+        # Fehlgeschlagen-Embed mit Einreicher
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
             description=f"**{submitter.mention}**'s solution was incorrect.",
@@ -208,28 +209,25 @@ class VoteFailButton(discord.ui.Button):
 
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            guild = riddle_channel.guild
-
             button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
             button_role_id = self.extract_role_id(button_role_id_str)
 
-            member = guild.get_member(submitter_id)
-            if member:
-                member_roles = [r for r in member.roles if r.id != guild.id]
-                submitter_role_id = member_roles[-1].id if member_roles else None
-            else:
-                submitter_role_id = None
+            # Pings:
+            # 1. RIDDLE_ROLE (feste Rolle)
+            # 2. User der klickt (interaction.user)
+            # 3. Rolle aus JSON (button_role_id), wenn vorhanden
+            content_parts = [f"<@&{RIDDLE_ROLE}>", interaction.user.mention]
 
-            ping_roles = [RIDDLE_ROLE]
-            if submitter_role_id:
-                ping_roles.append(submitter_role_id)
             if button_role_id:
-                ping_roles.append(button_role_id)
+                content_parts.append(f"<@&{button_role_id}>")
 
-            unique_role_ids = list(dict.fromkeys(ping_roles))
-            content = " ".join(f"<@&{rid}>" for rid in unique_role_ids)
+            content = " ".join(content_parts)
 
-            await riddle_channel.send(content=content, embed=failed_embed, allowed_mentions=discord.AllowedMentions(roles=True))
+            await riddle_channel.send(
+                content=content,
+                embed=failed_embed,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=True)
+            )
 
         try:
             await message.delete()
@@ -237,7 +235,6 @@ class VoteFailButton(discord.ui.Button):
             print("❌ Failed to delete the vote message.")
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
-
 
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
     solution = discord.ui.TextInput(label="Your Answer", style=discord.TextStyle.paragraph)
