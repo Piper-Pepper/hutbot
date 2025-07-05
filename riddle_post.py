@@ -12,7 +12,7 @@ HEADERS = {"X-Master-Key": API_KEY}
 
 RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
-RIDDLE_ROLE = 1380610400416043089
+RIDDLE_ROLE = 1346843244067160074
 
 async def callback(self, interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
