@@ -88,7 +88,7 @@ class VoteSuccessButton(discord.ui.Button):
         riddle_text = extract_from_embed(embed.description)
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
-        award = get_field_value(embed, "🏆 Award")
+  
         
         # Get submitter from hidden field
         submitter_id_str = get_field_value(embed, "🆔 User ID")
