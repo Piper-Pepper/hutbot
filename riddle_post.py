@@ -158,12 +158,13 @@ RIDDLE_ROLE = 1380610400416043089  # fest definierte Rolle
 
 import re
 
+import aiohttp
+
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
         super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id="riddle_downvote")
 
     def extract_role_id(self, role_str: str):
-        import re
         if role_str.isdigit():
             return int(role_str)
         match = re.search(r'<@&(\d+)>', role_str)
@@ -187,12 +188,12 @@ class VoteFailButton(discord.ui.Button):
         user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
 
-        # Einreicher-ID aus verstecktem Feld
+        # 🕵️‍♂️ Hole Einreicher-ID aus verstecktem Feld
         submitter_id_str = get_field_value(embed, "🆔 User ID")
         submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
         submitter = await interaction.client.fetch_user(submitter_id)
 
-        # Fehlgeschlagen-Embed mit Einreicher
+        # ❌ Erstelle das „Fehlgeschlagen“-Embed mit dem echten Einreicher
         failed_embed = discord.Embed(
             title="❌ Riddle Not Solved!",
             description=f"**{submitter.mention}**'s solution was incorrect.",
@@ -207,20 +208,29 @@ class VoteFailButton(discord.ui.Button):
             inline=False
         )
 
+        # --- JSON Daten nochmal laden, um button-id aus "button-id" zu holen ---
+        button_role_id = None
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(JSONBIN_BASE_URL + "/latest", headers=HEADERS) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        record = data.get("record", {})
+                        button_role_id_str = record.get("button-id", "")
+                        button_role_id = self.extract_role_id(button_role_id_str)
+                    else:
+                        await interaction.followup.send("❌ Could not load riddle data from JSONBin.", ephemeral=True)
+                        return
+            except aiohttp.ClientError as e:
+                await interaction.followup.send(f"❌ Network error while loading riddle data: {e}", ephemeral=True)
+                return
+
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
-            button_role_id = self.extract_role_id(button_role_id_str)
-
-            # Pings:
-            # 1. RIDDLE_ROLE (feste Rolle)
-            # 2. User der klickt (interaction.user)
-            # 3. Rolle aus JSON (button_role_id), wenn vorhanden
+            # Pings bauen
             content_parts = [f"<@&{RIDDLE_ROLE}>", interaction.user.mention]
-
             if button_role_id:
                 content_parts.append(f"<@&{button_role_id}>")
-
             content = " ".join(content_parts)
 
             await riddle_channel.send(
@@ -229,12 +239,14 @@ class VoteFailButton(discord.ui.Button):
                 allowed_mentions=discord.AllowedMentions(roles=True, users=True)
             )
 
+        # 💣 Lösche Original-Vote-Message
         try:
             await message.delete()
         except discord.HTTPException:
             print("❌ Failed to delete the vote message.")
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
+
 
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
     solution = discord.ui.TextInput(label="Your Answer", style=discord.TextStyle.paragraph)
