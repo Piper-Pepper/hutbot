@@ -3,7 +3,6 @@ from discord import app_commands
 from discord.ext import commands
 from typing import Optional
 import aiohttp
-import re
 
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
@@ -112,22 +111,34 @@ class VoteSuccessButton(discord.ui.Button):
         solved_embed.set_image(url=solution_url)
         solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+        # Rolle aus Embed oder JSON (als String)
+        button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
+        try:
+            button_role_id = int(button_role_id_str)
+        except ValueError:
+            button_role_id = None
 
-        # Mention 
+        # Ping-Content zusammenbauen: fixed role, winner, optional role
+        ping_parts = [f"<@&{RIDDLE_ROLE}>", submitter.mention]
+        if button_role_id:
+            ping_parts.append(f"<@&{button_role_id}>")
+
+        ping_content = " ".join(ping_parts)
+
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            await riddle_channel.send(content=f"<@&1380610400416043089> {submitter.mention}", embed=solved_embed)
+            await riddle_channel.send(content=ping_content, embed=solved_embed, allowed_mentions=discord.AllowedMentions(roles=True, users=True))
 
         await self.clear_riddle_data()
-        await self.update_user_riddle_count(submitter.id)  # Wichtig: submitter.id, nicht interaction.user.id
+        await self.update_user_riddle_count(submitter.id)
 
-        # 🔥 Delete the original message with the buttons
         try:
             await message.delete()
         except discord.HTTPException:
             print("❌ Failed to delete the solution message.")
 
         await interaction.followup.send("✅ Marked as solved, riddle data cleared, and user riddle count updated!", ephemeral=True)
+
 
 
     async def clear_riddle_data(self):
@@ -154,26 +165,9 @@ class VoteSuccessButton(discord.ui.Button):
                     users[uid] = {"solved_riddles": 1}
             await session.put(SOLVED_BIN_URL, json={"record": users}, headers=HEADERS)
 
-RIDDLE_ROLE = 1380610400416043089  # fest definierte Rolle
-
-import re
-
-import aiohttp
-
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
         super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id="riddle_downvote")
-
-    def extract_role_id(self, role_str: str):
-        if role_str.isdigit():
-            return int(role_str)
-        match = re.search(r'<@&(\d+)>', role_str)
-        if match:
-            return int(match.group(1))
-        match = re.search(r'\((\d+)\)', role_str)
-        if match:
-            return int(match.group(1))
-        return None
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -208,36 +202,22 @@ class VoteFailButton(discord.ui.Button):
             inline=False
         )
 
-        # --- JSON Daten nochmal laden, um button-id aus "button-id" zu holen ---
-        button_role_id = None
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(JSONBIN_BASE_URL + "/latest", headers=HEADERS) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        record = data.get("record", {})
-                        button_role_id_str = record.get("button-id", "")
-                        button_role_id = self.extract_role_id(button_role_id_str)
-                    else:
-                        await interaction.followup.send("❌ Could not load riddle data from JSONBin.", ephemeral=True)
-                        return
-            except aiohttp.ClientError as e:
-                await interaction.followup.send(f"❌ Network error while loading riddle data: {e}", ephemeral=True)
-                return
-
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            # Pings bauen
-            content_parts = [f"<@&{RIDDLE_ROLE}>", interaction.user.mention]
-            if button_role_id:
-                content_parts.append(f"<@&{button_role_id}>")
-            content = " ".join(content_parts)
+            # Rolle aus Embed/JSON (button-id)
+            button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
+            try:
+                button_role_id = int(button_role_id_str)
+            except ValueError:
+                button_role_id = None
 
-            await riddle_channel.send(
-                content=content,
-                embed=failed_embed,
-                allowed_mentions=discord.AllowedMentions(roles=True, users=True)
-            )
+            # Content mit Rollen-Mentions und User-Mention
+            mentions = [f"<@&{RIDDLE_ROLE}>", submitter.mention]
+            if button_role_id:
+                mentions.append(f"<@&{button_role_id}>")
+            content = " ".join(mentions)
+
+            await riddle_channel.send(content=content, embed=failed_embed, allowed_mentions=discord.AllowedMentions(roles=True, users=True))
 
         # 💣 Lösche Original-Vote-Message
         try:
@@ -246,6 +226,7 @@ class VoteFailButton(discord.ui.Button):
             print("❌ Failed to delete the vote message.")
 
         await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
+
 
 
 class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
@@ -270,10 +251,16 @@ class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
         embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
-        embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)  # NEU!
+        embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)
+
+        # Unsichtbares Feld mit button-id (versteckt, inline=True macht es klein)
+        button_id = riddle.get("button-id", "")
+        if button_id:
+            embed.add_field(name="🔖 Assigned Group", value=button_id, inline=True)
 
         await channel.send(embed=embed, view=VoteButtons())
         await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
+
 
 class SubmitButton(discord.ui.Button):
     def __init__(self):
@@ -347,8 +334,8 @@ class RiddleCog(commands.Cog):
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
     @app_commands.command(
-        name="riddle_post",
-        description="Post the current riddle in a selected channel."
+    name="riddle_post",
+    description="Post the current riddle in a selected channel."
     )
     @app_commands.describe(
         ping_role="Optional role to ping along with the riddle group"
@@ -356,16 +343,9 @@ class RiddleCog(commands.Cog):
     async def riddle_post(
         self,
         interaction: discord.Interaction,
-        ping_role: Optional[discord.Role] = None  # 👈 neues optionales Feld
+        ping_role: Optional[discord.Role] = None  # 👈 optionales Ping-Rollen-Feld
     ):
-
         await interaction.response.defer(ephemeral=True)
-        # Standard‑Ping für die Riddle‑Gruppe
-        content = "<@&1380610400416043089>"
-
-        # Optional zusätzliche Rolle anhängen
-        if ping_role:
-            content += f" {ping_role.mention}"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
@@ -377,6 +357,24 @@ class RiddleCog(commands.Cog):
         if not riddle.get("text") or not riddle.get("solution"):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
+
+        # Feste Riddle Role
+        content_parts = [f"<@&{RIDDLE_ROLE}>"]
+
+        # Geheime Rolle aus JSON (button-id)
+        button_role_id_str = riddle.get("button-id", "")
+        if button_role_id_str:
+            try:
+                button_role_id = int(button_role_id_str)
+                content_parts.append(f"<@&{button_role_id}>")
+            except ValueError:
+                pass  # Ignoriere, wenn ungültige ID
+
+        # Optionale ping_role aus Command-Parameter
+        if ping_role:
+            content_parts.append(ping_role.mention)
+
+        content = " ".join(content_parts)
 
         image_url = riddle.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
         embed = discord.Embed(
@@ -399,6 +397,7 @@ class RiddleCog(commands.Cog):
             )
 
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
+
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
