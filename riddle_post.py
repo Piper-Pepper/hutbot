@@ -450,7 +450,7 @@ class RiddleCog(commands.Cog):
 
         date_str = datetime.now().strftime("%Y/%m/%d")
         embed = discord.Embed(
-            title=f"🧠Goon Hut ℝ𝕚𝕕𝕕𝕝𝕖 𝕠𝕗 𝕥𝕙𝕖 𝔻𝕒𝕪\n{date_str}",
+            title=f"🧠Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n{date_str}",
             description=f"{riddle.get('text', 'No text')}",
             color=discord.Color.blurple()
         )
