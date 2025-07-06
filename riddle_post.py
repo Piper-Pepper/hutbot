@@ -18,7 +18,7 @@ SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösu
 RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
-NOBODY_ROLE = "11111111111111111"
+
 
 
 def truncate_text(text: str, max_length: int = 60) -> str:
@@ -173,12 +173,29 @@ class VoteSuccessButton(discord.ui.Button):
         await self.clear_riddle_data()
         await self.update_user_riddle_count(submitter.id)
 
+        # 🧹 Clean up all related submit buttons for this riddle
+        if riddle_channel:
+            try:
+                async for msg in riddle_channel.history(limit=100):
+                    if msg.components:
+                        for row in msg.components:
+                            for button in row.children:
+                                if isinstance(button, discord.ui.Button) and button.custom_id == "submit_solution":
+                                    if msg.embeds:
+                                        msg_embed = msg.embeds[0]
+                                        riddle_in_msg = extract_from_embed(msg_embed.description)
+                                        if riddle_in_msg.strip() == riddle_text.strip():
+                                            await msg.delete()
+                                            print("🧹 Deleted matching Submit Solution message.")
+            except Exception as e:
+                print(f"⚠️ Error while cleaning up submit buttons: {e}")
+
         try:
             await message.delete()
         except discord.HTTPException:
             print("❌ Failed to delete the solution message.")
 
-        await interaction.followup.send("✅ Marked as solved, riddle data cleared, and user riddle count updated!", ephemeral=True)
+        await interaction.followup.send("✅ Marked as solved, riddle data cleared, related submit buttons cleaned, and user riddle count updated!", ephemeral=True)
 
     async def clear_riddle_data(self):
         empty = {
@@ -213,7 +230,6 @@ class VoteSuccessButton(discord.ui.Button):
                 else:
                     print(f"❌ Failed to update: {put_resp.status}")
 
-                    
 
 class VoteFailButton(discord.ui.Button):
     def __init__(self):
