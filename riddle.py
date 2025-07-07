@@ -1,19 +1,135 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Modal, TextInput
+from discord.ui import View, Button, Modal, TextInput
+from discord import Interaction
+
 import aiohttp
 import logging
 from typing import Optional
 
 # 🔐 JSONBin Configuration
 JSONBIN_BIN_ID = "685442458a456b7966b13207"
+SOLVED_BIN_ID = "686699c18960c979a5b67e34"
+SOLVED_BIN_URL = f"https://api.jsonbin.io/v3/b/{SOLVED_BIN_ID}"
 JSONBIN_API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 JSONBIN_BASE_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 HEADERS = {
     "X-Master-Key": JSONBIN_API_KEY,
     "Content-Type": "application/json"
 }
+
+
+from discord.ui import View, Button
+from discord import Interaction
+
+class ChampionsView(View):
+    def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None):
+        super().__init__(timeout=60)
+        self.entries = entries
+        self.page = page
+        self.max_page = (len(entries) - 1) // 10
+        self.guild = guild
+
+        self.prev.disabled = self.page <= 0
+        self.next.disabled = self.page >= self.max_page
+
+    async def get_page_embed(self):
+        start = self.page * 10
+        end = start + 10
+        page_entries = self.entries[start:end]
+
+        embed = discord.Embed(
+            title="🏆 Riddle Champions",
+            description=f"Page {self.page + 1} of {self.max_page + 1}",
+            color=discord.Color.gold()
+        )
+
+        if not page_entries:
+            embed.description = "No data available."
+            return embed
+
+        # 👑 Top User mit Avatar
+        top_user_id = page_entries[0][0]
+        top_user = None
+
+        if self.guild:
+            try:
+                top_user = await self.guild.fetch_member(top_user_id)
+            except discord.NotFound:
+                try:
+                    top_user = await self.guild._state.client.fetch_user(top_user_id)  # 👈 Fallback!
+                except discord.HTTPException:
+                    pass
+
+        if top_user:
+            display_name = getattr(top_user, "display_name", top_user.name)
+            avatar_url = top_user.display_avatar.replace(size=1024).url  # 👈 Großes Avatarbild
+
+            embed.set_author(
+                name=f"Top: {top_user.name} ({display_name})",
+                icon_url=top_user.display_avatar.replace(size=128).url  # 👈 Kleiner Avatar oben
+            )
+            embed.set_image(url=avatar_url)  # 👑 Großes Bild unten
+        else:
+            embed.set_author(
+                name="Top: Unknown User",
+                icon_url=None
+            )
+
+        # 🧾 Einträge pro Seite
+        for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
+            name = f"<@{user_id}>"
+            display_name = f"<Unknown>"
+
+            if self.guild:
+                try:
+                    member = await self.guild.fetch_member(user_id)
+                except discord.NotFound:
+                    try:
+                        member = await self.guild._state.client.fetch_user(user_id)
+                    except discord.HTTPException:
+                        member = None
+
+                if member:
+                    display_name = f"{member.name} ({getattr(member, 'display_name', member.name)})"
+                    name = member.mention
+
+            embed.add_field(
+                name=f"**{i}.** {display_name}",
+                value=f"{name}\nSolved: {solved}",
+                inline=False
+            )
+
+        # 🏰 Footer mit Gilde
+        if self.guild:
+            embed.set_footer(
+                text=f"Guild: {self.guild.name}",
+                icon_url=self.guild.icon.url if self.guild.icon else None
+            )
+
+        return embed
+
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction: Interaction, button: Button):
+        if self.page > 0:
+            self.page -= 1
+            self.prev.disabled = self.page <= 0
+            self.next.disabled = False
+            embed = await self.get_page_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: Interaction, button: Button):
+        if self.page < self.max_page:
+            self.page += 1
+            self.next.disabled = self.page >= self.max_page
+            self.prev.disabled = False
+            embed = await self.get_page_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -108,6 +224,44 @@ class RiddleEditor(commands.Cog):
             except aiohttp.ClientError as e:
                 logger.exception("Network error while loading:")
                 await interaction.response.send_message(f"❌ Network error while loading: {e}", ephemeral=True)
+
+
+    @app_commands.command(name="riddle_champ", description="Show the top users by solved riddles.")
+    @app_commands.describe(visible="Show publicly in channel or only to you (default: False)")
+    async def riddle_champ(self, interaction: discord.Interaction, visible: Optional[bool] = False):
+        """Show leaderboard of top users by solved riddles."""
+
+        await interaction.response.defer(ephemeral=not visible)
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as resp:
+                    if resp.status != 200:
+                        await interaction.followup.send("❌ Failed to load solved riddles data.", ephemeral=True)
+                        return
+                    data = await resp.json()
+            except aiohttp.ClientError as e:
+                await interaction.followup.send(f"❌ Network error: {e}", ephemeral=True)
+                return
+
+        # ⛏️ Direkt auf das JSON zugreifen, kein "record"
+        raw_data = data.get("record", data)  # Falls doch mal ein record drin ist
+
+        entries = []
+        for uid, stats in raw_data.items():
+            solved = stats.get("solved_riddles", 0)
+            entries.append((int(uid), solved))
+
+        entries.sort(key=lambda x: x[1], reverse=True)
+
+        if not entries:
+            await interaction.followup.send("No champions yet!", ephemeral=True)
+            return
+
+        view = ChampionsView(entries, guild=interaction.guild)
+        embed = await view.get_page_embed()
+        await interaction.followup.send(embed=embed, view=view, ephemeral=not visible)
+
 
 
 # 🚀 Setup
