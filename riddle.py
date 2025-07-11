@@ -28,15 +28,17 @@ class ChampionsView(View):
         super().__init__(timeout=60)
         self.entries = entries
         self.page = page
-        self.max_page = (len(entries) - 1) // 10
         self.guild = guild
+
+        self.entries_per_page = 5
+        self.max_page = (len(entries) - 1) // self.entries_per_page
 
         self.prev.disabled = self.page <= 0
         self.next.disabled = self.page >= self.max_page
 
     async def get_page_embed(self):
-        start = self.page * 10
-        end = start + 10
+        start = self.page * self.entries_per_page
+        end = start + self.entries_per_page
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
@@ -49,38 +51,35 @@ class ChampionsView(View):
             embed.description = "No data available."
             return embed
 
-        # 👑 Top User mit Avatar
-        top_user_id = page_entries[0][0]
-        top_user = None
+        # 👑 Top User mit Thumbnail-Avatar (nur Seite 1)
+        if self.page == 0:
+            top_user_id = page_entries[0][0]
+            top_user = None
 
-        if self.guild:
-            try:
-                top_user = await self.guild.fetch_member(top_user_id)
-            except discord.NotFound:
+            if self.guild:
                 try:
-                    top_user = await self.guild._state.client.fetch_user(top_user_id)  # 👈 Fallback!
-                except discord.HTTPException:
-                    pass
+                    top_user = await self.guild.fetch_member(top_user_id)
+                except discord.NotFound:
+                    try:
+                        top_user = await self.guild._state.client.fetch_user(top_user_id)
+                    except discord.HTTPException:
+                        pass
 
-        if top_user:
-            display_name = getattr(top_user, "display_name", top_user.name)
-            avatar_url = top_user.display_avatar.replace(size=1024).url  # 👈 Großes Avatarbild
+            if top_user:
+                display_name = getattr(top_user, "display_name", top_user.name)
+                avatar_url = top_user.display_avatar.replace(size=64).url
+                embed.set_author(
+                    name=f"Top: {top_user.name} ({display_name})",
+                    icon_url=avatar_url
+                )
+                embed.set_thumbnail(url=avatar_url)
+            else:
+                embed.set_author(name="Top: Unknown User", icon_url=None)
 
-            embed.set_author(
-                name=f"Top: {top_user.name} ({display_name})",
-                icon_url=top_user.display_avatar.replace(size=128).url  # 👈 Kleiner Avatar oben
-            )
-            embed.set_image(url=avatar_url)  # 👑 Großes Bild unten
-        else:
-            embed.set_author(
-                name="Top: Unknown User",
-                icon_url=None
-            )
-
-        # 🧾 Einträge pro Seite
+        # 🧾 Formatierte Platzierungen
         for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
-            name = f"<@{user_id}>"
-            display_name = f"<Unknown>"
+            mention = f"<@{user_id}>"
+            display_name = "<Unknown>"
 
             if self.guild:
                 try:
@@ -90,16 +89,18 @@ class ChampionsView(View):
                         member = await self.guild._state.client.fetch_user(user_id)
                     except discord.HTTPException:
                         member = None
-
                 if member:
-                    display_name = f"{member.name} ({getattr(member, 'display_name', member.name)})"
-                    name = member.mention
+                    display_name = member.name
 
             embed.add_field(
-                name=f"**{i}.** {display_name}",
-                value=f"{name}\nSolved: {solved}",
+                name=f"**{i}.** {display_name} / {mention}",
+                value=f"*Solved riddles: {solved}*",
                 inline=False
             )
+
+        return embed
+
+
 
         # 🏰 Footer mit Gilde
         if self.guild:
