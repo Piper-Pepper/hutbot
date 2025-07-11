@@ -77,9 +77,10 @@ class ChampionsView(View):
                 embed.set_author(name="Top: Unknown User", icon_url=None)
 
 # 🧾 Formatierte Platzierungen
+        # 🧾 Formatierte Platzierungen
         for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
             display_name = "<Unknown>"
-            mention = f"<@{user_id}>"  # fallback, falls Member nicht geladen wird
+            mention = f"<@{user_id}>"  # Fallback für Notfälle
 
             member = None
             if self.guild:
@@ -93,13 +94,14 @@ class ChampionsView(View):
 
             if member:
                 display_name = member.display_name
-                mention = member.mention  # ✅ echtes Discord-Mention, formatiert
+                mention = member.mention  # ✅ das ist die klickbare @Mention
 
             embed.add_field(
                 name=f"**{i}.** {display_name} / {mention}",
                 value=f"*Solved riddles: {solved}*",
                 inline=False
             )
+
 
 
         return embed
