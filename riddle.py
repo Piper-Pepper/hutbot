@@ -69,18 +69,19 @@ class ChampionsView(View):
                 display_name = getattr(top_user, "display_name", top_user.name)
                 avatar_url = top_user.display_avatar.replace(size=64).url
                 embed.set_author(
-                    name=f"Top: {top_user.name} ({display_name})",
+                    name=f"🧩Riddle Master No.1: {top_user.name} ({display_name})",
                     icon_url=avatar_url
                 )
                 embed.set_thumbnail(url=avatar_url)
             else:
                 embed.set_author(name="Top: Unknown User", icon_url=None)
 
-        # 🧾 Formatierte Platzierungen
+# 🧾 Formatierte Platzierungen
         for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
-            mention = f"<@{user_id}>"
             display_name = "<Unknown>"
+            mention = f"<@{user_id}>"  # fallback, falls Member nicht geladen wird
 
+            member = None
             if self.guild:
                 try:
                     member = await self.guild.fetch_member(user_id)
@@ -88,15 +89,18 @@ class ChampionsView(View):
                     try:
                         member = await self.guild._state.client.fetch_user(user_id)
                     except discord.HTTPException:
-                        member = None
-                if member:
-                    display_name = member.name
+                        pass
+
+            if member:
+                display_name = member.display_name
+                mention = member.mention  # ✅ echtes Discord-Mention, formatiert
 
             embed.add_field(
                 name=f"**{i}.** {display_name} / {mention}",
                 value=f"*Solved riddles: {solved}*",
                 inline=False
             )
+
 
         return embed
 
