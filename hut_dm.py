@@ -65,7 +65,7 @@ class NavButton(Button):
 
 class PaginationView(View):
     def __init__(self, members: list[discord.Member], page: int = 0, image_url: Optional[str] = None):
-        super().__init__(timeout=120)
+        super().__init__(timeout=None)
         self.members = members
         self.page = page
         self.total_pages = (len(members) - 1) // PAGE_SIZE + 1
