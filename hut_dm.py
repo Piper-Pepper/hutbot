@@ -3,12 +3,13 @@ from discord.ext import commands
 from discord import app_commands
 from discord.ui import View, Button, Modal, TextInput
 from typing import Optional
+from datetime import datetime, timezone
 
 ROLE_ID = 1387850018471284760  # Rolle "DM open"
 PAGE_SIZE = 20  # 20 Buttons pro Seite
 
-# Hier kannst du Footer-Icon-URL und Text anpassen:
-FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"  # Beispiel: GitHub Icon
+# Footer
+FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"
 FOOTER_TEXT = "Hut DM List"
 
 class DMModal(Modal, title="Send a DM"):
@@ -35,7 +36,13 @@ class DMModal(Modal, title="Send a DM"):
 
 class MemberButton(Button):
     def __init__(self, user: discord.Member):
-        super().__init__(label=user.display_name, style=discord.ButtonStyle.primary)
+        days_on_server = (datetime.now(timezone.utc) - user.joined_at).days if user.joined_at else 0
+        # Button label mit 📩, Name und Tagen kursiv
+        label = f"📩 {user.display_name} *{days_on_server}d*"
+        # Achtung: Button Label darf max 80 chars sein, kürze falls nötig
+        if len(label) > 80:
+            label = label[:77] + "..."
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
@@ -51,10 +58,7 @@ class NavButton(Button):
         if not isinstance(view, PaginationView):
             return
         new_view = PaginationView(view.members, self.target_page)
-        
-        # Update Embed mit Footer und Seitennummer
         embed = new_view.create_embed()
-        
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
 
@@ -73,11 +77,10 @@ class PaginationView(View):
         start = self.page * PAGE_SIZE
         end = start + PAGE_SIZE
 
-        # MemberButtons ohne row, Discord legt Layout automatisch
         for member in self.members[start:end]:
             self.add_item(MemberButton(member))
 
-        nav_row = 4  # Navigation unten in Zeile 4 (Discord erlaubt 0-4 Reihen)
+        nav_row = 4
         if self.total_pages > 1:
             if self.page > 0:
                 self.add_item(NavButton("⬅️ Previous", self.page - 1, row=nav_row))
@@ -85,13 +88,11 @@ class PaginationView(View):
                 self.add_item(NavButton("Next ➡️", self.page + 1, row=nav_row))
 
     def create_embed(self) -> discord.Embed:
-        title = "DM Open Members"
+        title = "📫 DM Open Members"
         embed = discord.Embed(
             title=title,
             color=discord.Color.green()
         )
-
-        # Footer mit Icon und Text + Seitennummer
         embed.set_footer(
             text=f"{FOOTER_TEXT} — Page {self.page + 1}/{self.total_pages}",
             icon_url=FOOTER_ICON_URL
@@ -125,18 +126,27 @@ class HutDM(commands.Cog):
     ):
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("❌ This command can only be used inside a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ This command can only be used inside a server.",
+                ephemeral=True
+            )
             return
 
         role = guild.get_role(ROLE_ID)
         if not role:
-            await interaction.response.send_message("❌ DM open role not found on this server.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ DM open role not found on this server.",
+                ephemeral=True
+            )
             return
 
         members = [m for m in (role.members if open else guild.members) if not m.bot]
 
         if not members:
-            await interaction.response.send_message("No members found matching the criteria.", ephemeral=True)
+            await interaction.response.send_message(
+                "No members found matching the criteria.",
+                ephemeral=True
+            )
             return
 
         members = sorted(members, key=lambda m: m.display_name.lower())
