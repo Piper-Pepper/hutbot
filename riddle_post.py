@@ -547,6 +547,22 @@ class RiddleCog(commands.Cog):
         solved_embed.set_image(url=solution_url)
         solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+# ... vorhergehender Code bleibt gleich ...
+
+        # ➕ Optional: Mention Group (falls vorhanden)
+        button_id = riddle_data.get("button-id")
+        mention_group = None
+
+        if button_id and interaction.guild:
+            role = interaction.guild.get_role(int(button_id))
+            if role:
+                mention_group = role.mention
+            else:
+                mention_group = f"(Role ID: {button_id})"
+
+        if mention_group:
+            solved_embed.add_field(name="📣 Mention Group", value=mention_group, inline=False)
+
         # Antwort senden – alles nur für den Benutzer sichtbar
         await interaction.followup.send(
             content="🧪 Here is your private riddle preview:",
