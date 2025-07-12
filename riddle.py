@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import View, Button, Modal, TextInput
 from discord import Interaction
+from discord import Role
 
 import aiohttp
 import logging
@@ -250,14 +251,15 @@ class RiddleEditor(commands.Cog):
     @app_commands.command(name="riddle_champ", description="Show the top users by solved riddles.")
     @app_commands.describe(
         visible="Show publicly in channel or only to you (default: False)",
-        image="Optional image URL to display in the embed (default: sexy riddle pic)"
+        image="Optional image URL to display in the embed (default: sexy riddle pic)",
+        mention="Mention an additional role when showing the leaderboard"
     )
-
     async def riddle_champ(
         self,
         interaction: discord.Interaction,
         visible: Optional[bool] = False,
         image: Optional[str] = None,
+        mention: Optional[discord.Role] = None,
     ):
         """Show leaderboard of top users by solved riddles."""
         await interaction.response.defer(ephemeral=not visible)
@@ -284,10 +286,16 @@ class RiddleEditor(commands.Cog):
         image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
         view = ChampionsView(entries, guild=interaction.guild, image_url=image_url)
         embed = await view.get_page_embed()
+
+        # 🎯 Wenn sichtbar + Role Mention -> schick ein Ping vor dem Embed
+        if visible:
+            mentions = [f"<@&1380610400416043089>"]
+            if mention:
+                mentions.append(mention.mention)
+            mention_text = " ".join(mentions)
+            await interaction.followup.send(content=mention_text, ephemeral=False)
+
         await interaction.followup.send(embed=embed, view=view, ephemeral=not visible)
-
-
-
 
 # 🚀 Setup
 async def setup(bot: commands.Bot):
