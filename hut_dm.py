@@ -51,6 +51,8 @@ class NavButton(Button):
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
 
+PAGE_SIZE = 4  # 4 Buttons pro Seite
+
 class PaginationView(View):
     def __init__(self, members: list[discord.Member], page: int = 0):
         super().__init__(timeout=120)
@@ -65,10 +67,11 @@ class PaginationView(View):
 
         start = self.page * PAGE_SIZE
         end = start + PAGE_SIZE
+        # Buttons in rows 0,1,2,3 jeweils einzeln
         for i, member in enumerate(self.members[start:end]):
             self.add_item(MemberButton(member, row=i))
 
-        nav_row = PAGE_SIZE if PAGE_SIZE <= 4 else 4  # Fallback für sicher platzierte Navigation
+        nav_row = 4  # Navigation unten in Row 4 (Discord erlaubt max. 5 Reihen: 0-4)
         if self.total_pages > 1:
             if self.page > 0:
                 self.add_item(NavButton("⬅️ Previous", self.page - 1, row=nav_row))
