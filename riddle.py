@@ -110,7 +110,7 @@ class ChampionsView(View):
                     pass
 
             embed.add_field(
-                name=f"**{i}.** {display_name} / {username}",
+                name=f"**{i}.** {display_name}\n*({username})*",
                 value=f"*Solved riddles: {solved}*",
                 inline=False
             )
