@@ -5,14 +5,15 @@ from discord.ui import View, Button, Modal, TextInput
 from typing import Optional
 
 ROLE_ID = 1387850018471284760  # Rolle "DM open"
+PAGE_SIZE = 8  # Max. Buttons pro Seite
 
 class DMModal(Modal, title="Send a DM"):
     def __init__(self, target_user: discord.User):
         super().__init__()
         self.target_user = target_user
         self.message = TextInput(
-            label="Your message", 
-            style=discord.TextStyle.paragraph, 
+            label="Your message",
+            style=discord.TextStyle.paragraph,
             required=True
         )
         self.add_item(self.message)
@@ -29,29 +30,55 @@ class DMModal(Modal, title="Send a DM"):
             )
 
 class MemberButton(Button):
-    def __init__(self, user: discord.Member):
-        # Include discriminator to help distinguish similar names
-        label = f"{user.display_name} ({user.discriminator})"
-        super().__init__(label=label, style=discord.ButtonStyle.primary)
+    def __init__(self, user: discord.Member, row: int = None):
+        super().__init__(label=user.display_name, style=discord.ButtonStyle.primary, row=row)
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(DMModal(self.user))
 
-class DMListView(View):
-    def __init__(self, members: list[discord.Member]):
-        super().__init__(timeout=120)  # 2 Minuten Timeout
+class NavButton(Button):
+    def __init__(self, label: str, target_page: int, row: int = None):
+        super().__init__(label=label, style=discord.ButtonStyle.secondary, row=row)
+        self.target_page = target_page
 
-        # Trim to Discord's 25-component limit
-        members = members[:25]
-        for member in members:
-            self.add_item(MemberButton(member))
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if not isinstance(view, PaginationView):
+            return
+        new_view = PaginationView(view.members, self.target_page)
+        embed = view.message.embeds[0] if view.message and view.message.embeds else None
+        await interaction.response.edit_message(embed=embed, view=new_view)
+        new_view.message = await interaction.original_response()
+
+class PaginationView(View):
+    def __init__(self, members: list[discord.Member], page: int = 0):
+        super().__init__(timeout=120)
+        self.members = members
+        self.page = page
+        self.total_pages = (len(members) - 1) // PAGE_SIZE + 1
+        self.message: Optional[discord.Message] = None
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.clear_items()
+
+        start = self.page * PAGE_SIZE
+        end = start + PAGE_SIZE
+        for i, member in enumerate(self.members[start:end]):
+            self.add_item(MemberButton(member, row=i))
+
+        nav_row = PAGE_SIZE if PAGE_SIZE <= 4 else 4  # Fallback für sicher platzierte Navigation
+        if self.total_pages > 1:
+            if self.page > 0:
+                self.add_item(NavButton("⬅️ Previous", self.page - 1, row=nav_row))
+            if self.page < self.total_pages - 1:
+                self.add_item(NavButton("Next ➡️", self.page + 1, row=nav_row))
 
 class HutDM(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-        # Command group registration
         self.hut_dm_group = app_commands.Group(
             name="hut_dm",
             description="🛖📬Hut DM commands"
@@ -75,30 +102,18 @@ class HutDM(commands.Cog):
     ):
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message(
-                "❌ This command can only be used inside a server.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ This command can only be used inside a server.", ephemeral=True)
             return
 
         role = guild.get_role(ROLE_ID)
         if not role:
-            await interaction.response.send_message(
-                "❌ DM open role not found on this server.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ DM open role not found on this server.", ephemeral=True)
             return
 
-        if open:
-            members = [m for m in role.members if not m.bot]
-        else:
-            members = [m for m in guild.members if not m.bot]
+        members = [m for m in (role.members if open else guild.members) if not m.bot]
 
         if not members:
-            await interaction.response.send_message(
-                "No members found matching the criteria.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("No members found matching the criteria.", ephemeral=True)
             return
 
         members = sorted(members, key=lambda m: m.display_name.lower())
@@ -110,11 +125,9 @@ class HutDM(commands.Cog):
         if image_url:
             embed.set_image(url=image_url)
 
-        await interaction.response.send_message(
-            embed=embed,
-            view=DMListView(members),
-            ephemeral=True
-        )
+        view = PaginationView(members, page=0)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HutDM(bot))
