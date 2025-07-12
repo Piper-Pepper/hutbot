@@ -69,7 +69,7 @@ class ChampionsView(View):
                 display_name = getattr(top_user, "display_name", top_user.name)
                 avatar_url = top_user.display_avatar.replace(size=64).url
                 embed.set_author(
-                    name=f"🧩Riddle Master No.1: {top_user.name} ({display_name})",
+                    name=f"**👑Riddle🧩Master No.1**: {top_user.name} ({display_name})",
                     icon_url=avatar_url
                 )
                 embed.set_thumbnail(url=avatar_url)
@@ -111,7 +111,7 @@ class ChampionsView(View):
 
             embed.add_field(
                 name=f"**{i}.** {display_name}\n*({username})*",
-                value=f"*Solved riddles: {solved}*",
+                value=f"*🧩solved: {solved}*",
                 inline=False
             )
 
