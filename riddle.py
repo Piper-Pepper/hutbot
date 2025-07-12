@@ -24,14 +24,16 @@ from discord.ui import View, Button
 from discord import Interaction
 
 class ChampionsView(View):
-    def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None):
-        super().__init__(timeout=60)
+    def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None, image_url: Optional[str] = None):
+        super().__init__(timeout=none)
         self.entries = entries
         self.page = page
         self.guild = guild
-
         self.entries_per_page = 5
         self.max_page = (len(entries) - 1) // self.entries_per_page
+
+        self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
+        self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058755633772554/riddle_crown.jpg"
 
         self.prev.disabled = self.page <= 0
         self.next.disabled = self.page >= self.max_page
@@ -49,78 +51,76 @@ class ChampionsView(View):
 
         if not page_entries:
             embed.description = "No data available."
-            return embed
+        else:
+            # 👑 Top User mit Thumbnail-Avatar (nur Seite 1)
+            if self.page == 0:
+                top_user_id = page_entries[0][0]
+                top_user = None
 
-        # 👑 Top User mit Thumbnail-Avatar (nur Seite 1)
-        if self.page == 0:
-            top_user_id = page_entries[0][0]
-            top_user = None
-
-            if self.guild:
-                try:
-                    top_user = await self.guild.fetch_member(top_user_id)
-                except discord.NotFound:
+                if self.guild:
                     try:
-                        top_user = await self.guild._state.client.fetch_user(top_user_id)
-                    except discord.HTTPException:
-                        pass
+                        top_user = await self.guild.fetch_member(top_user_id)
+                    except discord.NotFound:
+                        try:
+                            top_user = await self.guild._state.client.fetch_user(top_user_id)
+                        except discord.HTTPException:
+                            pass
 
-            if top_user:
-                display_name = getattr(top_user, "display_name", top_user.name)
-                avatar_url = top_user.display_avatar.replace(size=64).url
-                embed.set_author(
-                    name=f"👑Riddle🧩Master No.1: {top_user.name} ({display_name})",
-                    icon_url=avatar_url
-                )
-                embed.set_thumbnail(url=avatar_url)
-            else:
-                embed.set_author(name="Top: Unknown User", icon_url=None)
-
-        # 🧾 Formatierte Platzierungen
-        for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
-            display_name = "<Unknown>"
-            username = "<Unknown>"
-
-            member = None
-            if self.guild:
-                try:
-                    member = await self.guild.fetch_member(user_id)
-                except discord.NotFound:
-                    try:
-                        member = await self.guild._state.client.fetch_user(user_id)
-                    except discord.HTTPException:
-                        pass
-
-            user = member or None
-
-            if user:
-                display_name = user.display_name
-                if user.discriminator == "0":
-                    username = user.name  # neuer Discord-Name (ohne Tag)
+                if top_user:
+                    display_name = getattr(top_user, "display_name", top_user.name)
+                    avatar_url = top_user.display_avatar.replace(size=64).url
+                    embed.set_author(
+                        name=f"👑Riddle🧩Master No.1: {top_user.name} ({display_name})",
+                        icon_url=avatar_url
+                    )
+                    embed.set_thumbnail(url=avatar_url)
                 else:
-                    username = f"{user.name}#{user.discriminator}"  # klassisch
-            else:
-                try:
-                    user = await self.bot.fetch_user(user_id)
+                    embed.set_author(name="Top: Unknown User", icon_url=None)
+
+            # 🧾 Formatierte Platzierungen
+            for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
+                display_name = "<Unknown>"
+                username = "<Unknown>"
+
+                member = None
+                if self.guild:
+                    try:
+                        member = await self.guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        try:
+                            member = await self.guild._state.client.fetch_user(user_id)
+                        except discord.HTTPException:
+                            pass
+
+                user = member or None
+
+                if user:
+                    display_name = user.display_name
                     if user.discriminator == "0":
                         username = user.name
                     else:
                         username = f"{user.name}#{user.discriminator}"
-                except discord.HTTPException:
-                    pass
+                else:
+                    try:
+                        user = await self.guild._state.client.fetch_user(user_id)
+                        if user.discriminator == "0":
+                            username = user.name
+                        else:
+                            username = f"{user.name}#{user.discriminator}"
+                    except discord.HTTPException:
+                        pass
 
-            embed.add_field(
-                name=f"**{i}.** {display_name}\n*({username})*",
-                value=f"*🧩solved: {solved}*",
-                inline=False
-            )
+                embed.add_field(
+                    name=f"🎖️**{i}.** {display_name}\n*({username})*",
+                    value=f"*🧩solved: {solved}*",
+                    inline=False
+                )
 
-
-
-
-        return embed
-
-
+        # 🎨 Dynamisches Bild je nach Seite
+        if self.page == 0:
+            embed.set_image(url=self.page1_image_url)
+        else:
+            embed.set_image(url=self.default_image_url)
 
         # 🏰 Footer mit Gilde
         if self.guild:
@@ -248,10 +248,17 @@ class RiddleEditor(commands.Cog):
 
 
     @app_commands.command(name="riddle_champ", description="Show the top users by solved riddles.")
-    @app_commands.describe(visible="Show publicly in channel or only to you (default: False)")
-    async def riddle_champ(self, interaction: discord.Interaction, visible: Optional[bool] = False):
+    @app_commands.describe(
+        visible="Show publicly in channel or only to you (default: False)",
+        image="Optional image URL to display in the embed (default: sexy riddle pic)"
+    )
+    async def riddle_champ(
+        self,
+        interaction: discord.Interaction,
+        visible: Optional[bool] = False,
+        image: Optional[str] = None,
+    ):
         """Show leaderboard of top users by solved riddles."""
-
         await interaction.response.defer(ephemeral=not visible)
 
         async with aiohttp.ClientSession() as session:
@@ -265,23 +272,19 @@ class RiddleEditor(commands.Cog):
                 await interaction.followup.send(f"❌ Network error: {e}", ephemeral=True)
                 return
 
-        # ⛏️ Direkt auf das JSON zugreifen, kein "record"
-        raw_data = data.get("record", data)  # Falls doch mal ein record drin ist
-
-        entries = []
-        for uid, stats in raw_data.items():
-            solved = stats.get("solved_riddles", 0)
-            entries.append((int(uid), solved))
-
+        raw_data = data.get("record", data)
+        entries = [(int(uid), stats.get("solved_riddles", 0)) for uid, stats in raw_data.items()]
         entries.sort(key=lambda x: x[1], reverse=True)
 
         if not entries:
             await interaction.followup.send("No champions yet!", ephemeral=True)
             return
 
-        view = ChampionsView(entries, guild=interaction.guild)
+        image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
+        view = ChampionsView(entries, guild=interaction.guild, image_url=image_url)
         embed = await view.get_page_embed()
         await interaction.followup.send(embed=embed, view=view, ephemeral=not visible)
+
 
 
 
