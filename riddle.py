@@ -25,7 +25,7 @@ from discord import Interaction
 
 class ChampionsView(View):
     def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None, image_url: Optional[str] = None):
-        super().__init__(timeout=none)
+        super().__init__(timeout=None)
         self.entries = entries
         self.page = page
         self.guild = guild
@@ -70,7 +70,7 @@ class ChampionsView(View):
                     display_name = getattr(top_user, "display_name", top_user.name)
                     avatar_url = top_user.display_avatar.replace(size=64).url
                     embed.set_author(
-                        name=f"👑Riddle🧩Master No.1: {top_user.name} ({display_name})",
+                        name=f"👑Riddle🧩Master #1: {top_user.name}\n({display_name})",
                         icon_url=avatar_url
                     )
                     embed.set_thumbnail(url=avatar_url)
@@ -252,6 +252,7 @@ class RiddleEditor(commands.Cog):
         visible="Show publicly in channel or only to you (default: False)",
         image="Optional image URL to display in the embed (default: sexy riddle pic)"
     )
+
     async def riddle_champ(
         self,
         interaction: discord.Interaction,
