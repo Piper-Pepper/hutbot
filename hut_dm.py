@@ -5,7 +5,11 @@ from discord.ui import View, Button, Modal, TextInput
 from typing import Optional
 
 ROLE_ID = 1387850018471284760  # Rolle "DM open"
-PAGE_SIZE = 8  # Max. Buttons pro Seite
+PAGE_SIZE = 20  # 20 Buttons pro Seite
+
+# Hier kannst du Footer-Icon-URL und Text anpassen:
+FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"  # Beispiel: GitHub Icon
+FOOTER_TEXT = "Hut DM List"
 
 class DMModal(Modal, title="Send a DM"):
     def __init__(self, target_user: discord.User):
@@ -30,15 +34,15 @@ class DMModal(Modal, title="Send a DM"):
             )
 
 class MemberButton(Button):
-    def __init__(self, user: discord.Member, row: int = None):
-        super().__init__(label=user.display_name, style=discord.ButtonStyle.primary, row=row)
+    def __init__(self, user: discord.Member):
+        super().__init__(label=user.display_name, style=discord.ButtonStyle.primary)
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(DMModal(self.user))
 
 class NavButton(Button):
-    def __init__(self, label: str, target_page: int, row: int = None):
+    def __init__(self, label: str, target_page: int, row: Optional[int] = None):
         super().__init__(label=label, style=discord.ButtonStyle.secondary, row=row)
         self.target_page = target_page
 
@@ -47,11 +51,12 @@ class NavButton(Button):
         if not isinstance(view, PaginationView):
             return
         new_view = PaginationView(view.members, self.target_page)
-        embed = view.message.embeds[0] if view.message and view.message.embeds else None
+        
+        # Update Embed mit Footer und Seitennummer
+        embed = new_view.create_embed()
+        
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
-
-PAGE_SIZE = 4  # 4 Buttons pro Seite
 
 class PaginationView(View):
     def __init__(self, members: list[discord.Member], page: int = 0):
@@ -67,16 +72,31 @@ class PaginationView(View):
 
         start = self.page * PAGE_SIZE
         end = start + PAGE_SIZE
-        # Buttons in rows 0,1,2,3 jeweils einzeln
-        for i, member in enumerate(self.members[start:end]):
-            self.add_item(MemberButton(member, row=i))
 
-        nav_row = 4  # Navigation unten in Row 4 (Discord erlaubt max. 5 Reihen: 0-4)
+        # MemberButtons ohne row, Discord legt Layout automatisch
+        for member in self.members[start:end]:
+            self.add_item(MemberButton(member))
+
+        nav_row = 4  # Navigation unten in Zeile 4 (Discord erlaubt 0-4 Reihen)
         if self.total_pages > 1:
             if self.page > 0:
                 self.add_item(NavButton("⬅️ Previous", self.page - 1, row=nav_row))
             if self.page < self.total_pages - 1:
                 self.add_item(NavButton("Next ➡️", self.page + 1, row=nav_row))
+
+    def create_embed(self) -> discord.Embed:
+        title = "DM Open Members"
+        embed = discord.Embed(
+            title=title,
+            color=discord.Color.green()
+        )
+
+        # Footer mit Icon und Text + Seitennummer
+        embed.set_footer(
+            text=f"{FOOTER_TEXT} — Page {self.page + 1}/{self.total_pages}",
+            icon_url=FOOTER_ICON_URL
+        )
+        return embed
 
 class HutDM(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -121,14 +141,11 @@ class HutDM(commands.Cog):
 
         members = sorted(members, key=lambda m: m.display_name.lower())
 
-        embed = discord.Embed(
-            title="DM Open Members" if open else "All Members (excluding bots)",
-            color=discord.Color.green()
-        )
+        view = PaginationView(members, page=0)
+        embed = view.create_embed()
         if image_url:
             embed.set_image(url=image_url)
 
-        view = PaginationView(members, page=0)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
 
