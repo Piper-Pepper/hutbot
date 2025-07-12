@@ -5,6 +5,7 @@ from typing import Optional
 import aiohttp
 from datetime import datetime
 import aiohttp
+import re
 
 
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
@@ -140,6 +141,22 @@ class VoteSuccessButton(discord.ui.Button):
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
+ 
+        # Link aus Lösung filtern
+        def extract_link(text):
+            match = re.search(r"(https?://\S+)", text or "")
+            if match:
+                link = match.group(1)
+                cleaned = text.replace(link, "").strip()
+                return cleaned, link
+            return text, None
+
+        # Cleaned Correct Solution + optionaler Link
+        clean_correct_solution, correct_link = extract_link(correct_solution)
+        correct_display = clean_correct_solution or "*None*"
+        if correct_link:
+            correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
+
         # ---------- Neues „Solved!“-Embed erzeugen ----------
         solved_embed = discord.Embed(
             title="🎉 Riddle Solved!",
@@ -149,13 +166,14 @@ class VoteSuccessButton(discord.ui.Button):
         solved_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
         solved_embed.add_field(name="🧩 Riddle",            value=riddle_text      or "*Unknown*", inline=False)
         solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution    or "*None*",    inline=False)
-        solved_embed.add_field(name="✅ Correct Solution",  value=correct_solution or "*None*",    inline=False)
+        solved_embed.add_field(name="✅ Correct Solution",  value=correct_display, inline=False)
         solved_embed.add_field(name="🏆 Award",             value=award           or "*None*",    inline=False)
         solved_embed.set_image(url=solution_url)
         solved_embed.set_footer(
             text=f"Guild: {interaction.guild.name}",
             icon_url=interaction.guild.icon.url if interaction.guild.icon else None
         )
+
 
         # ---------- Riddle‑Nachricht finden & updaten ----------
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
@@ -556,8 +574,22 @@ class RiddleCog(commands.Cog):
         )
         solved_embed.set_author(name="User#1234", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
         solved_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        solved_embed.add_field(name="🔍 Proposed Solution", value=riddle_data.get("solution", "*None*"), inline=False)
-        solved_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
+        raw_solution = riddle_data.get("solution", "*None*")
+        # Suche nach dem ersten http/https-Link im Lösungstext
+        match = re.search(r"(https?://\S+)", raw_solution)
+        solution_link = match.group(1) if match else None
+
+        # Lösungstext ohne den Link
+        cleaned_solution = raw_solution.replace(solution_link, "").strip() if solution_link else raw_solution
+
+        # Lösung + optionaler Link im neuen Format
+        proposed_value = cleaned_solution
+        if solution_link:
+            proposed_value += f"\n🔗 [🧠**MORE**]({solution_link})"
+
+        solved_embed.add_field(name="🔍 Proposed Solution", value="*Right Solution*", inline=False)
+        solved_embed.add_field(name="✅ Correct Solution", value=proposed_value or "*None*", inline=False)
+
         solved_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         if mention_group:
             solved_embed.add_field(name="📣 Mention Group", value=mention_group, inline=False)
