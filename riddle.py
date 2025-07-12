@@ -287,15 +287,21 @@ class RiddleEditor(commands.Cog):
         view = ChampionsView(entries, guild=interaction.guild, image_url=image_url)
         embed = await view.get_page_embed()
 
-        # 🎯 Wenn sichtbar + Role Mention -> schick ein Ping vor dem Embed
+        # Combine mention and embed in a single message
+        mention_text = ""
         if visible:
             mentions = [f"<@&1380610400416043089>"]
             if mention:
                 mentions.append(mention.mention)
             mention_text = " ".join(mentions)
-            await interaction.followup.send(content=mention_text, ephemeral=False)
 
-        await interaction.followup.send(embed=embed, view=view, ephemeral=not visible)
+        await interaction.followup.send(
+            content=mention_text or None,
+            embed=embed,
+            view=view,
+            ephemeral=not visible
+        )
+
 
 # 🚀 Setup
 async def setup(bot: commands.Bot):
