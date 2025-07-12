@@ -137,11 +137,13 @@ class VoteSuccessButton(discord.ui.Button):
                 data         = await response.json()
                 solution_url = data.get("record", {}).get("solution-url", "")
                 award        = data.get("record", {}).get("award", "*None*")
+                button_id    = data.get("record", {}).get("button-id", None)  # Role ID für Mention Group
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
- 
+        import re
+
         # Link aus Lösung filtern
         def extract_link(text):
             match = re.search(r"(https?://\S+)", text or "")
@@ -156,6 +158,34 @@ class VoteSuccessButton(discord.ui.Button):
         correct_display = clean_correct_solution or "*None*"
         if correct_link:
             correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
+
+        # Rollen-Mentions zusammensetzen
+        mentions = []
+
+        # Rolle aus button-id (falls vorhanden)
+        mention_group = None
+        if button_id and interaction.guild:
+            role = interaction.guild.get_role(int(button_id))
+            if role:
+                mention_group = role.mention
+                mentions.append(mention_group)
+
+        # RIDDLE_ROLE mention hinzufügen
+        riddle_role_mention = None
+        if interaction.guild:
+            if isinstance(RIDDLE_ROLE, int):
+                riddle_role = interaction.guild.get_role(RIDDLE_ROLE)
+            else:
+                riddle_role = RIDDLE_ROLE  # evtl Role-Objekt
+            if riddle_role:
+                riddle_role_mention = riddle_role.mention
+                mentions.append(riddle_role_mention)
+
+        # Submitter mention hinzufügen
+        if submitter:
+            mentions.append(submitter.mention)
+
+        content_msg = " ".join(mentions) + " 🎉 Congratulations!"
 
         # ---------- Neues „Solved!“-Embed erzeugen ----------
         solved_embed = discord.Embed(
@@ -173,6 +203,9 @@ class VoteSuccessButton(discord.ui.Button):
             text=f"Guild: {interaction.guild.name}",
             icon_url=interaction.guild.icon.url if interaction.guild.icon else None
         )
+
+        await interaction.followup.send(content=content_msg, embed=solved_embed, ephemeral=True)
+
 
 
         # ---------- Riddle‑Nachricht finden & updaten ----------
