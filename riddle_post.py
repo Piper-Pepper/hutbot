@@ -513,6 +513,16 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
             return
 
+        # ➕ Optional: Mention Group (falls vorhanden)
+        mention_group = None
+        button_id = riddle_data.get("button-id")
+        if button_id and interaction.guild:
+            role = interaction.guild.get_role(int(button_id))
+            if role:
+                mention_group = role.mention
+            else:
+                mention_group = f"(Role ID: {button_id})"
+
         # Image fallback
         image_url = riddle_data.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
         if not image_url.startswith("http"):
@@ -522,7 +532,7 @@ class RiddleCog(commands.Cog):
         if not solution_url.startswith("http"):
             solution_url = image_url
 
-        # Erstelle Riddle-Embed (ohne Pings)
+        # 🧠 Riddle Embed
         date_str = datetime.now().strftime("%Y/%m/%d")
         riddle_embed = discord.Embed(
             title=f"🧠 Goon Hut ℝ𝕚𝕕𝕕𝕝𝕖 𝕠𝕗 𝕥𝕙𝕖 𝔻𝕒𝕪\n{date_str}",
@@ -530,13 +540,18 @@ class RiddleCog(commands.Cog):
             color=discord.Color.blurple()
         )
         riddle_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "None"), inline=False)
+        if mention_group:
+            riddle_embed.add_field(name="📣 Mention Group", value=mention_group, inline=False)
         riddle_embed.set_image(url=image_url)
-        riddle_embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+        riddle_embed.set_footer(
+            text=f"{interaction.guild.name}",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
 
-        # Erstelle Gewinner-Embed (ohne Pings)
+        # 🎉 Solved Embed
         solved_embed = discord.Embed(
             title="🎉 Riddle Solved!",
-            description=f"**SomeUser** solved the riddle!",  # Platzhalter für Vorschau
+            description=f"**SomeUser** solved the riddle!",  # Platzhalter
             color=discord.Color.green()
         )
         solved_embed.set_author(name="User#1234", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
@@ -544,31 +559,21 @@ class RiddleCog(commands.Cog):
         solved_embed.add_field(name="🔍 Proposed Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         solved_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
         solved_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-        solved_embed.set_image(url=solution_url)
-        solved_embed.set_footer(text=f"Guild: {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
-
-# ... vorhergehender Code bleibt gleich ...
-
-        # ➕ Optional: Mention Group (falls vorhanden)
-        button_id = riddle_data.get("button-id")
-        mention_group = None
-
-        if button_id and interaction.guild:
-            role = interaction.guild.get_role(int(button_id))
-            if role:
-                mention_group = role.mention
-            else:
-                mention_group = f"(Role ID: {button_id})"
-
         if mention_group:
             solved_embed.add_field(name="📣 Mention Group", value=mention_group, inline=False)
+        solved_embed.set_image(url=solution_url)
+        solved_embed.set_footer(
+            text=f"Guild: {interaction.guild.name}",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
 
-        # Antwort senden – alles nur für den Benutzer sichtbar
+        # 📨 Antwort
         await interaction.followup.send(
             content="🧪 Here is your private riddle preview:",
             embeds=[riddle_embed, solved_embed],
             ephemeral=True
         )
+
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
