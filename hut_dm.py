@@ -12,6 +12,9 @@ PAGE_SIZE = 20  # 20 Buttons pro Seite
 FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"
 FOOTER_TEXT = "Hut DM List"
 
+# Fallback-Bild, wenn kein Bild angegeben wird
+DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1393738129734897725/dm_open2.jpg"
+
 class DMModal(Modal, title="Send a DM"):
     def __init__(self, target_user: discord.User):
         super().__init__()
@@ -37,9 +40,7 @@ class DMModal(Modal, title="Send a DM"):
 class MemberButton(Button):
     def __init__(self, user: discord.Member):
         days_on_server = (datetime.now(timezone.utc) - user.joined_at).days if user.joined_at else 0
-        # Button label mit 📩, Name und Tagen kursiv
         label = f"📩 {user.display_name} *{days_on_server}d*"
-        # Achtung: Button Label darf max 80 chars sein, kürze falls nötig
         if len(label) > 80:
             label = label[:77] + "..."
         super().__init__(label=label, style=discord.ButtonStyle.primary)
@@ -57,18 +58,19 @@ class NavButton(Button):
         view = self.view
         if not isinstance(view, PaginationView):
             return
-        new_view = PaginationView(view.members, self.target_page)
+        new_view = PaginationView(view.members, self.target_page, view.image_url)
         embed = new_view.create_embed()
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
 
 class PaginationView(View):
-    def __init__(self, members: list[discord.Member], page: int = 0):
+    def __init__(self, members: list[discord.Member], page: int = 0, image_url: Optional[str] = None):
         super().__init__(timeout=120)
         self.members = members
         self.page = page
         self.total_pages = (len(members) - 1) // PAGE_SIZE + 1
         self.message: Optional[discord.Message] = None
+        self.image_url = image_url
         self.update_buttons()
 
     def update_buttons(self):
@@ -88,15 +90,15 @@ class PaginationView(View):
                 self.add_item(NavButton("Next ➡️", self.page + 1, row=nav_row))
 
     def create_embed(self) -> discord.Embed:
-        title = "📫 DM Open Members"
         embed = discord.Embed(
-            title=title,
+            title="📫 DM Open Members",
             color=discord.Color.green()
         )
         embed.set_footer(
             text=f"{FOOTER_TEXT} — Page {self.page + 1}/{self.total_pages}",
             icon_url=FOOTER_ICON_URL
         )
+        embed.set_image(url=self.image_url or DEFAULT_IMAGE_URL)
         return embed
 
 class HutDM(commands.Cog):
@@ -109,7 +111,7 @@ class HutDM(commands.Cog):
         )
         self.hut_dm_group.command(
             name="list",
-            description="Show members with open DMs",
+            description="Show members with open DMs"
         )(self.hut_dm_list)
 
         bot.tree.add_command(self.hut_dm_group)
@@ -151,10 +153,8 @@ class HutDM(commands.Cog):
 
         members = sorted(members, key=lambda m: m.display_name.lower())
 
-        view = PaginationView(members, page=0)
+        view = PaginationView(members, page=0, image_url=image_url)
         embed = view.create_embed()
-        if image_url:
-            embed.set_image(url=image_url)
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
