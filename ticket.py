@@ -171,7 +171,7 @@ class TicketCog(commands.Cog):
                 print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
         else:
             view = TicketView(self.bot, BUTTON_CHANNEL_ID)
-            msg = await channel.send("Click the button below to open a ticket:", view=view)
+            msg = await channel.send("So.. what do you want from Ms Pepper exactly🫦?", view=view)
             data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
             save_buttons_data(data)
             print("ℹ️ View added without message ID (no persistent button)")
