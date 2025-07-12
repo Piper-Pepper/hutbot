@@ -162,7 +162,7 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
         self.guild = guild
 
         self.text = TextInput(label="Text", default=data.get("text", ""), required=True, style=discord.TextStyle.paragraph)
-        self.solution = TextInput(label="Solution", default=data.get("solution", ""), required=True)
+        self.solution = TextInput(label="Solution", default=data.get("solution", ""), required=True, style=discord.TextStyle.paragraph)
         self.award = TextInput(label="Award", default=data.get("award", ""), required=False)
         self.image_url = TextInput(label="Image URL", default=data.get("image-url", ""), required=False)
         self.solution_url = TextInput(label="Solution Image URL", default=data.get("solution-url", ""), required=False)
