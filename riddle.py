@@ -76,11 +76,10 @@ class ChampionsView(View):
             else:
                 embed.set_author(name="Top: Unknown User", icon_url=None)
 
-# 🧾 Formatierte Platzierungen
         # 🧾 Formatierte Platzierungen
         for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
             display_name = "<Unknown>"
-            mention = f"<@{user_id}>"  # Fallback für Notfälle
+            username = "<Unknown>"
 
             member = None
             if self.guild:
@@ -92,15 +91,30 @@ class ChampionsView(View):
                     except discord.HTTPException:
                         pass
 
-            if member:
-                display_name = member.display_name
-                mention = member.mention  # ✅ das ist die klickbare @Mention
+            user = member or None
+
+            if user:
+                display_name = user.display_name
+                if user.discriminator == "0":
+                    username = user.name  # neuer Discord-Name (ohne Tag)
+                else:
+                    username = f"{user.name}#{user.discriminator}"  # klassisch
+            else:
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                    if user.discriminator == "0":
+                        username = user.name
+                    else:
+                        username = f"{user.name}#{user.discriminator}"
+                except discord.HTTPException:
+                    pass
 
             embed.add_field(
-                name=f"**{i}.** {display_name} / {mention}",
+                name=f"**{i}.** {display_name} / {username}",
                 value=f"*Solved riddles: {solved}*",
                 inline=False
             )
+
 
 
 
