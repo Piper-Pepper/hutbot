@@ -12,7 +12,7 @@ PAGE_SIZE = 20  # 20 Buttons pro Seite
 FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"
 FOOTER_TEXT = "Hut DM List"
 
-# Fallback-Bild, wenn kein Bild angegeben wird
+# Fallback-Bild
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1393738129734897725/dm_open2.jpg"
 
 
@@ -122,16 +122,16 @@ class HutDM(commands.Cog):
         bot.tree.add_command(self.hut_dm_group)
 
     @app_commands.describe(
-        open="Only show members with the DM role (default: True)",
+        visible="Show publicly in channel or only to you (default: False)",
         image_url="Optional image to decorate the embed",
-        visible="Show publicly in channel or only to you (default: False)"
+        mention="Optional role(s) to ping above the list"
     )
     async def hut_dm_list(
         self,
         interaction: discord.Interaction,
-        open: Optional[bool] = True,
+        visible: Optional[bool] = False,
         image_url: Optional[str] = None,
-        visible: Optional[bool] = False
+        mention: Optional[discord.Role] = None
     ):
         guild = interaction.guild
         if not guild:
@@ -149,11 +149,10 @@ class HutDM(commands.Cog):
             )
             return
 
-        members = [m for m in (role.members if open else guild.members) if not m.bot]
-
+        members = [m for m in role.members if not m.bot]
         if not members:
             await interaction.response.send_message(
-                "No members found matching the criteria.",
+                "No DM-open members found.",
                 ephemeral=True
             )
             return
@@ -163,7 +162,9 @@ class HutDM(commands.Cog):
         view = PaginationView(members, page=0, image_url=image_url)
         embed = view.create_embed()
 
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=not visible)
+        content = f"{mention.mention}" if mention else None
+
+        await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=not visible)
         view.message = await interaction.original_response()
 
 
