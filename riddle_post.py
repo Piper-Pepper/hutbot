@@ -19,6 +19,7 @@ SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösu
 RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
+REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle commands
 
 
 
@@ -410,8 +411,8 @@ class RiddleCog(commands.Cog):
 
     from datetime import datetime
 
-
     @app_commands.command(name="riddle_close", description="Close the current riddle and mark it as unsolved.")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
     async def riddle_close(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -479,13 +480,9 @@ class RiddleCog(commands.Cog):
         async with aiohttp.ClientSession() as session:
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
-    @app_commands.command(
-    name="riddle_post",
-    description="Post the current riddle in a selected channel."
-    )
-    @app_commands.describe(
-        ping_role="Optional role to ping along with the riddle group"
-    )
+    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel.")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    @app_commands.describe(ping_role="Optional role to ping along with the riddle group")
     async def riddle_post(
         self,
         interaction: discord.Interaction,
@@ -549,6 +546,7 @@ class RiddleCog(commands.Cog):
             await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
 
     @app_commands.command(name="riddle_view", description="View the current riddle and winner preview (private).")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
     async def riddle_view(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
