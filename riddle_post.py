@@ -15,7 +15,7 @@ ARCHIVE_BIN_URL = "https://api.jsonbin.io/v3/b/6869a6fa8960c979a5b7c527"
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
 
-RIDDLE_CHANNEL_ID = 1349697597232906292
+RIDDLE_CHANNEL_ID = 1346843244067160074
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle commands
@@ -130,28 +130,25 @@ class VoteSuccessButton(discord.ui.Button):
             await interaction.followup.send("❌ Couldn't find the original riddle data.", ephemeral=True)
             return
 
-        # ---------- Daten aus dem Embed ziehen ----------
-        riddle_text      = extract_from_embed(embed.description)
-        user_solution    = get_field_value(embed, "🧠 User's Answer")
+        # --- Daten aus dem Embed ziehen ---
+        riddle_text = extract_from_embed(embed.description)
+        user_solution = get_field_value(embed, "🧠 User's Answer")
         correct_solution = get_field_value(embed, "✅ Correct Solution")
-
-        # Who solved it?
         submitter_id_str = get_field_value(embed, "🆔 User ID")
-        submitter_id     = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
-        submitter        = await interaction.client.fetch_user(submitter_id)
+        submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
+        submitter = await interaction.client.fetch_user(submitter_id)
 
-        # ---------- Bild & Award aus Riddle‑Bin holen ----------
+        # --- Infos aus Riddle‑Bin laden ---
         async with aiohttp.ClientSession() as session:
             async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data         = await response.json()
+                data = await response.json()
                 solution_url = data.get("record", {}).get("solution-url", "")
-                award        = data.get("record", {}).get("award", "*None*")
-                button_id    = data.get("record", {}).get("button-id", None)  # Role ID für Mention Group
+                award = data.get("record", {}).get("award", "*None*")
+                button_id = data.get("record", {}).get("button-id")
 
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
-        # Link aus Lösung filtern
         def extract_link(text):
             match = re.search(r"(https?://\S+)", text or "")
             if match:
@@ -160,47 +157,34 @@ class VoteSuccessButton(discord.ui.Button):
                 return cleaned, link
             return text, None
 
-        # Cleaned Correct Solution + optionaler Link
+        # --- Lösung formatieren ---
         clean_correct_solution, correct_link = extract_link(correct_solution)
         correct_display = clean_correct_solution or "*None*"
         if correct_link:
             correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
 
-        # Rollen-Mentions zusammensetzen
+        # --- Mentions vorbereiten ---
         mentions = []
-
-        # Feste Rolle mit rein (1380610400416043089)
         if interaction.guild:
             fixed_role = interaction.guild.get_role(1380610400416043089)
-            if fixed_role and fixed_role.mention not in mentions:
+            if fixed_role:
                 mentions.append(fixed_role.mention)
 
-        # Rolle aus button-id (falls vorhanden)
-        mention_group = None
-        if button_id and interaction.guild:
-            role = interaction.guild.get_role(int(button_id))
-            if role and role.mention not in mentions:
-                mention_group = role.mention
-                mentions.append(mention_group)
+            if button_id:
+                role = interaction.guild.get_role(int(button_id))
+                if role:
+                    mentions.append(role.mention)
 
-        # RIDDLE_ROLE mention hinzufügen (bereits vorhanden im Original)
-        riddle_role_mention = None
-        if interaction.guild:
-            if isinstance(RIDDLE_ROLE, int):
-                riddle_role = interaction.guild.get_role(RIDDLE_ROLE)
-            else:
-                riddle_role = RIDDLE_ROLE  # evtl Role-Objekt
-            if riddle_role and riddle_role.mention not in mentions:
-                riddle_role_mention = riddle_role.mention
-                mentions.append(riddle_role_mention)
+            riddle_role = interaction.guild.get_role(RIDDLE_ROLE) if isinstance(RIDDLE_ROLE, int) else RIDDLE_ROLE
+            if riddle_role:
+                mentions.append(riddle_role.mention)
 
-        # Submitter mention hinzufügen (winner ping)
-        if submitter and submitter.mention not in mentions:
+        if submitter:
             mentions.append(submitter.mention)
 
         content_msg = " ".join(mentions) + " 🎉 Congratulations!"
 
-        # ---------- Neues „Solved!“-Embed erzeugen ----------
+        # --- Embed zusammenbauen ---
         solved_embed = discord.Embed(
             title="🎉 Riddle Solved!",
             description=f"**{submitter.mention}** solved the riddle!",
@@ -208,61 +192,48 @@ class VoteSuccessButton(discord.ui.Button):
         )
         solved_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
         solved_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
-        solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution    or "*None*",    inline=False)
-        solved_embed.add_field(name="✅ Correct Solution",  value=correct_display, inline=False)
-        solved_embed.add_field(name="🏆 Award",             value=award           or "*None*",    inline=False)
+        solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
+        solved_embed.add_field(name="✅ Correct Solution", value=correct_display, inline=False)
+        solved_embed.add_field(name="🏆 Award", value=award or "*None*", inline=False)
         solved_embed.set_image(url=solution_url)
         solved_embed.set_footer(
             text=f"Guild: {interaction.guild.name}",
             icon_url=interaction.guild.icon.url if interaction.guild.icon else None
         )
 
-        await interaction.followup.send(content=content_msg, embed=solved_embed, ephemeral=True)
-
-
-
-
-        # ---------- Riddle‑Nachricht finden & updaten ----------
+        # --- Ursprungsrätsel im Channel finden und aktualisieren ---
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
             try:
                 async for msg in riddle_channel.history(limit=200):
-                    if not msg.embeds or not msg.components:            # Nur Messages mit Embed und Buttons interessieren
+                    if not msg.embeds or not msg.components:
                         continue
-
                     original_embed = msg.embeds[0]
-                    riddle_in_msg  = extract_from_embed(original_embed.description or "")
-
+                    riddle_in_msg = extract_from_embed(original_embed.description or "")
                     if riddle_in_msg.strip().lower() == riddle_text.strip().lower():
                         print(f"✏️ Found matching riddle message: {msg.id}")
 
-                        # Lösung parsen
-                        clean_correct_solution, correct_link = extract_link(correct_solution or "")
-                        correct_display = f"**{clean_correct_solution or '*None*'}**"
-                        if correct_link:
-                            correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
-
+                        updated_embed = original_embed.copy()
                         solved_note = (
                             f"✅ This riddle was solved by {submitter.mention} "
-                            f"with the correct solution:\n{correct_display}"
+                            f"with the correct solution:\n**{clean_correct_solution or '*None*'}**"
                         )
+                        if correct_link:
+                            solved_note += f"\n🔗 [🧠**MORE**]({correct_link})"
 
-                        updated_embed = original_embed.copy()
                         updated_embed.add_field(name="✅ Solved", value=solved_note, inline=False)
-
-                        # Buttons entfernen, Embed ersetzen
                         await msg.edit(embed=updated_embed, view=None)
                         print("✅ Updated original riddle message and removed buttons.")
                         break
             except Exception as e:
                 print(f"⚠️ Error while updating original riddle message: {e}")
 
-        # ---------- Neues „Solved!“-Embed posten ----------
+        # --- Embed mit allen Mentions im Riddle-Channel posten ---
         if riddle_channel:
             await riddle_channel.send(
-                content=submitter.mention,                                     # Nur den Gewinner pingen
+                content=content_msg,
                 embed=solved_embed,
-                allowed_mentions=discord.AllowedMentions(users=True, roles=False)
+                allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False)
             )
 
         # ---------- Aufräumen ----------
