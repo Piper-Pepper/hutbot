@@ -37,7 +37,7 @@ class AntiNameFilter(commands.Cog):
                 except discord.HTTPException:
                     failed += 1
 
-        await interaction.followup.send(f"✅ Operation complete.\n👢 Kicked: `{kicked}`\n⚠️ Failed: `{failed}`")
+        await interaction.followup.send(f"✅ Operation **Kick the Goon👵Mommy out of the Hut** complete...\n👢 Kicked: `{kicked}`\n⚠️ Failed: `{failed}`")
 
 
 async def setup(bot: commands.Bot):
