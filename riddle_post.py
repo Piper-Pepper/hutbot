@@ -49,9 +49,16 @@ async def callback(self, interaction: discord.Interaction):
         mentions.append(f"<@&{button_role_id}>")
     mention_text = " ".join(mentions)
 
-    # 🛑 Closed‑Embed bauen
+    # 🛑 Closed‑Embed bauen
     solution_url = riddle_data.get("solution-url") or \
         "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+
+    # Lösung aufbereiten
+    raw_solution = riddle_data.get("solution", "*None*")
+    clean_solution, link = extract_link(raw_solution or "")
+    solution_display = clean_solution or "*None*"
+    if link:
+        solution_display += f"\n🔗 [🧠**MORE**]({link})"
 
     closed_embed = (
         discord.Embed(
@@ -60,11 +67,13 @@ async def callback(self, interaction: discord.Interaction):
             color=discord.Color.red()
         )
         .add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        .add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
+        .add_field(name="✅ Correct Solution", value=solution_display, inline=False)
         .add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
         .set_image(url=solution_url)
-        .set_footer(text=f"Guild: {interaction.guild.name}",
-                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+        .set_footer(
+            text=f"Guild: {interaction.guild.name}",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
     )
 
     # 📬 Einmalig posten
@@ -222,9 +231,15 @@ class VoteSuccessButton(discord.ui.Button):
                     if riddle_in_msg.strip().lower() == riddle_text.strip().lower():
                         print(f"✏️ Found matching riddle message: {msg.id}")
 
+                        # Lösung parsen
+                        clean_correct_solution, correct_link = extract_link(correct_solution or "")
+                        correct_display = f"**{clean_correct_solution or '*None*'}**"
+                        if correct_link:
+                            correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
+
                         solved_note = (
                             f"✅ This riddle was solved by {submitter.mention} "
-                            f"with the correct solution: **{correct_solution or '*None*'}**"
+                            f"with the correct solution: {correct_display}"
                         )
 
                         updated_embed = original_embed.copy()
@@ -658,6 +673,17 @@ async def on_riddle_command_error(interaction: discord.Interaction, error: app_c
 
 
 # Utility Functions
+
+def extract_link(text: str) -> tuple[str, Optional[str]]:
+    """Extracts a link from text and returns (text without link, link or None)."""
+    match = re.search(r'(https?://\S+)', text)
+    if match:
+        link = match.group(1)
+        clean_text = text.replace(link, "").strip()
+        return clean_text, link
+    return text, None
+
+
 def get_field_value(embed: discord.Embed, field_name: str):
     for field in embed.fields:
         if field.name.strip().startswith(field_name.strip()):
