@@ -22,7 +22,7 @@ REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle comm
 
 
 
-def truncate_text(text: str, max_length: int = 60) -> str:
+def truncate_text(text: str, max_length: int = 65) -> str:
     """Kürzt den Text nach max_length Zeichen und fügt '[...]' hinzu."""
     if text and len(text) > max_length:
         return text[:max_length] + "[...]"
@@ -209,7 +209,7 @@ class VoteSuccessButton(discord.ui.Button):
             color=discord.Color.green()
         )
         solved_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
-        solved_embed.add_field(name="🧩 Riddle",            value=riddle_text      or "*Unknown*", inline=False)
+        solved_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
         solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution    or "*None*",    inline=False)
         solved_embed.add_field(name="✅ Correct Solution",  value=correct_display, inline=False)
         solved_embed.add_field(name="🏆 Award",             value=award           or "*None*",    inline=False)
