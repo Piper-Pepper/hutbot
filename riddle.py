@@ -80,7 +80,8 @@ class ChampionsView(View):
                     embed.set_author(name="Top: Unknown User", icon_url=None)
 
             # 🧾 Formatierte Platzierungen mit Prozent
-            for i, (user_id, solved, percent) in enumerate(page_entries, start=start + 1):
+            for i, (user_id, solved, percent, xp) in enumerate(page_entries, start=start + 1):
+
                 display_name = "<Unknown>"
                 username = "<Unknown>"
 
@@ -114,7 +115,7 @@ class ChampionsView(View):
 
                 embed.add_field(
                     name=f"🎖️**{i}.** {display_name}\n*({username})*",
-                    value=f"*📊...solved {solved} 🧩* **({percent:.1f}%)**",
+                    value=f"*🧩...solved {solved}*\n📊**({percent:.1f}%)** / *🧠 {xp} XP*",
                     inline=False
                 )
 
@@ -290,11 +291,14 @@ class RiddleEditor(commands.Cog):
         # ✅ Neue Info: Gesamtsumme
         total_solved = sum(count for _, count in entries)
 
-        # 🧠 Prozentanteile berechnen
+        # 🧠 Prozentanteile + XP berechnen
         percent_entries = []
         for uid, count in entries:
             percent = (count / total_solved * 100) if total_solved > 0 else 0
-            percent_entries.append((uid, count, percent))
+            user_data = raw_data.get(str(uid), {})
+            xp = user_data.get("xp", 0)
+            percent_entries.append((uid, count, percent, xp))
+
 
         # 👉 View vorbereiten
         image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"

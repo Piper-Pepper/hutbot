@@ -15,7 +15,7 @@ ARCHIVE_BIN_URL = "https://api.jsonbin.io/v3/b/6869a6fa8960c979a5b7c527"
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
 
-RIDDLE_CHANNEL_ID = 1346843244067160074
+RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle commands
@@ -267,9 +267,9 @@ class VoteSuccessButton(discord.ui.Button):
             )
 
         # ---------- Aufräumen ----------
-        await self.clear_riddle_data()
         await self.update_user_riddle_count(submitter.id)
-
+        await self.clear_riddle_data()
+        
         try:
             await message.delete()  # ursprüngliche Lösungs‑Nachricht (mit Vote‑Button) löschen
         except discord.HTTPException:
@@ -292,26 +292,50 @@ class VoteSuccessButton(discord.ui.Button):
         async with aiohttp.ClientSession() as session:
             await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
 
+
     async def update_user_riddle_count(self, user_id: int):
         uid = str(user_id)
+        XP_AWARD = 0  # Fallback-Wert
+
         async with aiohttp.ClientSession() as session:
-            # 1. Daten laden
+            # 🥇 0. XP-Award aus Bin laden und extrahieren
+            try:
+                async with session.get(RIDDLE_BIN_URL, headers=HEADERS) as award_resp:
+                    if award_resp.status == 200:
+                        award_data = await award_resp.json()
+                        raw_award = award_data.get("record", {}).get("award", "")
+                        match = re.search(r"\d+", str(raw_award))
+                        if match:
+                            XP_AWARD = int(match.group())
+                            print(f"🎁 XP_AWARD extracted: {XP_AWARD}")
+                        else:
+                            print("⚠️ No number found in award field.")
+                    else:
+                        print(f"❌ Failed to fetch award bin: {award_resp.status}")
+            except Exception as e:
+                print(f"❌ Exception while fetching XP_AWARD: {e}")
+
+            # 🧾 1. User-Daten laden
             async with session.get(f"{SOLVED_BIN_URL}/latest", headers=HEADERS) as resp:
                 data = await resp.json()
-                users = data.get("record", {})  # ✅ Das ist korrekt
+                users = data.get("record", {})
 
-            # 2. Count updaten oder anlegen
+            # 🧠 2. Userdaten updaten oder anlegen
             if uid in users:
                 users[uid]["solved_riddles"] += 1
+                users[uid]["xp"] = users[uid].get("xp", 0) + XP_AWARD
             else:
-                users[uid] = {"solved_riddles": 1}
+                users[uid] = {
+                    "solved_riddles": 1,
+                    "xp": XP_AWARD
+                }
 
-            # ✅ 3. Direkt users schicken, ohne zusätzliches "record"
+            # 💾 3. Zurückschreiben
             async with session.put(SOLVED_BIN_URL, json=users, headers=HEADERS) as put_resp:
-                if put_resp.status == 200 or put_resp.status == 201:
-                    print(f"✅ Updated solved_riddles for user {uid}")
+                if put_resp.status in (200, 201):
+                    print(f"✅ Updated solved_riddles and xp for user {uid}")
                 else:
-                    print(f"❌ Failed to update: {put_resp.status}")
+                    print(f"❌ Failed to update user stats: {put_resp.status}")
 
 
 class VoteFailButton(discord.ui.Button):
