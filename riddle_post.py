@@ -15,7 +15,7 @@ ARCHIVE_BIN_URL = "https://api.jsonbin.io/v3/b/6869a6fa8960c979a5b7c527"
 RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
 SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
 
-RIDDLE_CHANNEL_ID = 1346843244067160074
+RIDDLE_CHANNEL_ID = 1349697597232906292
 VOTE_CHANNEL_ID = 1381754826710585527
 RIDDLE_ROLE = 1380610400416043089
 REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle commands
@@ -164,25 +164,35 @@ class VoteSuccessButton(discord.ui.Button):
             correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
 
         # --- Mentions vorbereiten ---
+        mention_ids = set()
         mentions = []
-        if interaction.guild:
-            fixed_role = interaction.guild.get_role(1380610400416043089)
-            if fixed_role:
-                mentions.append(fixed_role.mention)
 
+        if interaction.guild:
+            # Feste Mod-Rolle
+            fixed_role = interaction.guild.get_role(1380610400416043089)
+            if fixed_role and fixed_role.id not in mention_ids:
+                mentions.append(fixed_role.mention)
+                mention_ids.add(fixed_role.id)
+
+            # Button-ID-Rolle (wenn vorhanden)
             if button_id:
                 role = interaction.guild.get_role(int(button_id))
-                if role:
+                if role and role.id not in mention_ids:
                     mentions.append(role.mention)
+                    mention_ids.add(role.id)
 
+            # RIDDLE_ROLE
             riddle_role = interaction.guild.get_role(RIDDLE_ROLE) if isinstance(RIDDLE_ROLE, int) else RIDDLE_ROLE
-            if riddle_role:
+            if riddle_role and riddle_role.id not in mention_ids:
                 mentions.append(riddle_role.mention)
+                mention_ids.add(riddle_role.id)
 
+        # Submitter (der User ist eh keine Rolle, also keine ID-Kollision)
         if submitter:
             mentions.append(submitter.mention)
 
-        content_msg = " ".join(mentions) + " 🎉 Congratulations!"
+        content_msg = " ".join(mentions) + "\n🎉 Cock-gratulations💋!"
+
 
         # --- Embed zusammenbauen ---
         solved_embed = discord.Embed(
