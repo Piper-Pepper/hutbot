@@ -115,7 +115,7 @@ class ChampionsView(View):
 
                 embed.add_field(
                     name=f"🎖️**{i}.** {display_name} *({username})*",
-                    value=f"**🧩{solved}** **📊({percent:.1f}%)** / *🧠 {xp} XP*\n",
+                    value=f"**🧩 #{solved}** **📊({percent:.1f}%)** / *🧠 {xp} XP*\n",
                     inline=False
                 )
 
