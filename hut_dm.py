@@ -15,6 +15,7 @@ FOOTER_TEXT = "Hut DM List"
 # Fallback-Bild, wenn kein Bild angegeben wird
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1393738129734897725/dm_open2.jpg"
 
+
 class DMModal(Modal, title="Send a DM"):
     def __init__(self, target_user: discord.User):
         super().__init__()
@@ -37,6 +38,7 @@ class DMModal(Modal, title="Send a DM"):
                 "❌ Cannot send DM — user might have DMs disabled.", ephemeral=True
             )
 
+
 class MemberButton(Button):
     def __init__(self, user: discord.Member):
         days_on_server = (datetime.now(timezone.utc) - user.joined_at).days if user.joined_at else 0
@@ -48,6 +50,7 @@ class MemberButton(Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(DMModal(self.user))
+
 
 class NavButton(Button):
     def __init__(self, label: str, target_page: int, row: Optional[int] = None):
@@ -62,6 +65,7 @@ class NavButton(Button):
         embed = new_view.create_embed()
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
+
 
 class PaginationView(View):
     def __init__(self, members: list[discord.Member], page: int = 0, image_url: Optional[str] = None):
@@ -101,6 +105,7 @@ class PaginationView(View):
         embed.set_image(url=self.image_url or DEFAULT_IMAGE_URL)
         return embed
 
+
 class HutDM(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -118,13 +123,15 @@ class HutDM(commands.Cog):
 
     @app_commands.describe(
         open="Only show members with the DM role (default: True)",
-        image_url="Optional image to decorate the embed"
+        image_url="Optional image to decorate the embed",
+        visible="Show publicly in channel or only to you (default: False)"
     )
     async def hut_dm_list(
         self,
         interaction: discord.Interaction,
         open: Optional[bool] = True,
-        image_url: Optional[str] = None
+        image_url: Optional[str] = None,
+        visible: Optional[bool] = False
     ):
         guild = interaction.guild
         if not guild:
@@ -156,8 +163,9 @@ class HutDM(commands.Cog):
         view = PaginationView(members, page=0, image_url=image_url)
         embed = view.create_embed()
 
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=not visible)
         view.message = await interaction.original_response()
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HutDM(bot))
