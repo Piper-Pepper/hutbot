@@ -30,7 +30,7 @@ class ChampionsView(View):
         self.entries = entries  # Jetzt: (user_id, solved, percent)
         self.page = page
         self.guild = guild
-        self.entries_per_page = 7
+        self.entries_per_page = 6
         self.max_page = (len(entries) - 1) // self.entries_per_page
 
         self.total_solved = total or sum(e[1] for e in entries)  # Fallback, falls `total` nicht übergeben
@@ -115,7 +115,7 @@ class ChampionsView(View):
 
                 embed.add_field(
                     name=f"🎖️**{i}.** {display_name} *({username})*",
-                    value=f"🧩 #**{solved}** *📊({percent:.1f}%)* / 🧠 **{xp}** *XP*\n",
+                    value=f"🧩 #**{solved}** *📊 ({percent:.1f}%)* / 🧠 **{xp}** *XP*\n",
                     inline=False
                 )
 
