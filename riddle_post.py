@@ -151,8 +151,6 @@ class VoteSuccessButton(discord.ui.Button):
         if not solution_url or not solution_url.startswith("http"):
             solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
-        import re
-
         # Link aus Lösung filtern
         def extract_link(text):
             match = re.search(r"(https?://\S+)", text or "")
@@ -174,14 +172,14 @@ class VoteSuccessButton(discord.ui.Button):
         # Feste Rolle mit rein (1380610400416043089)
         if interaction.guild:
             fixed_role = interaction.guild.get_role(1380610400416043089)
-            if fixed_role:
+            if fixed_role and fixed_role.mention not in mentions:
                 mentions.append(fixed_role.mention)
 
         # Rolle aus button-id (falls vorhanden)
         mention_group = None
         if button_id and interaction.guild:
             role = interaction.guild.get_role(int(button_id))
-            if role:
+            if role and role.mention not in mentions:
                 mention_group = role.mention
                 mentions.append(mention_group)
 
@@ -192,12 +190,12 @@ class VoteSuccessButton(discord.ui.Button):
                 riddle_role = interaction.guild.get_role(RIDDLE_ROLE)
             else:
                 riddle_role = RIDDLE_ROLE  # evtl Role-Objekt
-            if riddle_role:
+            if riddle_role and riddle_role.mention not in mentions:
                 riddle_role_mention = riddle_role.mention
                 mentions.append(riddle_role_mention)
 
         # Submitter mention hinzufügen (winner ping)
-        if submitter:
+        if submitter and submitter.mention not in mentions:
             mentions.append(submitter.mention)
 
         content_msg = " ".join(mentions) + " 🎉 Congratulations!"
@@ -220,6 +218,7 @@ class VoteSuccessButton(discord.ui.Button):
         )
 
         await interaction.followup.send(content=content_msg, embed=solved_embed, ephemeral=True)
+
 
 
 
