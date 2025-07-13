@@ -167,6 +167,51 @@ class HutDM(commands.Cog):
         await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=not visible)
         view.message = await interaction.original_response()
 
+    async def startup_refresh_dm_embed(self):
+        await self.bot.wait_until_ready()
+        channel_id = 1393750777050431558
+        channel = self.bot.get_channel(channel_id)
+
+        if not isinstance(channel, discord.TextChannel):
+            print(f"❌ Channel with ID {channel_id} not found or not a text channel.")
+            return
+
+        try:
+            async for message in channel.history(limit=25):
+                if message.author == self.bot.user and message.embeds:
+                    embed = message.embeds[0]
+                    if embed.title and "DM Open Members" in embed.title:
+                        await message.delete()
+                        print("🗑️ Alte hut_dm Nachricht gelöscht.")
+                        break
+        except discord.Forbidden:
+            print("❌ Keine Berechtigung, Nachrichten im Channel zu lesen/löschen.")
+            return
+
+        # Rolle "DM open" holen
+        guild = channel.guild
+        role = guild.get_role(ROLE_ID)
+        if not role:
+            print(f"❌ Rolle mit ID {ROLE_ID} nicht gefunden.")
+            return
+
+        members = [m for m in role.members if not m.bot]
+        if not members:
+            await channel.send("No DM-open members found.")
+            return
+
+        members = sorted(members, key=lambda m: m.display_name.lower())
+
+        # Embed und View vorbereiten
+        view = PaginationView(members, page=0)
+        embed = view.create_embed()
+
+        message = await channel.send(embed=embed, view=view)
+        view.message = message
+
+        print("📬 Neues hut_dm Embed gesendet!")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(HutDM(bot))
+    cog = HutDM(bot)
+    await bot.add_cog(cog)
+    bot.loop.create_task(cog.startup_refresh_dm_embed())
