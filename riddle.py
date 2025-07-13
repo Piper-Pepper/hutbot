@@ -46,7 +46,7 @@ class ChampionsView(View):
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title=f"🏆 Riddle Champions — Total Solves: {self.total_solved}",
+            title=f"🏆 Riddle Champions ⁉️ Total Solves:🧩{self.total_solved}",
             description=f"Page {self.page + 1} of {self.max_page + 1}",
             color=discord.Color.gold()
         )
