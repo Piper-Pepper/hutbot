@@ -126,7 +126,7 @@ class ChampionsView(View):
         # 🏰 Footer mit Gilde
         if self.guild:
             embed.set_footer(
-                text=f"Guild: {self.guild.name}",
+                text=f"{self.guild.name}",
                 icon_url=self.guild.icon.url if self.guild.icon else None
             )
 
@@ -208,11 +208,14 @@ class RiddleEditor(commands.Cog):
     @app_commands.command(name="riddle", description="Load and edit the current riddle.")
     @app_commands.describe(mention="Optional group to tag (will be stored)")
     async def riddle(self, interaction: discord.Interaction, mention: Optional[discord.Role] = None):
-        required_role_id = 1380610400416043089
-        has_role = any(role.id == required_role_id for role in interaction.user.roles)
+        required_role_id = 1393762463861702787  # ✅ Richtige Rolle
 
-        if not has_role:
-            await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        # Prüfen, ob User die Rolle besitzt
+        if not any(role.id == required_role_id for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "🚫 You don’t have permission to use this command.",
+                ephemeral=True
+            )
             return
 
         logger.info(f"[Slash Command] /riddle by {interaction.user}")
@@ -232,6 +235,7 @@ class RiddleEditor(commands.Cog):
                         await interaction.response.send_message("❌ No riddle data found.", ephemeral=True)
                         return
 
+                    # Optional: Rolle speichern
                     if mention:
                         logger.info(f"Saving mention role {mention.name} ({mention.id}) as button-id")
                         record["button-id"] = str(mention.id)
@@ -240,13 +244,13 @@ class RiddleEditor(commands.Cog):
                                 await interaction.response.send_message("❌ Failed to store role mention.", ephemeral=True)
                                 return
 
+                    # Modal zeigen
                     modal = RiddleEditModal(data=record, guild=interaction.guild)
                     await interaction.response.send_modal(modal)
 
             except aiohttp.ClientError as e:
                 logger.exception("Network error while loading:")
                 await interaction.response.send_message(f"❌ Network error while loading: {e}", ephemeral=True)
-
 
     @app_commands.command(name="riddle_champ", description="Show the top users by solved riddles.")
     @app_commands.describe(
