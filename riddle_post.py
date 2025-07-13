@@ -171,6 +171,12 @@ class VoteSuccessButton(discord.ui.Button):
         # Rollen-Mentions zusammensetzen
         mentions = []
 
+        # Feste Rolle mit rein (1380610400416043089)
+        if interaction.guild:
+            fixed_role = interaction.guild.get_role(1380610400416043089)
+            if fixed_role:
+                mentions.append(fixed_role.mention)
+
         # Rolle aus button-id (falls vorhanden)
         mention_group = None
         if button_id and interaction.guild:
@@ -179,7 +185,7 @@ class VoteSuccessButton(discord.ui.Button):
                 mention_group = role.mention
                 mentions.append(mention_group)
 
-        # RIDDLE_ROLE mention hinzufügen
+        # RIDDLE_ROLE mention hinzufügen (bereits vorhanden im Original)
         riddle_role_mention = None
         if interaction.guild:
             if isinstance(RIDDLE_ROLE, int):
@@ -190,7 +196,7 @@ class VoteSuccessButton(discord.ui.Button):
                 riddle_role_mention = riddle_role.mention
                 mentions.append(riddle_role_mention)
 
-        # Submitter mention hinzufügen
+        # Submitter mention hinzufügen (winner ping)
         if submitter:
             mentions.append(submitter.mention)
 
