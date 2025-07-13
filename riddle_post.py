@@ -6,7 +6,9 @@ import aiohttp
 from datetime import datetime
 import aiohttp
 import re
+from discord.app_commands import errors as app_errors
 
+# ...weiter unten im Cog:
 
 API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 HEADERS = {"X-Master-Key": API_KEY}
@@ -637,6 +639,15 @@ class RiddleCog(commands.Cog):
             ephemeral=True
         )
 
+    @commands.Cog.listener()
+    async def on_app_command_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_errors.MissingRole):
+            await interaction.response.send_message(
+                "🚫 You don’t have permission to use this command.",
+                ephemeral=True
+            )
+        else:
+            raise error  # Alle anderen Fehler weiterhin durchreichen (damit du echte Bugs siehst)
 
 # Utility Functions
 def get_field_value(embed: discord.Embed, field_name: str):
