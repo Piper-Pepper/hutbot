@@ -42,7 +42,7 @@ class DMModal(Modal, title="Send a DM"):
 class MemberButton(Button):
     def __init__(self, user: discord.Member):
         days_on_server = (datetime.now(timezone.utc) - user.joined_at).days if user.joined_at else 0
-        label = f"📩 {user.display_name} *{days_on_server}d*"
+        label = f"📩 {user.display_name} ({days_on_server}🇩​​🇦​​🇾​​🇸​)"
         if len(label) > 80:
             label = label[:77] + "..."
         super().__init__(label=label, style=discord.ButtonStyle.primary)
