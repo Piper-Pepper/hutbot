@@ -22,7 +22,7 @@ REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle comm
 
 
 
-def truncate_text(text: str, max_length: int = 65) -> str:
+def truncate_text(text: str, max_length: int = 75) -> str:
     """Kürzt den Text nach max_length Zeichen und fügt '[...]' hinzu."""
     if text and len(text) > max_length:
         return text[:max_length] + "[...]"
