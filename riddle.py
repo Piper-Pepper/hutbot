@@ -25,14 +25,15 @@ from discord.ui import View, Button
 from discord import Interaction
 
 class ChampionsView(View):
-    def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None, image_url: Optional[str] = None):
+    def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None, image_url: Optional[str] = None, total: Optional[int] = None):
         super().__init__(timeout=None)
-        self.entries = entries
+        self.entries = entries  # Jetzt: (user_id, solved, percent)
         self.page = page
         self.guild = guild
         self.entries_per_page = 5
         self.max_page = (len(entries) - 1) // self.entries_per_page
 
+        self.total_solved = total or sum(e[1] for e in entries)  # Fallback, falls `total` nicht übergeben
         self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
         self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058755633772554/riddle_crown.jpg"
 
@@ -45,7 +46,7 @@ class ChampionsView(View):
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title="🏆 Riddle Champions",
+            title=f"🏆 Riddle Champions — Total Solves: {self.total_solved}",
             description=f"Page {self.page + 1} of {self.max_page + 1}",
             color=discord.Color.gold()
         )
@@ -53,7 +54,7 @@ class ChampionsView(View):
         if not page_entries:
             embed.description = "No data available."
         else:
-            # 👑 Top User mit Thumbnail-Avatar (nur Seite 1)
+            # 👑 Top User mit Thumbnail
             if self.page == 0:
                 top_user_id = page_entries[0][0]
                 top_user = None
@@ -71,15 +72,15 @@ class ChampionsView(View):
                     display_name = getattr(top_user, "display_name", top_user.name)
                     avatar_url = top_user.display_avatar.replace(size=64).url
                     embed.set_author(
-                        name=f"👑Riddle🧩Master #1:\n{top_user.name} / ({display_name})",
+                        name=f"👑 Riddle Master #1:\n{top_user.name} / ({display_name})",
                         icon_url=avatar_url
                     )
                     embed.set_thumbnail(url=avatar_url)
                 else:
                     embed.set_author(name="Top: Unknown User", icon_url=None)
 
-            # 🧾 Formatierte Platzierungen
-            for i, (user_id, solved) in enumerate(page_entries, start=start + 1):
+            # 🧾 Formatierte Platzierungen mit Prozent
+            for i, (user_id, solved, percent) in enumerate(page_entries, start=start + 1):
                 display_name = "<Unknown>"
                 username = "<Unknown>"
 
@@ -113,15 +114,12 @@ class ChampionsView(View):
 
                 embed.add_field(
                     name=f"🎖️**{i}.** {display_name}\n*({username})*",
-                    value=f"*🧩solved: {solved}*",
+                    value=f"*🧩 Solved: {solved}*\n📊 **{percent:.1f}%** of all riddles",
                     inline=False
                 )
 
-        # 🎨 Dynamisches Bild je nach Seite
-        if self.page == 0:
-            embed.set_image(url=self.page1_image_url)
-        else:
-            embed.set_image(url=self.default_image_url)
+        # 🎨 Seitenabhängiges Bild
+        embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
 
         # 🏰 Footer mit Gilde
         if self.guild:
@@ -131,6 +129,7 @@ class ChampionsView(View):
             )
 
         return embed
+
 
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
@@ -279,6 +278,7 @@ class RiddleEditor(commands.Cog):
                 await interaction.followup.send(f"❌ Network error: {e}", ephemeral=True)
                 return
 
+        # 🔍 Daten vorbereiten
         raw_data = data.get("record", data)
         entries = [(int(uid), stats.get("solved_riddles", 0)) for uid, stats in raw_data.items()]
         entries.sort(key=lambda x: x[1], reverse=True)
@@ -287,11 +287,23 @@ class RiddleEditor(commands.Cog):
             await interaction.followup.send("No champions yet!", ephemeral=True)
             return
 
+        # ✅ Neue Info: Gesamtsumme
+        total_solved = sum(count for _, count in entries)
+
+        # 🧠 Prozentanteile berechnen
+        percent_entries = []
+        for uid, count in entries:
+            percent = (count / total_solved * 100) if total_solved > 0 else 0
+            percent_entries.append((uid, count, percent))
+
+        # 👉 View vorbereiten
         image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
-        view = ChampionsView(entries, guild=interaction.guild, image_url=image_url)
+        view = ChampionsView(percent_entries, guild=interaction.guild, image_url=image_url, total=total_solved)
+
+        # Embed vorbereiten (noch ohne Detail)
         embed = await view.get_page_embed()
 
-        # Combine mention and embed in a single message
+        # 📣 Optionale Pings kombinieren
         mention_text = ""
         if visible:
             mentions = [f"<@&1380610400416043089>"]
@@ -299,6 +311,7 @@ class RiddleEditor(commands.Cog):
                 mentions.append(mention.mention)
             mention_text = " ".join(mentions)
 
+        # 📨 Abschicken
         await interaction.followup.send(
             content=mention_text or None,
             embed=embed,
