@@ -114,8 +114,8 @@ class ChampionsView(View):
                         pass
 
                 embed.add_field(
-                    name=f"🎖️**{i}.** {display_name}\n*({username})*",
-                    value=f"*🧩...solved {solved}*\n📊**({percent:.1f}%)** / *🧠 {xp} XP*",
+                    name=f"🎖️**{i}.** {display_name} *({username})*",
+                    value=f"**🧩{solved}** **📊({percent:.1f}%)** / *🧠 {xp} XP*\n",
                     inline=False
                 )
 
@@ -281,23 +281,29 @@ class RiddleEditor(commands.Cog):
 
         # 🔍 Daten vorbereiten
         raw_data = data.get("record", data)
-        entries = [(int(uid), stats.get("solved_riddles", 0)) for uid, stats in raw_data.items()]
-        entries.sort(key=lambda x: x[1], reverse=True)
+        entries = []
+        for uid, stats in raw_data.items():
+            solved = stats.get("solved_riddles", 0)
+            xp = stats.get("xp", 0)
+            entries.append((int(uid), solved, xp))
+
+        # Sortierung: zuerst solved (absteigend), bei Gleichstand dann xp (auch absteigend)
+        entries.sort(key=lambda x: (x[1], x[2]), reverse=True)
 
         if not entries:
             await interaction.followup.send("No champions yet!", ephemeral=True)
             return
 
         # ✅ Neue Info: Gesamtsumme
-        total_solved = sum(count for _, count in entries)
+        total_solved = sum(solved for _, solved, _ in entries)
 
-        # 🧠 Prozentanteile + XP berechnen
+
+        # Prozentanteile berechnen
         percent_entries = []
-        for uid, count in entries:
-            percent = (count / total_solved * 100) if total_solved > 0 else 0
-            user_data = raw_data.get(str(uid), {})
-            xp = user_data.get("xp", 0)
-            percent_entries.append((uid, count, percent, xp))
+        for uid, solved, xp in entries:
+            percent = (solved / total_solved * 100) if total_solved > 0 else 0
+            percent_entries.append((uid, solved, percent, xp))
+
 
 
         # 👉 View vorbereiten
