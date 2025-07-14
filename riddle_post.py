@@ -226,7 +226,7 @@ class VoteSuccessButton(discord.ui.Button):
                         updated_embed = original_embed.copy()
                         solved_note = (
                             f"✅ This riddle was solved by {submitter.mention} "
-                            f"with the correct solution:\n{clean_correct_solution or '*None*'}**"
+                            f"with the correct solution:\n{clean_correct_solution or '*None*'}"
                         )
                         if correct_link:
                             solved_note += f"\n🔗 [🧠**MORE**]({correct_link})"
