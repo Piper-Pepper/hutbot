@@ -25,15 +25,24 @@ from discord.ui import View, Button
 from discord import Interaction
 
 class ChampionsView(View):
-    def __init__(self, entries, page=0, guild: Optional[discord.Guild] = None, image_url: Optional[str] = None, total: Optional[int] = None):
+    def __init__(
+        self,
+        interaction: discord.Interaction,
+        entries,
+        page=0,
+        guild: Optional[discord.Guild] = None,
+        image_url: Optional[str] = None,
+        total: Optional[int] = None
+    ):
         super().__init__(timeout=None)
-        self.entries = entries  # Jetzt: (user_id, solved, percent)
+        self.interaction = interaction
+        self.entries = entries  # Jetzt: (user_id, solved, percent, xp)
         self.page = page
         self.guild = guild
         self.entries_per_page = 6
         self.max_page = (len(entries) - 1) // self.entries_per_page
 
-        self.total_solved = total or sum(e[1] for e in entries)  # Fallback, falls `total` nicht übergeben
+        self.total_solved = total or sum(e[1] for e in entries)
         self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
         self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058755633772554/riddle_crown.jpg"
 
@@ -64,7 +73,7 @@ class ChampionsView(View):
                         top_user = await self.guild.fetch_member(top_user_id)
                     except discord.NotFound:
                         try:
-                            top_user = await self.guild._state.client.fetch_user(top_user_id)
+                            top_user = await self.interaction.client.fetch_user(top_user_id)
                         except discord.HTTPException:
                             pass
 
@@ -81,7 +90,6 @@ class ChampionsView(View):
 
             # 🧾 Formatierte Platzierungen mit Prozent
             for i, (user_id, solved, percent, xp) in enumerate(page_entries, start=start + 1):
-
                 display_name = "<Unknown>"
                 username = "<Unknown>"
 
@@ -91,27 +99,24 @@ class ChampionsView(View):
                         member = await self.guild.fetch_member(user_id)
                     except discord.NotFound:
                         try:
-                            member = await self.guild._state.client.fetch_user(user_id)
+                            member = await self.interaction.client.fetch_user(user_id)
                         except discord.HTTPException:
                             pass
 
                 user = member or None
 
+                if not user:
+                    try:
+                        user = await self.interaction.client.fetch_user(user_id)
+                    except discord.HTTPException:
+                        pass
+
                 if user:
-                    display_name = user.display_name
+                    display_name = getattr(user, "display_name", user.name)
                     if user.discriminator == "0":
                         username = user.name
                     else:
                         username = f"{user.name}#{user.discriminator}"
-                else:
-                    try:
-                        user = await self.guild._state.client.fetch_user(user_id)
-                        if user.discriminator == "0":
-                            username = user.name
-                        else:
-                            username = f"{user.name}#{user.discriminator}"
-                    except discord.HTTPException:
-                        pass
 
                 embed.add_field(
                     name=f"🎖️**{i}.** {display_name} *({username})*",
@@ -119,10 +124,8 @@ class ChampionsView(View):
                     inline=False
                 )
 
-        # 🎨 Seitenabhängiges Bild
         embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
 
-        # 🏰 Footer mit Gilde
         if self.guild:
             embed.set_footer(
                 text=f"{self.guild.name}",
@@ -130,6 +133,7 @@ class ChampionsView(View):
             )
 
         return embed
+
 
 
 
@@ -308,7 +312,13 @@ class RiddleEditor(commands.Cog):
 
         # 👉 View vorbereiten
         image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
-        view = ChampionsView(percent_entries, guild=interaction.guild, image_url=image_url, total=total_solved)
+        view = ChampionsView(
+            interaction,
+            percent_entries,
+            guild=interaction.guild,
+            image_url=image_url,
+            total=total_solved
+        )
 
         # Embed vorbereiten (noch ohne Detail)
         embed = await view.get_page_embed()
