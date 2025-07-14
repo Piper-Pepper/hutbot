@@ -218,23 +218,32 @@ class VoteSuccessButton(discord.ui.Button):
                 async for msg in riddle_channel.history(limit=200):
                     if not msg.embeds or not msg.components:
                         continue
-                    original_embed = msg.embeds[0]
-                    riddle_in_msg = extract_from_embed(original_embed.description or "")
-                    if riddle_in_msg.strip().lower() == riddle_text.strip().lower():
-                        print(f"✏️ Found matching riddle message: {msg.id}")
 
-                        updated_embed = original_embed.copy()
-                        solved_note = (
-                            f"✅ This riddle was solved by {submitter.mention} "
-                            f"with the correct solution:\n{clean_correct_solution or '*None*'}"
-                        )
-                        if correct_link:
-                            solved_note += f"\n🔗 [🧠**MORE**]({correct_link})"
+                    for i, embed in enumerate(msg.embeds):
+                        riddle_in_msg = extract_from_embed(embed.description or "")
+                        if riddle_in_msg.strip().lower() == riddle_text.strip().lower():
+                            print(f"✏️ Found matching riddle message: {msg.id} (embed index {i})")
 
-                        updated_embed.add_field(name="✅ Solved", value=solved_note, inline=False)
-                        await msg.edit(embed=updated_embed, view=None)
-                        print("✅ Updated original riddle message and removed buttons.")
-                        break
+                            updated_embed = embed.copy()
+                            solved_note = (
+                                f"✅ This riddle was solved by {submitter.mention} "
+                                f"with the correct solution:\n{clean_correct_solution or '*None*'}"
+                            )
+                            if correct_link:
+                                solved_note += f"\n🔗 [🧠**MORE**]({correct_link})"
+
+                            updated_embed.add_field(name="✅ Solved", value=solved_note, inline=False)
+
+                            # Ersetze nur das gefundene Embed im Array
+                            updated_embeds = list(msg.embeds)
+                            updated_embeds[i] = updated_embed
+
+                            await msg.edit(embeds=updated_embeds, view=None)
+                            print("✅ Updated original riddle message and removed buttons.")
+                            break  # Break inner loop
+                    else:
+                        continue  # No match in any embed → check next message
+                    break  # Break outer loop if match was found
             except Exception as e:
                 print(f"⚠️ Error while updating original riddle message: {e}")
 
