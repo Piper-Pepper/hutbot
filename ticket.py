@@ -98,6 +98,38 @@ class ApplyPMVJButton(Button):
                 image_url=self.pmvj_image
             )
         )
+class ApplyHutRiddlerButton(Button):
+    def __init__(self, bot: commands.Bot, channel_id: int):
+        super().__init__(label="Apply for Hut Riddler", style=discord.ButtonStyle.blurple, custom_id="apply_riddler_button")
+        self.bot = bot
+        self.channel_id = channel_id
+        self.riddler_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1385055988478244915/riddler.gif"
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            TicketModal(
+                bot=self.bot,
+                title_prefix="Apply for Hut Riddler",
+                image_url=self.riddler_image
+            )
+        )
+
+
+class ApplyPepperPoliceButton(Button):
+    def __init__(self, bot: commands.Bot, channel_id: int):
+        super().__init__(label="Apply for Pepper Police", style=discord.ButtonStyle.blurple, custom_id="apply_police_button")
+        self.bot = bot
+        self.channel_id = channel_id
+        self.police_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1385056040893257748/police_pepper.gif"
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            TicketModal(
+                bot=self.bot,
+                title_prefix="Apply for Pepper Police",
+                image_url=self.police_image
+            )
+        )
 
 
 class TicketView(View):
@@ -106,6 +138,9 @@ class TicketView(View):
         self.bot = bot
         self.add_item(TicketButton(bot, channel_id))
         self.add_item(ApplyPMVJButton(bot, channel_id))
+        self.add_item(ApplyHutRiddlerButton(bot, channel_id))
+        self.add_item(ApplyPepperPoliceButton(bot, channel_id))
+
 
 class TicketCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
