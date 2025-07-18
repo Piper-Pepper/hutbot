@@ -76,7 +76,7 @@ class TicketModal(Modal, title="🛖Contact Staff🚨"):
 
 class TicketButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(label="Open Ticket", style=discord.ButtonStyle.red, custom_id="ticket_open_button")
+        super().__init__(label="🎫Open Ticket", style=discord.ButtonStyle.red, custom_id="ticket_open_button")
         self.bot = bot
         self.channel_id = channel_id
 
@@ -85,7 +85,7 @@ class TicketButton(Button):
 
 class ApplyPMVJButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(label="Apply for PMVJ", style=discord.ButtonStyle.gray, custom_id="apply_pm_button")
+        super().__init__(label="📺Apply for PMVJ", style=discord.ButtonStyle.gray, custom_id="apply_pm_button")
         self.bot = bot
         self.channel_id = channel_id
         self.pmvj_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1383839288235397292/goon_tv_party.gif"
@@ -100,7 +100,7 @@ class ApplyPMVJButton(Button):
         )
 class ApplyHutRiddlerButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(label="Apply for Hut Riddler", style=discord.ButtonStyle.green, custom_id="apply_riddler_button")
+        super().__init__(label="⁉️Apply for Hut Riddler", style=discord.ButtonStyle.green, custom_id="apply_riddler_button")
         self.bot = bot
         self.channel_id = channel_id
         self.riddler_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
@@ -117,7 +117,7 @@ class ApplyHutRiddlerButton(Button):
 
 class ApplyPepperPoliceButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
-        super().__init__(label="Apply for Pepper Police", style=discord.ButtonStyle.blurple, custom_id="apply_police_button")
+        super().__init__(label="👮‍♂️Apply for Pepper Police", style=discord.ButtonStyle.blurple, custom_id="apply_police_button")
         self.bot = bot
         self.channel_id = channel_id
         self.police_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1395870940054814831/police_join.gif"
