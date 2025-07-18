@@ -182,7 +182,7 @@ class HutDM(commands.Cog):
                     embed = message.embeds[0]
                     if embed.title and "DM Open Members" in embed.title:
                         await message.delete()
-                        print("🗑️ Alte hut_dm Nachricht gelöscht.")
+                        print("🗑️ Old hut_dm Nachricht deleted.")
                         break
         except discord.Forbidden:
             print("❌ Missing permission to read/delete messages in the channel.")
