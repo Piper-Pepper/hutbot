@@ -42,7 +42,7 @@ class DMModal(Modal, title="Send a DM"):
 class MemberButton(Button):
     def __init__(self, user: discord.Member):
         days_on_server = (datetime.now(timezone.utc) - user.joined_at).days if user.joined_at else 0
-        label = f"📩 {user.display_name} ({days_on_server}🇩​​🇦​​🇾​​🇸​)"
+        label = f"📩 {user.display_name}"
         if len(label) > 80:
             label = label[:77] + "..."
         super().__init__(label=label, style=discord.ButtonStyle.primary)
@@ -185,14 +185,14 @@ class HutDM(commands.Cog):
                         print("🗑️ Alte hut_dm Nachricht gelöscht.")
                         break
         except discord.Forbidden:
-            print("❌ Keine Berechtigung, Nachrichten im Channel zu lesen/löschen.")
+            print("❌ Missing permission to read/delete messages in the channel.")
             return
 
         # Rolle "DM open" holen
         guild = channel.guild
         role = guild.get_role(ROLE_ID)
         if not role:
-            print(f"❌ Rolle mit ID {ROLE_ID} nicht gefunden.")
+            print(f"❌ Role with ID {ROLE_ID} not found.")
             return
 
         members = [m for m in role.members if not m.bot]
@@ -209,7 +209,7 @@ class HutDM(commands.Cog):
         message = await channel.send(embed=embed, view=view)
         view.message = message
 
-        print("📬 Neues hut_dm Embed gesendet!")
+        print("📬 New hut_dm Embed posted!")
 
 async def setup(bot: commands.Bot):
     cog = HutDM(bot)
