@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ui import View, Button, Modal, TextInput
 from typing import Optional
 from datetime import datetime, timezone
+import random
 
 ROLE_ID = 1387850018471284760  # Rolle "DM open"
 PAGE_SIZE = 20  # 20 Buttons pro Seite
@@ -12,9 +13,17 @@ PAGE_SIZE = 20  # 20 Buttons pro Seite
 FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"
 FOOTER_TEXT = "Hut DM List"
 
-# Fallback-Bild
-DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1393738129734897725/dm_open2.jpg"
+# Bildpool
+DEFAULT_IMAGE_POOL = [
+    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193102280265778/dm_open2.jpg",
+    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193294429716480/dm_open3.jpg",
+    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193609858023444/alcohol.jpg",
+    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193784747786363/lick_it2.jpg",
+    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193419277369424/dm_open4.jpg?"
+]
 
+# Zufälliges Bild wählen
+DEFAULT_IMAGE_URL = random.choice(DEFAULT_IMAGE_POOL)
 
 class DMModal(Modal, title="Send a DM"):
     def __init__(self, target_user: discord.User):
