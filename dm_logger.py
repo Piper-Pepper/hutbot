@@ -4,6 +4,7 @@ from datetime import datetime
 
 BOT_ID = 1379906834588106883  # Your bot's ID
 LOG_CHANNEL_ID = 1381754826710585527  # Channel where DMs will be logged
+STATIC_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1396385698910834758/message.jpg"
 
 class DMLogger(commands.Cog):
     def __init__(self, bot):
@@ -42,6 +43,9 @@ class DMLogger(commands.Cog):
             if message.attachments:
                 attachment_urls = "\n".join(attachment.url for attachment in message.attachments)
                 embed.add_field(name="Attachments", value=attachment_urls, inline=False)
+
+            # Add static image to the bottom of the embed
+            embed.set_image(url=STATIC_IMAGE_URL)
 
             # Send embed with sender mention above it
             await log_channel.send(content=f"**From:** {message.author.mention}", embed=embed)
