@@ -10,12 +10,12 @@ class DMLogger(commands.Cog):
         self.bot = bot
 
     @commands.Cog.listener()
-    async def on_message(self, message):
+    async def on_message(self, message: discord.Message):
         # Ignore messages from bots (including itself)
         if message.author.bot:
             return
 
-        # Check if message is a direct message (DM)
+        # Check if the message is a DM
         if isinstance(message.channel, discord.DMChannel):
             log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
             if not log_channel:
@@ -23,25 +23,33 @@ class DMLogger(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title="New DM to the Bot",
+                title="📨 New DM to the Bot",
                 description=message.content or "*No text content*",
                 color=discord.Color.blue(),
                 timestamp=message.created_at
             )
-            embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
+            embed.set_author(
+                name=f"{message.author} ({message.author.id})",
+                icon_url=message.author.display_avatar.url
+            )
             embed.add_field(
                 name="Sent At",
                 value=message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
                 inline=False
             )
 
-            # If there are any attachments, list them
+            # If there are attachments, add them to the embed
             if message.attachments:
                 attachment_urls = "\n".join(attachment.url for attachment in message.attachments)
                 embed.add_field(name="Attachments", value=attachment_urls, inline=False)
 
-            await log_channel.send(embed=embed)
+            # Send embed with sender mention above it
+            await log_channel.send(content=f"**From:** {message.author.mention}", embed=embed)
 
-# In your main.py or bot setup file
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print("🟢 DMLogger Cog loaded and ready.")
+
+# Bot setup hook
 async def setup(bot):
     await bot.add_cog(DMLogger(bot))
