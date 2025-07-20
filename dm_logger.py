@@ -2,8 +2,8 @@ import discord
 from discord.ext import commands
 from datetime import datetime
 
-BOT_ID = 1379906834588106883 # Deine Bot-ID
-LOG_CHANNEL_ID = 1381754826710585527  # Kanal, in dem die DMs als Embed gepostet werden
+BOT_ID = 1379906834588106883  # Your bot's ID
+LOG_CHANNEL_ID = 1381754826710585527  # Channel where DMs will be logged
 
 class DMLogger(commands.Cog):
     def __init__(self, bot):
@@ -11,37 +11,37 @@ class DMLogger(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        # Ignoriere Nachrichten vom Bot selbst oder anderen Bots
+        # Ignore messages from bots (including itself)
         if message.author.bot:
             return
-        
-        # Check ob DM an den Bot
-        if isinstance(message.channel, discord.DMChannel) and message.guild is None:
-            # Falls die Nachricht NICHT an diesen Bot ist (sicher ist besser)
-            if message.recipient and message.recipient.id != BOT_ID:
-                return
-            
+
+        # Check if message is a direct message (DM)
+        if isinstance(message.channel, discord.DMChannel):
             log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
             if not log_channel:
-                print(f"Log channel {LOG_CHANNEL_ID} nicht gefunden!")
+                print(f"Log channel with ID {LOG_CHANNEL_ID} not found.")
                 return
 
             embed = discord.Embed(
-                title="Neue DM an den Bot",
-                description=message.content or "*Keine Textnachricht*",
+                title="New DM to the Bot",
+                description=message.content or "*No text content*",
                 color=discord.Color.blue(),
                 timestamp=message.created_at
             )
             embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
-            embed.add_field(name="Gesendet am", value=message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"), inline=False)
+            embed.add_field(
+                name="Sent At",
+                value=message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                inline=False
+            )
 
-            # Falls Anhang vorhanden
+            # If there are any attachments, list them
             if message.attachments:
-                attach_urls = "\n".join(attach.url for attach in message.attachments)
-                embed.add_field(name="Anhänge", value=attach_urls, inline=False)
+                attachment_urls = "\n".join(attachment.url for attachment in message.attachments)
+                embed.add_field(name="Attachments", value=attachment_urls, inline=False)
 
             await log_channel.send(embed=embed)
 
-# In deiner main.py oder wo du den Bot startest:
+# In your main.py or bot setup file
 async def setup(bot):
     await bot.add_cog(DMLogger(bot))
