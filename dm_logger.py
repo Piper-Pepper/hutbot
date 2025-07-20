@@ -3,7 +3,7 @@ from discord.ext import commands
 from datetime import datetime
 
 BOT_ID = 1379906834588106883  # Your bot's ID
-LOG_CHANNEL_ID = 1381754826710585527  # Channel where DMs will be logged
+LOG_CHANNEL_ID = 1390430555124007145  # Channel where DMs will be logged
 STATIC_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1396385698910834758/message.jpg"
 
 class DMLogger(commands.Cog):
@@ -24,7 +24,7 @@ class DMLogger(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title="📨 New DM to the Bot",
+                title="📨 New DM to the Goon Hut Sheriff",
                 description=message.content or "*No text content*",
                 color=discord.Color.blue(),
                 timestamp=message.created_at
