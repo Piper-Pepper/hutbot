@@ -46,7 +46,7 @@ async def main():
         await bot.load_extension("anti-mommy")
         await bot.load_extension("ticket")
         await bot.load_extension("status_manager")
-        await bot.load_extension("birthday_cog")
+        # await bot.load_extension("birthday_cog")
         await bot.load_extension("hut_dm")
         await bot.load_extension("hut_dm_app")
       
