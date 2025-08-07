@@ -104,7 +104,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
     )
     embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
     if dm_open:
-        embed.add_field(name="📬", value=dm_open, inline=False)
+        embed.add_field(name="📬", value=dm_open, inline=True)
     embed.add_field(name="​ᴀᴄᴄᴏᴜɴᴛ\n", value=created_at, inline=True)
     embed.add_field(name="​ᴊᴏɪɴᴇᴅ\n", value=joined_at, inline=True)
     embed.add_field(name="ᴛᴏᴘ ʀᴏʟᴇ​\n", value=member.top_role.mention if member.top_role != guild.default_role else "No top role", inline=True)
