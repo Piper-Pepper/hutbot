@@ -87,7 +87,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
         elif role.id == stoner_role_id:
             stoner_buddy = " ₛₜₒₙₑᵣ Bᵤddy💨"
         elif role.id == dm_id:
-            dm_open = "✅💌 **(Open for DM)**"
+            dm_open = "✅💌"
         else:
             normal_roles.append(f"{role.mention}")
 
