@@ -114,13 +114,13 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
         embed.add_field(name="🏆 𝙇𝙀𝙑𝙀𝙇𝙎", value="\n".join(level_roles_of_member), inline=False)
     if highlighted_roles:
         embed.add_field(name="⭐ Special Roles", value="\n".join(highlighted_roles), inline=False)
-    if dm_open:
-        embed.add_field(name="DM Open", value=dm_open, inline=True)
-        
 
     
     # 🧠 Fetch JSONBin Riddle Stats
-    
+
+    if dm_open:
+        embed.add_field(name="DM Open", value=dm_open, inline=True)
+        
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(JSONBIN_URL, headers=HEADERS) as resp:
@@ -130,7 +130,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
                     if riddles_info:
                         solved = riddles_info.get("solved_riddles", 0)
                         xp = riddles_info.get("xp", 0)
-                        embed.add_field(name="🧩ℜ𝔦𝔡𝔡𝔩𝔢 𝔇𝔞𝔱𝔞", value=f"🔓 {solved} /  🧠 {xp} XP", inline=False)
+                        embed.add_field(name="🧩ℜ𝔦𝔡𝔡𝔩𝔢 𝔇𝔞𝔱𝔞", value=f"🔓 {solved} /  🧠 {xp} XP", inline=True)
                 else:
                     print(f"Failed to fetch riddle data: HTTP {resp.status}")
     except Exception as e:
