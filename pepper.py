@@ -72,7 +72,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
 
     sorted_roles = sorted((role for role in member.roles if role != guild.default_role), key=lambda r: r.name.lower())
     highlighted_roles, normal_roles = [], []
-    location_role = gender_role = stoner_buddy = None
+    location_role = gender_role = stoner_buddy = dm_open = None
 
     for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
         role_highlight = special_roles_to_highlight.get(role.id) or special_roles_to_highlight.get(role.name)
