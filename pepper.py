@@ -17,20 +17,19 @@ special_roles_to_highlight = {
     1346414581643219029: "*(your favourite...💋)*",
     1375143857024401478: "*(XP Leader🏆)*",
     "Server Booster": "*(Hut-Booster 🚀)*",
-    1378442177763479654: "*(₃ᵣd Voice Time🎤)*",
-    1375481531426144266: "*(¹ˢᵗ Voice Time🎤)*",
-    1378130233693306950: "*(₂ₙd* Voice Time🎤)*",
-    1381454281500262520: "*(¹ˢᵗ #msg✍️)*",
-    1381454805205258250: "*(₂ₙd #msg✍️)*",
-    1381455215215247481: "*(₃ᵣd #msg✍️)*",
+    1378442177763479654: "*(3. Voice Time🎤)*",
+    1375481531426144266: "*(1. Voice Time🎤)*",
+    1378130233693306950: "*(2. Voice Time🎤)*",
+    1381454281500262520: "*(1. #msg✍️)*",
+    1381454805205258250: "*(2. #msg✍️)*",
+    1381455215215247481: "*(3. #msg✍️)*",
     1379909107926171668: "*(My lil' Goon-Bots🤖)*",
     1346479048175652924: "*(Stream VJ)*",
     1361993080013717678: "*(**NO NSFW**)*",
     1379175952147546215: "*(Stream Alerts)*",
     1346549280617271326: "*(more 📨 by me...)*",
     1380610400416043089: "*(Riddler of the Hut)*",
-    1387850018471284760: "*(Open for DMs📬)*"
-}
+ }
 
 level_roles = {
     1377051179615522926: ("0️⃣3️⃣", "ₜᵢₑᵣ ₁"),
@@ -50,6 +49,7 @@ gender_roles = {
 }
 
 stoner_role_id = 1346461573392105474
+dm_id = 1387850018471284760
 
 async def send_pepper_embed(interaction, user, open=False, mention_group=None, text=None, image_url=None):
     await interaction.response.defer(ephemeral=not open)
@@ -86,6 +86,8 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
             gender_role = role.mention
         elif role.id == stoner_role_id:
             stoner_buddy = " ₛₜₒₙₑᵣ Bᵤddy💨"
+        elif role.id == dm_id:
+            dm_open = "📬✅"
         else:
             normal_roles.append(f"{role.mention}")
 
@@ -112,6 +114,9 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
         embed.add_field(name="🏆 𝙇𝙀𝙑𝙀𝙇𝙎", value="\n".join(level_roles_of_member), inline=False)
     if highlighted_roles:
         embed.add_field(name="⭐ Special Roles", value="\n".join(highlighted_roles), inline=False)
+    if dm_open:
+        embed.add_field(name="DM Open", value=dm_open, inline=True)
+        
 
     
     # 🧠 Fetch JSONBin Riddle Stats
