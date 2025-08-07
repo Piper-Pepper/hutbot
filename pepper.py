@@ -87,7 +87,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
         elif role.id == stoner_role_id:
             stoner_buddy = " ₛₜₒₙₑᵣ Bᵤddy💨"
         elif role.id == dm_id:
-            dm_open = "📬✅"
+            dm_open = "✅💌"
         else:
             normal_roles.append(f"{role.mention}")
 
@@ -103,6 +103,8 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
         color=embed_color
     )
     embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
+    if dm_open:
+        embed.add_field(name="📬", value=dm_open, inline=False)
     embed.add_field(name="​ᴀᴄᴄᴏᴜɴᴛ\n", value=created_at, inline=True)
     embed.add_field(name="​ᴊᴏɪɴᴇᴅ\n", value=joined_at, inline=True)
     embed.add_field(name="ᴛᴏᴘ ʀᴏʟᴇ​\n", value=member.top_role.mention if member.top_role != guild.default_role else "No top role", inline=True)
@@ -118,8 +120,6 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
     
     # 🧠 Fetch JSONBin Riddle Stats
 
-    if dm_open:
-        embed.add_field(name="DM Open", value=dm_open, inline=True)
         
     try:
         async with aiohttp.ClientSession() as session:
