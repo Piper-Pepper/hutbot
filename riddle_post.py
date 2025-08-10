@@ -210,7 +210,7 @@ class VoteSuccessButton(discord.ui.Button):
             text=f"Guild: {interaction.guild.name}",
             icon_url=interaction.guild.icon.url if interaction.guild.icon else None
         )
-
+        
         # --- Ursprungsrätsel im Channel finden und aktualisieren ---
         riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
@@ -227,7 +227,7 @@ class VoteSuccessButton(discord.ui.Button):
                             updated_embed = embed.copy()
                             solved_note = (
                                 f"✅ This riddle was solved by {submitter.mention} "
-                                f"with the correct solution:\n{clean_correct_solution or '*None*'}"
+                                f"with the correct solution:\n{(clean_correct_solution or '*None*').splitlines()[0]}"
                             )
                             if correct_link:
                                 solved_note += f"\n🔗 [🧠**MORE**]({correct_link})"
@@ -246,6 +246,7 @@ class VoteSuccessButton(discord.ui.Button):
                     break  # Break outer loop if match was found
             except Exception as e:
                 print(f"⚠️ Error while updating original riddle message: {e}")
+
 
         # --- Embed mit allen Mentions im Riddle-Channel posten ---
         if riddle_channel:
