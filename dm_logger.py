@@ -4,7 +4,7 @@ from datetime import datetime
 
 BOT_ID = 1379906834588106883  # Your bot's ID
 LOG_CHANNEL_ID = 1390430555124007145  # Channel where DMs will be logged
-STATIC_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1396385698910834758/message.jpg"
+STATIC_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1405861946036846644/message2.jpg"
 
 class DMLogger(commands.Cog):
     def __init__(self, bot):
