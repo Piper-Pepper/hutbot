@@ -38,27 +38,33 @@ class PepperPicCog(commands.Cog):
         name="pepperpic",
         description="Posts the picture with the most reactions."
     )
-    @app_commands.describe(reaction_type="Choose which reaction type to show")
+    @app_commands.describe(
+        reaction_type="Choose which reaction type to show",
+        post="Whether to post publicly (true) or privately (false). Default: false"
+    )
     @app_commands.choices(reaction_type=[
-        app_commands.Choice(name="1️", value="1"),
-        app_commands.Choice(name="2️", value="2"),
-        app_commands.Choice(name="3", value="3"),
-        app_commands.Choice(name="11", value="11")
+        app_commands.Choice(name="1️⃣", value="1"),
+        app_commands.Choice(name="2️⃣", value="2"),
+        app_commands.Choice(name="3️⃣", value="3"),
+        app_commands.Choice(name="11️⃣", value="11")
     ])
     async def pepperpic(
         self, 
         interaction: discord.Interaction, 
-        reaction_type: Optional[app_commands.Choice[str]] = None
+        reaction_type: Optional[app_commands.Choice[str]] = None,
+        post: Optional[bool] = False
     ):
-        await interaction.response.defer()
+        # wichtig: defer nur für die Interaktion!
+        await interaction.response.defer(ephemeral=not post)
+
         record = await self.fetch_jsonbin()
         if not record:
-            await interaction.followup.send("No data found in JSONBin.")
+            await interaction.followup.send("No data found in JSONBin.", ephemeral=not post)
             return
 
         types_to_post = [reaction_type.value] if reaction_type else REACTION_OPTIONS
-
         embeds = []
+
         for key in types_to_post:
             max_count = -1
             top_msg_id = None
@@ -97,12 +103,19 @@ class PepperPicCog(commands.Cog):
                 print(f"Message {top_msg_id} not found in allowed channels.")
 
         if not embeds:
-            await interaction.followup.send("No top pictures could be found.")
+            await interaction.followup.send("No top pictures could be found.", ephemeral=not post)
             return
 
-        for embed in embeds:
-            await interaction.followup.send(embed=embed)
-            await asyncio.sleep(0.25)
-            
+        # jetzt der saubere Teil:
+        if post:
+            # öffentlich → einzeln in den Channel
+            for embed in embeds:
+                await interaction.channel.send(embed=embed)
+                await asyncio.sleep(0.25)
+        else:
+            # privat → ein Followup mit allen Embeds auf einmal
+            await interaction.followup.send(embeds=embeds, ephemeral=True)
+
+
 async def setup(bot):
     await bot.add_cog(PepperPicCog(bot))
