@@ -176,14 +176,11 @@ class PepperPicCog(commands.Cog):
             )
             return
 
-        # öffentlich → einzeln posten
-        if post:
-            for embed in embeds:
-                await interaction.channel.send(embed=embed)
-                await asyncio.sleep(0.25)
-        else:
-            # privat → gesammelt in einem Followup
-            await interaction.followup.send(embeds=embeds, ephemeral=True)
+        # → sauberer Sendeteil für Slash Command
+        for embed in embeds:
+            await interaction.followup.send(embed=embed, ephemeral=not post)
+            await asyncio.sleep(0.25)
+
 
 
 async def setup(bot):
