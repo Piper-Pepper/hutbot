@@ -5,7 +5,7 @@ from discord.ext import commands
 import aiohttp
 
 
-DEFAULT_IMAGE_URL = "https://example.com/default_pepper_image.jpg"  # Anpassen bei Bedarf
+DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1414114417800515607/idcard_small.png"  # Anpassen bei Bedarf
 JSONBIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34/latest"
 HEADERS = {
     "X-Master-Key": "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
