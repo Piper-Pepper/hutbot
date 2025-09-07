@@ -139,7 +139,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
     embed.add_field(name="🎭 𝙍𝙊𝙇𝙀𝙎", value=", ".join(normal_roles) if normal_roles else "No roles", inline=False)
     embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
     embed.set_image(url=image_url if image_url else DEFAULT_IMAGE_URL)
-    embed.set_footer(text="Pumping forever... Cumming never...")
+    embed.set_footer(text="... and don't forget to lick the butt... of your favourite Goonette-Slut🫦 ")
 
 
     final_content = ""
