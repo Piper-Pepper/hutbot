@@ -68,11 +68,16 @@ class PepperPicCog(commands.Cog):
 
                     total_points = 0
                     for reaction in msg.reactions:
-                        emoji_str = str(reaction.emoji)
-                        if emoji_str in REACTION_POINTS:
-                            # Dummy-Reaktion abziehen: min 0
+                        # Custom Emoji vs Unicode Emoji korrekt erkennen
+                        if isinstance(reaction.emoji, str):
+                            emoji_key = reaction.emoji
+                        else:
+                            emoji_key = f"<:{reaction.emoji.name}:{reaction.emoji.id}>"
+
+                        if emoji_key in REACTION_POINTS:
+                            # Dummy-Reaktion abziehen
                             actual_count = max(reaction.count - 1, 0)
-                            total_points += actual_count * REACTION_POINTS[emoji_str]
+                            total_points += actual_count * REACTION_POINTS[emoji_key]
 
                     if total_points > 0:
                         message_scores.append((msg, total_points))
