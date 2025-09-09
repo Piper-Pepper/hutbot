@@ -155,8 +155,8 @@ class PepperPicCog(commands.Cog):
 
         summary_embed = discord.Embed(
             title=f"📊 Current Top {top_count_display}",
-            description=f"This is the current Top {top_count_display} from the time period {top_period_text}.\n\n"
-                        f"The current leader of AI-Bot Challenge is {leader_text}.",
+            description=f"This is the current **Top {top_count_display}** from the time period **{top_period_text}**.\n\n"
+                        f"The current leader of the 🛖🤖🏆*AI-Bot Challenge* is **{leader_text}**.",
             color=discord.Color.green()
         )
         await interaction.followup.send(embed=summary_embed, ephemeral=not post)
