@@ -70,8 +70,9 @@ class PepperPicCog(commands.Cog):
                     for reaction in msg.reactions:
                         emoji_str = str(reaction.emoji)
                         if emoji_str in REACTION_POINTS:
-                            # stabiles Zählen ohne Async-Generator-Hänger
-                            total_points += reaction.count * REACTION_POINTS[emoji_str]
+                            # Dummy-Reaktion abziehen: min 0
+                            actual_count = max(reaction.count - 1, 0)
+                            total_points += actual_count * REACTION_POINTS[emoji_str]
 
                     if total_points > 0:
                         message_scores.append((msg, total_points))
