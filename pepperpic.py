@@ -20,7 +20,10 @@ REACTION_POINTS = {
     "<:011:1346549711817146400>": 5,
 }
 
-DEFAULT_SINCE = "2025-09-07"  # Standard: nur Nachrichten ab 7. September
+# Für später können hier weitere Datumsoptionen ergänzt werden
+DATE_CHOICES = [
+    app_commands.Choice(name="07.09.2025", value="2025-09-07")
+]
 
 class PepperPicCog(commands.Cog):
     def __init__(self, bot):
@@ -31,8 +34,9 @@ class PepperPicCog(commands.Cog):
         description="Calculates the top pictures by reactions."
     )
     @app_commands.describe(
-        top_count="Number of top pictures to display (default 2)",
-        post="Whether to post publicly (true) or privately (false). Default: false"
+        top_count="Number of top pictures to display",
+        post="Whether to post publicly (true) or privately (false). Default: false",
+        since="Start date for messages"
     )
     @app_commands.choices(
         top_count=[
@@ -40,11 +44,13 @@ class PepperPicCog(commands.Cog):
             app_commands.Choice(name="Top 5", value="5"),
             app_commands.Choice(name="Top 10", value="10"),
             app_commands.Choice(name="Top 15", value="15"),
-        ]
+        ],
+        since=DATE_CHOICES
     )
     async def pepperpic(
         self,
         interaction: discord.Interaction,
+        since: app_commands.Choice[str],  # Pflichtfeld
         top_count: Optional[app_commands.Choice[str]] = None,
         post: Optional[bool] = False
     ):
@@ -53,8 +59,9 @@ class PepperPicCog(commands.Cog):
         top_n = int(top_count.value) if top_count else 2
         message_scores = []
 
-        # Standard-Datum
-        since_date = datetime.strptime(DEFAULT_SINCE, "%Y-%m-%d")
+        # Ausgewähltes Datum
+        since_date = datetime.strptime(since.value, "%Y-%m-%d")
+        current_date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
         for channel_id in ALLOWED_CHANNELS:
             channel = self.bot.get_channel(channel_id)
@@ -115,9 +122,33 @@ class PepperPicCog(commands.Cog):
             embed.set_image(url=msg.attachments[0].url)
             embeds.append(embed)
 
+        # Alle Top-N Nachrichten posten
         for embed in embeds:
             await interaction.followup.send(embed=embed, ephemeral=not post)
             await asyncio.sleep(0.25)
+
+        # Summary-Post am Ende
+        top_count_display = top_n
+        top_period_text = f"{since.value} up to {current_date_str}"
+        leader_text = "Unknown"
+        if top_msgs:
+            leader_msg, _ = top_msgs[0]
+            user_id = leader_msg.mentions[0].id if leader_msg.mentions else None
+            if user_id:
+                member = interaction.guild.get_member(user_id)
+                if member:
+                    leader_text = f"{member.display_name}"
+                else:
+                    leader_text = f"<@{user_id}>"
+
+        summary_embed = discord.Embed(
+            title=f"📊 Current Top {top_count_display}",
+            description=f"This is the current Top {top_count_display} from the time period {top_period_text}.\n\n"
+                        f"The current leader of AI-Bot Challenge is {leader_text}.",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=summary_embed, ephemeral=not post)
+
 
 async def setup(bot):
     await bot.add_cog(PepperPicCog(bot))
