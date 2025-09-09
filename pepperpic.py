@@ -127,7 +127,19 @@ class PepperPicCog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=not post)
             await asyncio.sleep(0.25)
 
-        # Summary-Post am Ende
+        # --- Pings der Top 3 User ---
+        top_user_ids = []
+        for msg, _ in top_msgs[:3]:
+            if msg.mentions:
+                user_id = msg.mentions[0].id
+                if user_id not in top_user_ids:
+                    top_user_ids.append(user_id)
+
+        if top_user_ids:
+            ping_text = "Top 3 users: " + " ".join(f"<@{uid}>" for uid in top_user_ids)
+            await interaction.followup.send(ping_text, ephemeral=not post)
+
+        # Summary-Embed am Ende
         top_count_display = top_n
         top_period_text = f"{since.value} up to {current_date_str}"
         leader_text = "Unknown"
