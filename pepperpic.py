@@ -20,7 +20,7 @@ REACTION_POINTS = {
     "<:011:1346549711817146400>": 5,
 }
 
-DEFAULT_SINCE = "2025-09-05"  # vordefiniertes Datum
+DEFAULT_SINCE = "2025-09-07"  # Standard: nur Nachrichten ab 7. September
 
 class PepperPicCog(commands.Cog):
     def __init__(self, bot):
@@ -53,7 +53,7 @@ class PepperPicCog(commands.Cog):
         top_n = int(top_count.value) if top_count else 2
         message_scores = []
 
-        # Standard-Datum setzen
+        # Standard-Datum
         since_date = datetime.strptime(DEFAULT_SINCE, "%Y-%m-%d")
 
         for channel_id in ALLOWED_CHANNELS:
@@ -70,9 +70,8 @@ class PepperPicCog(commands.Cog):
                     for reaction in msg.reactions:
                         emoji_str = str(reaction.emoji)
                         if emoji_str in REACTION_POINTS:
-                            users = [user async for user in reaction.users()]
-                            user_count = sum(1 for u in users if not u.bot)
-                            total_points += user_count * REACTION_POINTS[emoji_str]
+                            # stabiles Zählen ohne Async-Generator-Hänger
+                            total_points += reaction.count * REACTION_POINTS[emoji_str]
 
                     if total_points > 0:
                         message_scores.append((msg, total_points))
@@ -84,6 +83,7 @@ class PepperPicCog(commands.Cog):
             await interaction.followup.send("No messages with reactions found.", ephemeral=not post)
             return
 
+        # Top N sortieren
         top_msgs = sorted(message_scores, key=lambda x: x[1], reverse=True)[:top_n]
 
         rank_colors = [discord.Color.gold(), discord.Color.light_grey(), discord.Color.orange()]
