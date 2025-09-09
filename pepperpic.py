@@ -13,13 +13,14 @@ ALLOWED_CHANNELS = [
     1378456514955710646,
 ]
 
-# Punkte für jede Reaction
 REACTION_POINTS = {
     "1️⃣": 1,
     "2️⃣": 2,
     "3️⃣": 3,
-    "<:011:1346549711817146400>": 5,  # Dein Custom Emoji
+    "<:011:1346549711817146400>": 5,
 }
+
+DEFAULT_SINCE = "2025-09-05"  # vordefiniertes Datum
 
 class PepperPicCog(commands.Cog):
     def __init__(self, bot):
@@ -31,8 +32,7 @@ class PepperPicCog(commands.Cog):
     )
     @app_commands.describe(
         top_count="Number of top pictures to display (default 2)",
-        post="Whether to post publicly (true) or privately (false). Default: false",
-        since="Only include messages from this date onwards (format: YYYY-MM-DD)"
+        post="Whether to post publicly (true) or privately (false). Default: false"
     )
     @app_commands.choices(
         top_count=[
@@ -46,24 +46,16 @@ class PepperPicCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         top_count: Optional[app_commands.Choice[str]] = None,
-        post: Optional[bool] = False,
-        since: Optional[str] = None
+        post: Optional[bool] = False
     ):
         await interaction.response.defer(ephemeral=not post)
 
         top_n = int(top_count.value) if top_count else 2
         message_scores = []
 
-        # Datum verarbeiten
-        since_date = None
-        if since:
-            try:
-                since_date = datetime.strptime(since, "%Y-%m-%d")
-            except ValueError:
-                await interaction.followup.send("Invalid date format! Use YYYY-MM-DD.", ephemeral=True)
-                return
+        # Standard-Datum setzen
+        since_date = datetime.strptime(DEFAULT_SINCE, "%Y-%m-%d")
 
-        # Alle erlaubten Channels durchgehen
         for channel_id in ALLOWED_CHANNELS:
             channel = self.bot.get_channel(channel_id)
             if not channel:
@@ -78,9 +70,8 @@ class PepperPicCog(commands.Cog):
                     for reaction in msg.reactions:
                         emoji_str = str(reaction.emoji)
                         if emoji_str in REACTION_POINTS:
-                            # async_generator korrekt in Liste umwandeln
                             users = [user async for user in reaction.users()]
-                            user_count = sum(1 for u in users if not u.bot)  # nur echte User
+                            user_count = sum(1 for u in users if not u.bot)
                             total_points += user_count * REACTION_POINTS[emoji_str]
 
                     if total_points > 0:
@@ -93,10 +84,9 @@ class PepperPicCog(commands.Cog):
             await interaction.followup.send("No messages with reactions found.", ephemeral=not post)
             return
 
-        # Top N Nachrichten sortieren
         top_msgs = sorted(message_scores, key=lambda x: x[1], reverse=True)[:top_n]
 
-        rank_colors = [discord.Color.gold(), discord.Color.light_grey(), discord.Color.orange()]  # Gold/Silber/Bronze
+        rank_colors = [discord.Color.gold(), discord.Color.light_grey(), discord.Color.orange()]
         embeds = []
 
         for rank, (msg, points) in enumerate(top_msgs, start=1):
@@ -122,7 +112,6 @@ class PepperPicCog(commands.Cog):
         for embed in embeds:
             await interaction.followup.send(embed=embed, ephemeral=not post)
             await asyncio.sleep(0.25)
-
 
 async def setup(bot):
     await bot.add_cog(PepperPicCog(bot))
