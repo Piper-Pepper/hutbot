@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 from typing import Optional
+from datetime import datetime
 
 ALLOWED_CHANNELS = [
     1378018756843933767,
@@ -30,7 +31,8 @@ class PepperPicCog(commands.Cog):
     )
     @app_commands.describe(
         top_count="Number of top pictures to display (default 2)",
-        post="Whether to post publicly (true) or privately (false). Default: false"
+        post="Whether to post publicly (true) or privately (false). Default: false",
+        since="Only include messages from this date onwards (format: YYYY-MM-DD)"
     )
     @app_commands.choices(
         top_count=[
@@ -44,12 +46,22 @@ class PepperPicCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         top_count: Optional[app_commands.Choice[str]] = None,
-        post: Optional[bool] = False
+        post: Optional[bool] = False,
+        since: Optional[str] = None
     ):
         await interaction.response.defer(ephemeral=not post)
 
         top_n = int(top_count.value) if top_count else 2
         message_scores = []
+
+        # Datum verarbeiten
+        since_date = None
+        if since:
+            try:
+                since_date = datetime.strptime(since, "%Y-%m-%d")
+            except ValueError:
+                await interaction.followup.send("Invalid date format! Use YYYY-MM-DD.", ephemeral=True)
+                return
 
         # Alle erlaubten Channels durchgehen
         for channel_id in ALLOWED_CHANNELS:
@@ -58,7 +70,7 @@ class PepperPicCog(commands.Cog):
                 continue
 
             try:
-                async for msg in channel.history(limit=100):
+                async for msg in channel.history(limit=100, after=since_date):
                     if not msg.attachments:
                         continue  # nur Nachrichten mit Bildern
 
@@ -66,7 +78,8 @@ class PepperPicCog(commands.Cog):
                     for reaction in msg.reactions:
                         emoji_str = str(reaction.emoji)
                         if emoji_str in REACTION_POINTS:
-                            users = await reaction.users().flatten()
+                            # async_generator korrekt in Liste umwandeln
+                            users = [user async for user in reaction.users()]
                             user_count = sum(1 for u in users if not u.bot)  # nur echte User
                             total_points += user_count * REACTION_POINTS[emoji_str]
 
