@@ -11,6 +11,8 @@ ALLOWED_CHANNELS = [
     1377502522788417558,
     1378456514955710646,
 ]
+
+# Punkte für jede Reaction
 REACTION_POINTS = {
     "1️⃣": 1,
     "2️⃣": 2,
@@ -56,16 +58,17 @@ class PepperPicCog(commands.Cog):
                 continue
 
             try:
-                # Letzte 100 Nachrichten pro Channel (kann bei Bedarf erhöht werden)
                 async for msg in channel.history(limit=100):
                     if not msg.attachments:
                         continue  # nur Nachrichten mit Bildern
 
                     total_points = 0
                     for reaction in msg.reactions:
-                        emoji = str(reaction.emoji)
-                        if emoji in REACTION_POINTS:
-                            total_points += reaction.count * REACTION_POINTS[emoji]
+                        emoji_str = str(reaction.emoji)
+                        if emoji_str in REACTION_POINTS:
+                            users = await reaction.users().flatten()
+                            user_count = sum(1 for u in users if not u.bot)  # nur echte User
+                            total_points += user_count * REACTION_POINTS[emoji_str]
 
                     if total_points > 0:
                         message_scores.append((msg, total_points))
