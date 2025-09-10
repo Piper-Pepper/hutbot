@@ -88,7 +88,7 @@ class HutDickCog(commands.Cog):
         rank_colors = [discord.Color.gold(), discord.Color.light_grey(), discord.Color.orange()]
         embeds = []
 
-        # --- Zuerst Top 3 User pingen & Leader ---
+        # --- Einmal: Top 3 User pingen & Leader ---
         top_user_ids = []
         for msg, *_ in top_msgs[:3]:
             uid = msg.author.id
@@ -112,7 +112,7 @@ class HutDickCog(commands.Cog):
         )
         await interaction.followup.send(embed=summary_embed, ephemeral=not post)
 
-        # --- Dann die einzelnen Bild-Embeds posten ---
+        # --- Dann die einzelnen Bild-Embeds posten (ohne Top3/Leader erneut) ---
         for rank, (msg, star_points, other_points) in enumerate(top_msgs, start=1):
             author = msg.author
             mention_text = f"{author.mention} ({author.display_name})"
@@ -124,9 +124,6 @@ class HutDickCog(commands.Cog):
                 color=color
             )
             embed.set_image(url=msg.attachments[0].url)
-            embeds.append(embed)
-
-        for embed in embeds:
             await interaction.followup.send(embed=embed, ephemeral=not post)
             await asyncio.sleep(0.25)
 
