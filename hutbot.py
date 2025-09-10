@@ -42,7 +42,6 @@ async def main():
         await bot.load_extension("generate_cleaner")
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
-        await bot.load_extension("dm_logger")
         await bot.load_extension("anti-mommy")
         await bot.load_extension("ticket")
         await bot.load_extension("status_manager")
