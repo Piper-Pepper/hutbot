@@ -11,6 +11,7 @@ POST_LIMIT_CHOICES = [
     app_commands.Choice(name="50", value="50"),
     app_commands.Choice(name="100", value="100"),
     app_commands.Choice(name="200", value="200"),
+    app_commands.Choice(name="300", value="300"),
 ]
 
 class HutDickCog(commands.Cog):
