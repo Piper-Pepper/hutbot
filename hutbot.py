@@ -49,8 +49,7 @@ async def main():
         # await bot.load_extension("birthday_cog")
         await bot.load_extension("hut_dm")
         await bot.load_extension("hut_dm_app")
-        await bot.load_extension("reactionsave")
-        await bot.load_extension("pepperpic")
+        await bot.load_extension("hutdick")
       
 
         # 🎂 Optional: persistent View für Geburtstag
