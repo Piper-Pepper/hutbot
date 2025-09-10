@@ -1,5 +1,4 @@
 # hutkick.py
-
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -10,11 +9,10 @@ class HutKick(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # Slash Command
     @app_commands.command(name="kick_non_safe", description="Kick everyone without the safe role")
     @app_commands.checks.has_permissions(administrator=True)
     async def kick_non_safe(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)  # <-- VERY IMPORTANT for long tasks
+        await interaction.response.defer(ephemeral=True)
 
         guild = interaction.guild
         role = guild.get_role(SAFE_ROLE_ID)
@@ -36,8 +34,6 @@ class HutKick(commands.Cog):
             f"Kicked {kicked_count} members who didn't have the role '{role.name}'."
         )
 
-# Required for discord.py v2.x
 async def setup(bot: commands.Bot):
     await bot.add_cog(HutKick(bot))
-    # Sync slash commands globally (or guild-specific for testing)
-    await bot.tree.sync()
+    # ⚠️ Kein bot.tree.sync() hier
