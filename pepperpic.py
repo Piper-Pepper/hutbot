@@ -40,10 +40,11 @@ class PepperPicCog(commands.Cog):
     )
     @app_commands.choices(
         top_count=[
-            app_commands.Choice(name="Top 2", value="2"),
+            app_commands.Choice(name="Top 3", value="3"),
             app_commands.Choice(name="Top 5", value="5"),
             app_commands.Choice(name="Top 10", value="10"),
             app_commands.Choice(name="Top 15", value="15"),
+            app_commands.Choice(name="Top 20", value="20"),
         ],
         since=DATE_CHOICES
     )
@@ -156,7 +157,7 @@ class PepperPicCog(commands.Cog):
         summary_embed = discord.Embed(
             title=f"📊 Current Top {top_count_display}",
             description=f"This is the current **Top {top_count_display}** from the time period **{top_period_text}**.\n\n"
-                        f"The current leader of the 🛖🤖🏆*AI-Bot Challenge* is **{leader_text}**.",
+                        f"The current leader of the 🛖🤖🏆*AI-Bot Challenge* is:\n👉**{leader_text}**👈.",
             color=discord.Color.green()
         )
         await interaction.followup.send(embed=summary_embed, ephemeral=not post)
