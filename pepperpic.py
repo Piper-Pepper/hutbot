@@ -155,7 +155,7 @@ class PepperPicCog(commands.Cog):
                     leader_text = f"<@{user_id}>"
 
         summary_embed = discord.Embed(
-            title=f"📊 Current Top {top_count_display}",
+            title=f"📊 AI-Bot Cup - Top {top_count_display} ({current_date_str})",
             description=f"This is the current **Top {top_count_display}** from the time period **{top_period_text}**.\n\n"
                         f"The current leader of the 🛖🤖🏆*AI-Bot Challenge* is:\n👉**{leader_text}**👈.",
             color=discord.Color.green()
