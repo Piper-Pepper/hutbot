@@ -6,6 +6,8 @@ from typing import Optional
 
 # Kanal-ID für /hutdick
 HUT_CHANNEL_ID = 1348240532299579564
+# Dev-Guild ID (für schnelle Tests)
+DEV_GUILD_ID = 123456789012345678  # <--- hier anpassen
 
 # Die Reaction, die gezählt wird
 HUT_REACTION = "⭐"
@@ -20,6 +22,14 @@ POST_LIMIT_CHOICES = [
 class HutDickCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # Starte Task zum Syncen der Commands
+        self.bot.loop.create_task(self.sync_commands())
+
+    async def sync_commands(self):
+        await self.bot.wait_until_ready()
+        guild = discord.Object(id=DEV_GUILD_ID)
+        await self.bot.tree.sync(guild=guild)
+        print("✅ /hutdick command synced to Dev-Guild.")
 
     @app_commands.command(
         name="hutdick",
