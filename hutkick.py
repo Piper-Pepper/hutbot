@@ -9,7 +9,7 @@ class HutKick(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command()
+    @commands.command(name="kick_non_safe")
     @commands.has_permissions(administrator=True)
     async def kick_non_safe(self, ctx):
         guild = ctx.guild
@@ -28,4 +28,8 @@ class HutKick(commands.Cog):
                 except Exception as e:
                     await ctx.send(f"Failed to kick {member}: {e}")
 
-        await ctx.send(f"Kicked {kicked_count} members who didn't have the role '{role.n_
+        await ctx.send(f"Kicked {kicked_count} members who didn't have the role '{role.name}'.")
+
+# Required for discord.py v2.x
+async def setup(bot: commands.Bot):
+    await bot.add_cog(HutKick(bot))
