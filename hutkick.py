@@ -14,11 +14,13 @@ class HutKick(commands.Cog):
     @app_commands.command(name="kick_non_safe", description="Kick everyone without the safe role")
     @app_commands.checks.has_permissions(administrator=True)
     async def kick_non_safe(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)  # <-- VERY IMPORTANT for long tasks
+
         guild = interaction.guild
         role = guild.get_role(SAFE_ROLE_ID)
 
         if not role:
-            await interaction.response.send_message(f"Role with ID {SAFE_ROLE_ID} not found!", ephemeral=True)
+            await interaction.followup.send(f"Role with ID {SAFE_ROLE_ID} not found!")
             return
 
         kicked_count = 0
@@ -30,11 +32,12 @@ class HutKick(commands.Cog):
                 except Exception as e:
                     await interaction.followup.send(f"Failed to kick {member}: {e}")
 
-        await interaction.response.send_message(f"Kicked {kicked_count} members who didn't have the role '{role.name}'.", ephemeral=True)
+        await interaction.followup.send(
+            f"Kicked {kicked_count} members who didn't have the role '{role.name}'."
+        )
 
 # Required for discord.py v2.x
 async def setup(bot: commands.Bot):
     await bot.add_cog(HutKick(bot))
-    # Sync slash commands to the guild
-    if bot.user:
-        await bot.tree.sync()  # or use await bot.tree.sync(guild=guild) for a test server
+    # Sync slash commands globally (or guild-specific for testing)
+    await bot.tree.sync()
