@@ -1,132 +1,35 @@
+# hutkick.py
+
 import discord
 from discord.ext import commands
-from discord import app_commands
-import asyncio
-from typing import Optional
 
-HUT_CHANNEL_ID = 1348240532299579564
-HUT_REACTION = "⭐"
+SAFE_ROLE_ID = 1377051179615522926
 
-POST_LIMIT_CHOICES = [
-    app_commands.Choice(name="50", value="50"),
-    app_commands.Choice(name="100", value="100"),
-    app_commands.Choice(name="200", value="200"),
-    app_commands.Choice(name="300", value="300"),
-]
-
-class HutDickCog(commands.Cog):
+class HutKick(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(
-        name="hutdick",
-        description="Calculates the top pictures by ⭐ reactions."
-    )
-    @app_commands.describe(
-        top_count="Number of top pictures to display",
-        post="Whether to post publicly (true) or privately (false). Default: false",
-        limit="Number of posts to search"
-    )
-    @app_commands.choices(
-        top_count=[
-            app_commands.Choice(name="Top 3", value="3"),
-            app_commands.Choice(name="Top 5", value="5"),
-            app_commands.Choice(name="Top 10", value="10"),
-        ],
-        limit=POST_LIMIT_CHOICES
-    )
-    async def hutdick(
-        self,
-        interaction: discord.Interaction,
-        limit: app_commands.Choice[str],
-        top_count: Optional[app_commands.Choice[str]] = None,
-        post: Optional[bool] = False
-    ):
-        await interaction.response.defer(ephemeral=not post)
-        search_limit = int(limit.value) if limit else 100
-        top_n = int(top_count.value) if top_count else 3
-        message_scores = []
+    @commands.command(name="kick_non_safe")
+    @commands.has_permissions(administrator=True)
+    async def kick_non_safe(self, ctx):
+        guild = ctx.guild
+        role = guild.get_role(SAFE_ROLE_ID)
 
-        channel = self.bot.get_channel(HUT_CHANNEL_ID)
-        if not channel:
-            await interaction.followup.send("Channel not found.", ephemeral=True)
+        if not role:
+            await ctx.send(f"Role with ID {SAFE_ROLE_ID} not found!")
             return
 
-        try:
-            async for msg in channel.history(limit=search_limit):
-                if not msg.attachments:
-                    continue
+        kicked_count = 0
+        for member in guild.members:
+            if role not in member.roles and not member.bot:
+                try:
+                    await member.kick(reason="Does not have the required role")
+                    kicked_count += 1
+                except Exception as e:
+                    await ctx.send(f"Failed to kick {member}: {e}")
 
-                star_points = 0
-                other_points = 0
-                for reaction in msg.reactions:
-                    count_minus_self = max(reaction.count - 1, 0)
-                    emoji_key = reaction.emoji if isinstance(reaction.emoji, str) else f"<:{reaction.emoji.name}:{reaction.emoji.id}>"
-                    if emoji_key == HUT_REACTION:
-                        star_points += count_minus_self
-                    else:
-                        other_points += count_minus_self
+        await ctx.send(f"Kicked {kicked_count} members who didn't have the role '{role.name}'.")
 
-                if star_points > 0:
-                    message_scores.append((msg, star_points, other_points))
-
-        except (discord.Forbidden, discord.NotFound):
-            await interaction.followup.send("Could not read messages in the channel.", ephemeral=True)
-            return
-
-        if not message_scores:
-            await interaction.followup.send(f"No messages with {HUT_REACTION} reactions found.", ephemeral=not post)
-            return
-
-        # Sortierung: zuerst ⭐, dann Summe aller anderen Reaktionen als Tiebreaker
-        top_msgs = sorted(
-            message_scores,
-            key=lambda x: (x[1], x[2]),
-            reverse=True
-        )[:top_n]
-
-        rank_colors = [discord.Color.gold(), discord.Color.light_grey(), discord.Color.orange()]
-
-        # --- Top 3 User pingen ---
-        top_user_ids = []
-        for msg, *_ in top_msgs[:3]:
-            uid = msg.author.id
-            if uid not in top_user_ids:
-                top_user_ids.append(uid)
-
-        if top_user_ids:
-            await interaction.followup.send(
-                "Top 3 users: " + " ".join(f"<@{uid}>" for uid in top_user_ids),
-                ephemeral=not post
-            )
-
-        # --- Leader Mention bleibt ---
-        leader_author = top_msgs[0][0].author
-        leader_text = f"{leader_author.mention} ({leader_author.display_name})"
-
-        summary_embed = discord.Embed(
-            title=f"🏆 HUT-DICK TOP {top_n} (Last {search_limit} posts)",
-            description=f"📊 Top {top_n} images from the last {search_limit} messages.\n"
-                        f"Current leader is: **{leader_text}**",
-            color=discord.Color.green()
-        )
-        await interaction.followup.send(embed=summary_embed, ephemeral=not post)
-
-        # --- Einzelne Ränge: KEINE Mentions mehr, nur Name ---
-        for rank, (msg, star_points, other_points) in enumerate(top_msgs, start=1):
-            author = msg.author
-            display_name = author.display_name
-            color = rank_colors[rank - 1] if rank <= 3 else discord.Color.blue()
-
-            embed = discord.Embed(
-                title=f"🏆 Rank {rank} — {star_points} ⭐ (+{other_points} other reactions)",
-                description=f"Generated by {display_name}\n[Jump to Message]({msg.jump_url})",
-                color=color
-            )
-            embed.set_image(url=msg.attachments[0].url)
-            await interaction.followup.send(embed=embed, ephemeral=not post)
-            await asyncio.sleep(0.25)
-
-
-async def setup(bot):
-    await bot.add_cog(HutDickCog(bot))
+# Required for discord.py v2.x
+async def setup(bot: commands.Bot):
+    await bot.add_cog(HutKick(bot))
