@@ -5,7 +5,7 @@ from discord.ext import commands
 import aiohttp
 
 
-DEFAULT_IMAGE_URL = "https://example.com/default_pepper_image.jpg"  # Anpassen bei Bedarf
+DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1414114417800515607/idcard_small.png"  # Anpassen bei Bedarf
 JSONBIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34/latest"
 HEADERS = {
     "X-Master-Key": "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
@@ -154,7 +154,7 @@ async def send_pepper_embed(interaction, user, open=False, mention_group=None, t
     embed.add_field(name="🎭 𝙍𝙊𝙇𝙀𝙎", value=", ".join(normal_roles) if normal_roles else "No roles", inline=False)
     embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
     embed.set_image(url=image_url if image_url else DEFAULT_IMAGE_URL)
-    embed.set_footer(text="Pumping forever... Cumming never...")
+    embed.set_footer(text="... and don't forget to lick 👅 the butt... of your favourite Goonette-Slut!")
 
 
     final_content = ""
