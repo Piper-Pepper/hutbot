@@ -56,7 +56,6 @@ class HutDickCog(commands.Cog):
                 if not msg.attachments:
                     continue
 
-                # ⭐-Reaktionen
                 star_points = 0
                 other_points = 0
                 for reaction in msg.reactions:
@@ -81,13 +80,38 @@ class HutDickCog(commands.Cog):
         # Sortierung: zuerst ⭐, dann Summe aller anderen Reaktionen als Tiebreaker
         top_msgs = sorted(
             message_scores,
-            key=lambda x: (x[1], x[2]),  # (⭐-Punkte, andere Reaktionen)
+            key=lambda x: (x[1], x[2]),
             reverse=True
         )[:top_n]
 
         rank_colors = [discord.Color.gold(), discord.Color.light_grey(), discord.Color.orange()]
         embeds = []
 
+        # --- Zuerst Top 3 User pingen & Leader ---
+        top_user_ids = []
+        for msg, *_ in top_msgs[:3]:
+            uid = msg.author.id
+            if uid not in top_user_ids:
+                top_user_ids.append(uid)
+
+        if top_user_ids:
+            await interaction.followup.send(
+                "Top 3 users: " + " ".join(f"<@{uid}>" for uid in top_user_ids),
+                ephemeral=not post
+            )
+
+        leader_author = top_msgs[0][0].author
+        leader_text = f"{leader_author.mention} ({leader_author.display_name})"
+
+        summary_embed = discord.Embed(
+            title=f"🏆 HUT-DICK TOP {top_n} (Last {search_limit} posts)",
+            description=f"📊 Top {top_n} images from the last {search_limit} messages.\n"
+                        f"Current leader is: **{leader_text}**",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=summary_embed, ephemeral=not post)
+
+        # --- Dann die einzelnen Bild-Embeds posten ---
         for rank, (msg, star_points, other_points) in enumerate(top_msgs, start=1):
             author = msg.author
             mention_text = f"{author.mention} ({author.display_name})"
@@ -104,31 +128,6 @@ class HutDickCog(commands.Cog):
         for embed in embeds:
             await interaction.followup.send(embed=embed, ephemeral=not post)
             await asyncio.sleep(0.25)
-
-        # Top 3 User pingen
-        top_user_ids = []
-        for msg, *_ in top_msgs[:3]:
-            uid = msg.author.id
-            if uid not in top_user_ids:
-                top_user_ids.append(uid)
-
-        if top_user_ids:
-            await interaction.followup.send(
-                "Top 3 users: " + " ".join(f"<@{uid}>" for uid in top_user_ids),
-                ephemeral=not post
-            )
-
-        # Leader für Summary
-        leader_author = top_msgs[0][0].author
-        leader_text = f"{leader_author.mention} ({leader_author.display_name})"
-
-        summary_embed = discord.Embed(
-            title=f"🏆 HUT-DICK TOP {top_n} (Last {search_limit} posts)",
-            description=f"📊 Top {top_n} images from the last {search_limit} messages.\n"
-                        f"Current leader is: **{leader_text}**",
-            color=discord.Color.green()
-        )
-        await interaction.followup.send(embed=summary_embed, ephemeral=not post)
 
 
 async def setup(bot):
