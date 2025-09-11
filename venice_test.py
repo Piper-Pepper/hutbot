@@ -16,10 +16,10 @@ TEST_CHANNEL_ID = 1346843244067160074  # Replace with your test channel
 
 # Test models: Lustify fixed, 3 others we want to probe
 TEST_MODELS = {
-    "Lustify": {"model": "lustify-sdxl", "steps": 30},
-    "ModelA": {"model": "pony-realism", "steps": 1},  # Start with 1, increase until error
-    "ModelB": {"model": "flux-dev-uncensored", "steps": 1},
-    "ModelC": {"model": "qwen-image", "steps": 1},
+    "Lustify": {"model": "lustify-sdxl"},
+    "ModelA": {"model": "pony-realism"},
+    "ModelB": {"model": "flux-dev-uncensored"},
+    "ModelC": {"model": "qwen-image"},
 }
 
 NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
@@ -42,10 +42,8 @@ async def venice_generate(session, prompt, model_name, steps):
 
     async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
         if resp.status == 200:
-            # Erfolgreiche Antwort = Bild (Bytes)
             return await resp.read(), None
         else:
-            # Fehler = Text (JSON)
             text = await resp.text()
             return None, text
 
@@ -59,10 +57,9 @@ class TestCog(commands.Cog):
         asyncio.create_task(self.session.close())
 
     @commands.command()
-    async def test_models(self, ctx: commands.Context):
-        """Test 4 models to check max allowed steps"""
+    async def test_models(self, ctx: commands.Context, steps: int):
+        """Test 4 models using a specified number of steps"""
         for model_name in TEST_MODELS:
-            steps = TEST_MODELS[model_name]["steps"]
             img_bytes, error = await venice_generate(self.session, "Test prompt", model_name, steps)
             if error:
                 await ctx.send(f"❌ Model `{model_name}` with {steps} steps failed:\n{error}")
