@@ -16,8 +16,7 @@ VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
-VENICE_IMAGE_URL = "https://api.venice.ai/v1/images/generation"
-
+VENICE_IMAGE_URL = "https://api.venice.ai/v1/image/generate"
 
 # ==================
 
