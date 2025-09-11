@@ -5,6 +5,11 @@ from discord import app_commands
 import aiohttp
 import io
 import asyncio
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # Lädt die Variablen aus .env
+VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 
 # ===== CONFIG =====
 
