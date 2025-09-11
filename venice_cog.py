@@ -21,7 +21,7 @@ SFW_CHANNEL_ID = 1415769966573260970
 VARIANT_MAP = {
     # NSFW
     ">": {"model": "lustify-sdxl", "cfg_scale": 4.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
-    "!!": {"model": "pony-realism", "cfg_scale": 5.0, "steps": 8, "channel": NSFW_CHANNEL_ID},  # angepasste steps max
+    "!!": {"model": "pony-realism", "cfg_scale": 5.0, "steps": 8, "channel": NSFW_CHANNEL_ID},
     "##": {"model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
     # SFW
     "?": {"model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 8, "channel": SFW_CHANNEL_ID},
@@ -83,8 +83,6 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.send_message("🎨 Generating your image...", ephemeral=True)
-        
-        # Use default negative prompt if field is empty
         neg_prompt = self.negative_prompt.value.strip() or DEFAULT_NEGATIVE_PROMPT
 
         img_bytes = await venice_generate(self.session, self.prompt.value, {**self.variant, "negative_prompt": neg_prompt})
@@ -97,13 +95,19 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
         channel = interaction.client.get_channel(self.channel_id)
         if channel:
             await channel.send(
-                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`\nNegative Prompt: `{neg_prompt}`",
+                content=(f"{interaction.user.mention} generated an image:\n"
+                         f"Prompt: `{self.prompt.value}`\n"
+                         f"Negative Prompt: `{neg_prompt}`\n"
+                         f"Model: `{self.variant['model']}` | Steps: {self.variant['steps']}"),
                 file=file
             )
-            await channel.send(
-                "💡 Choose the next generation:",
-                view=VeniceView(self.session, self.channel_id)
-            )
+            # Post buttons only if last message is not a button message
+            last_msg = await channel.history(limit=1).flatten()
+            if last_msg and not last_msg[0].components:
+                await channel.send(
+                    "💡 Choose the next generation:",
+                    view=VeniceView(self.session, self.channel_id)
+                )
 
 # ----- Button View -----
 class VeniceView(discord.ui.View):
@@ -146,10 +150,13 @@ class VeniceCog(commands.Cog):
         for channel_id in [NSFW_CHANNEL_ID, SFW_CHANNEL_ID]:
             channel = self.bot.get_channel(channel_id)
             if channel:
-                await channel.send(
-                    "💡 Use a prefix or click a button to generate an image!\nYou can also specify a negative prompt (optional).",
-                    view=VeniceView(self.session, channel_id)
-                )
+                # Buttons will be posted only on first ready if last message has no buttons
+                last_msg = await channel.history(limit=1).flatten()
+                if not last_msg or not last_msg[0].components:
+                    await channel.send(
+                        "💡 Use a prefix or click a button to generate an image!\nYou can also specify a negative prompt (optional).",
+                        view=VeniceView(self.session, channel_id)
+                    )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -186,13 +193,18 @@ class VeniceCog(commands.Cog):
             fp = io.BytesIO(img_bytes)
             file = discord.File(fp, filename="image.png")
             await message.reply(
-                content=f"Generated (`{prefix}` variant) using model `{variant['model']}`:\nPrompt: `{prompt_text}`\nNegative Prompt: `{neg_text}`",
+                content=(f"Generated (`{prefix}` variant) using model `{variant['model']}` | Steps: {variant['steps']}\n"
+                         f"Prompt: `{prompt_text}`\nNegative Prompt: `{neg_text}`"),
                 file=file
             )
-            await message.channel.send(
-                "💡 Choose the next generation:",
-                view=VeniceView(self.session, message.channel.id)
-            )
+
+            # Buttons only if last message is not a button message
+            last_msg = await message.channel.history(limit=1).flatten()
+            if not last_msg or not last_msg[0].components:
+                await message.channel.send(
+                    "💡 Choose the next generation:",
+                    view=VeniceView(self.session, message.channel.id)
+                )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
