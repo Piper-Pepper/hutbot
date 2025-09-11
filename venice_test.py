@@ -39,11 +39,15 @@ async def venice_generate(session, prompt, model_name, steps):
         "return_binary": True
     }
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
+
     async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
-        text = await resp.text()
-        if resp.status != 200:
+        if resp.status == 200:
+            # Erfolgreiche Antwort = Bild (Bytes)
+            return await resp.read(), None
+        else:
+            # Fehler = Text (JSON)
+            text = await resp.text()
             return None, text
-        return await resp.read(), None
 
 class TestCog(commands.Cog):
     def __init__(self, bot):
