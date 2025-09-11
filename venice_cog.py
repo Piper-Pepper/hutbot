@@ -14,7 +14,7 @@ if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
-IMAGE_CHANNEL_ID = 123456789012345678  # ⬅️ Deinen NSFW-Channel hier eintragen
+IMAGE_CHANNEL_ID = 1346843244067160074  # ⬅️ Deinen NSFW-Channel hier eintragen
 
 VARIANT_MAP = {
     ">": {
