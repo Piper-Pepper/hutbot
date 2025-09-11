@@ -13,10 +13,11 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
+# Channels
 NSFW_CHANNEL_ID = 1415769909874524262
 SFW_CHANNEL_ID = 1415769966573260970
 
-# Define variants
+# Image variants
 VARIANT_MAP = {
     # NSFW
     ">": {"model": "lustify-sdxl", "cfg_scale": 4.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
@@ -30,25 +31,21 @@ VARIANT_MAP = {
 
 NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
+# ----- Venice Image Generation -----
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict) -> bytes | None:
-    headers = {
-        "Authorization": f"Bearer {VENICE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
+    headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": variant["model"],
         "prompt": prompt,
         "width": 1024,
         "height": 1024,
         "steps": variant["steps"],
-        "safe_mode": False,
-        "hide_watermark": True,
         "cfg_scale": variant["cfg_scale"],
         "negative_prompt": NEGATIVE_PROMPT,
+        "safe_mode": False,
+        "hide_watermark": True,
         "return_binary": True
     }
-
     try:
         async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
             if resp.status != 200:
@@ -60,7 +57,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
-# ===== Modal & View =====
+# ----- Modal -----
 class VeniceModal(discord.ui.Modal, title="Generate Image"):
     prompt = discord.ui.TextInput(
         label="Describe your image",
@@ -84,47 +81,51 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
             return
 
         fp = io.BytesIO(img_bytes)
-        file = discord.File(fp, filename="venice.png")
-        channel = self.session.bot.get_channel(self.channel_id)
+        file = discord.File(fp, filename="image.png")
+        channel = interaction.client.get_channel(self.channel_id)
         if channel:
             await channel.send(
                 content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`",
-                file=file,
+                file=file
+            )
+            # Post buttons as a separate message
+            await channel.send(
+                "💡 Choose the next generation:",
                 view=VeniceView(self.session, self.channel_id)
             )
 
+# ----- Button View -----
 class VeniceView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
         self.session = session
         self.channel_id = channel_id
 
-    # Dynamically select buttons based on channel type
     async def _send_modal(self, interaction: discord.Interaction, prefix: str):
         variant = VARIANT_MAP[prefix]
         await interaction.response.send_modal(VeniceModal(self.session, variant, self.channel_id))
 
-    @discord.ui.button(label="Option 1", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Lustify", style=discord.ButtonStyle.red)
     async def button1(self, interaction: discord.Interaction, button: discord.ui.Button):
         prefix = ">" if self.channel_id == NSFW_CHANNEL_ID else "?"
         await self._send_modal(interaction, prefix)
 
-    @discord.ui.button(label="Option 2", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Pony", style=discord.ButtonStyle.red)
     async def button2(self, interaction: discord.Interaction, button: discord.ui.Button):
         prefix = "!!" if self.channel_id == NSFW_CHANNEL_ID else "&"
         await self._send_modal(interaction, prefix)
 
-    @discord.ui.button(label="Option 3", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="FluxUnc", style=discord.ButtonStyle.red)
     async def button3(self, interaction: discord.Interaction, button: discord.ui.Button):
         prefix = "##" if self.channel_id == NSFW_CHANNEL_ID else "~"
         await self._send_modal(interaction, prefix)
 
-# ===== Cog =====
+# ----- Cog -----
 class VeniceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.session = aiohttp.ClientSession()
-        self.session.bot = bot  # Attach bot to session for View use
+        self.session.bot = bot
 
     def cog_unload(self):
         asyncio.create_task(self.session.close())
@@ -144,8 +145,7 @@ class VeniceCog(commands.Cog):
         if message.author.bot:
             return
 
-        # Check if channel is allowed
-        allowed_channels = [variant["channel"] for variant in VARIANT_MAP.values()]
+        allowed_channels = [v["channel"] for v in VARIANT_MAP.values()]
         if message.channel.id not in allowed_channels:
             return
 
@@ -169,10 +169,14 @@ class VeniceCog(commands.Cog):
                 return
 
             fp = io.BytesIO(img_bytes)
-            file = discord.File(fp, filename="venice.png")
+            file = discord.File(fp, filename="image.png")
             await message.reply(
                 content=f"Generated (`{prefix}` variant): `{prompt}`",
-                file=file,
+                file=file
+            )
+            # Post buttons as a separate message
+            await message.channel.send(
+                "💡 Choose the next generation:",
                 view=VeniceView(self.session, message.channel.id)
             )
 
