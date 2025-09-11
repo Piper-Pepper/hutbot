@@ -18,7 +18,6 @@ NSFW_CHANNEL_ID = 1415769909874524262
 SFW_CHANNEL_ID = 1415769966573260970
 
 # Image variants
-# SFW Variants fixed
 VARIANT_MAP = {
     # NSFW
     ">": {"model": "lustify-sdxl", "cfg_scale": 4.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
@@ -26,10 +25,9 @@ VARIANT_MAP = {
     "##": {"model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
     # SFW
     "?": {"model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 25, "channel": SFW_CHANNEL_ID},
-    "&": {"model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},  # corrected
-    "~": {"model": "qwen-image", "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},  # corrected
+    "&": {"model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
+    "~": {"model": "qwen-image", "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
-
 
 NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
@@ -87,7 +85,7 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
         channel = interaction.client.get_channel(self.channel_id)
         if channel:
             await channel.send(
-                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`",
+                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`\nModel: `{self.variant['model']}`",
                 file=file
             )
             # Post buttons as a separate message
@@ -142,46 +140,46 @@ class VeniceCog(commands.Cog):
                     view=VeniceView(self.session, channel_id)
                 )
 
-  @commands.Cog.listener()
-async def on_message(self, message: discord.Message):
-    if message.author.bot:
-        return
-
-    allowed_channels = [v["channel"] for v in VARIANT_MAP.values()]
-    if message.channel.id not in allowed_channels:
-        return
-
-    content = message.content.strip()
-    prefix = next((p for p in VARIANT_MAP if content.startswith(p)), None)
-    if not prefix:
-        return
-
-    variant = VARIANT_MAP[prefix]
-    if message.channel.id != variant["channel"]:
-        return
-
-    prompt = content[len(prefix):].strip()
-    if not prompt:
-        return
-
-    async with message.channel.typing():
-        img_bytes = await venice_generate(self.session, prompt, variant)
-        if not img_bytes:
-            await message.reply("❌ Generation failed!")
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
             return
 
-        fp = io.BytesIO(img_bytes)
-        file = discord.File(fp, filename="image.png")
-        await message.reply(
-            content=f"Generated (`{prefix}` variant) using model `{variant['model']}`:\nPrompt: `{prompt}`",
-            file=file
-        )
+        allowed_channels = [v["channel"] for v in VARIANT_MAP.values()]
+        if message.channel.id not in allowed_channels:
+            return
 
-        # Post buttons in a separate message
-        await message.channel.send(
-            "💡 Choose the next generation:",
-            view=VeniceView(self.session, message.channel.id)
-        )
+        content = message.content.strip()
+        prefix = next((p for p in VARIANT_MAP if content.startswith(p)), None)
+        if not prefix:
+            return
+
+        variant = VARIANT_MAP[prefix]
+        if message.channel.id != variant["channel"]:
+            return
+
+        prompt = content[len(prefix):].strip()
+        if not prompt:
+            return
+
+        async with message.channel.typing():
+            img_bytes = await venice_generate(self.session, prompt, variant)
+            if not img_bytes:
+                await message.reply("❌ Generation failed!")
+                return
+
+            fp = io.BytesIO(img_bytes)
+            file = discord.File(fp, filename="image.png")
+            await message.reply(
+                content=f"Generated (`{prefix}` variant) using model `{variant['model']}`:\nPrompt: `{prompt}`",
+                file=file
+            )
+
+            # Post buttons as a separate message
+            await message.channel.send(
+                "💡 Choose the next generation:",
+                view=VeniceView(self.session, message.channel.id)
+            )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
