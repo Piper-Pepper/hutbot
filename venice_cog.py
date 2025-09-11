@@ -13,29 +13,20 @@ if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
-IMAGE_CHANNEL_ID = 1346843244067160074  # ⬅️ Deinen NSFW-Channel hier eintragen
 
+NSFW_CHANNEL_ID = 1415769909874524262
+SFW_CHANNEL_ID = 1415769966573260970
+
+# Varianten aufteilen
 VARIANT_MAP = {
-    ">": {  # Safe Normal
-        "model": "stable-diffusion-3.5",
-        "cfg_scale": 4.0,
-        "steps": 30,
-    },
-    "??": {  # Safe Stylized
-        "model": "hidream",
-        "cfg_scale": 3.5,
-        "steps": 25,
-    },
-    "!!": {  # Extreme NSFW
-        "model": "lustify-sdxl",
-        "cfg_scale": 6.0,
-        "steps": 40,
-    },
-    "~": {  # NSFW-focused
-        "model": "pony-realism",
-        "cfg_scale": 5.0,
-        "steps": 50,
-    },
+    # NSFW
+    ">": {"model": "lustify-sdxl", "cfg_scale": 4.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    "!!": {"model": "pony-realism", "cfg_scale": 5.0, "steps": 35, "channel": NSFW_CHANNEL_ID},
+    "##": {"model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    # SFW
+    "?": {"model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 25, "channel": SFW_CHANNEL_ID},
+    "&": {"model": "FLUX Standard", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
+    "~": {"model": "Qwen Image", "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
 NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
@@ -75,7 +66,7 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
     prompt = discord.ui.TextInput(
         label="Describe your image",
         style=discord.TextStyle.paragraph,
-        placeholder="A beautiful forest scene",
+        placeholder="Describe your character or scene",
         required=True,
         max_length=500
     )
@@ -104,20 +95,28 @@ class VeniceView(discord.ui.View):
         super().__init__(timeout=None)
         self.session = session
 
-    @discord.ui.button(label="🎨 Normal Safe", style=discord.ButtonStyle.green)
-    async def normal_safe(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="NSFW 1", style=discord.ButtonStyle.red)
+    async def nsfw1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[">"]))
 
-    @discord.ui.button(label="🎭 Stylized Safe", style=discord.ButtonStyle.blurple)
-    async def stylized_safe(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["??"]))
-
-    @discord.ui.button(label="🔥 Extreme NSFW", style=discord.ButtonStyle.red)
-    async def extreme_nsfw(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="NSFW 2", style=discord.ButtonStyle.red)
+    async def nsfw2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["!!"]))
 
-    @discord.ui.button(label="🔞 NSFW", style=discord.ButtonStyle.gray)
-    async def nsfw(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="NSFW 3", style=discord.ButtonStyle.red)
+    async def nsfw3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["##"]))
+
+    @discord.ui.button(label="SFW 1", style=discord.ButtonStyle.green)
+    async def sfw1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["?"]))
+
+    @discord.ui.button(label="SFW 2", style=discord.ButtonStyle.green)
+    async def sfw2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["&"]))
+
+    @discord.ui.button(label="SFW 3", style=discord.ButtonStyle.green)
+    async def sfw3(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["~"]))
 
 # ===== Cog =====
@@ -131,31 +130,35 @@ class VeniceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        channel = self.bot.get_channel(IMAGE_CHANNEL_ID)
-        if channel:
-            await channel.send(
-                "💡 **Tippe `> dein prompt` oder klicke einen Button, um ein Bild zu generieren.**",
-                view=VeniceView(self.session)
-            )
+        for channel_id in [NSFW_CHANNEL_ID, SFW_CHANNEL_ID]:
+            channel = self.bot.get_channel(channel_id)
+            if channel:
+                await channel.send(
+                    "💡 Use a prefix or click a button to generate an image!",
+                    view=VeniceView(self.session)
+                )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
-        if message.channel.id != IMAGE_CHANNEL_ID:
-            return
-
+        if message.channel.id not in VARIANT_MAP[next(iter(VARIANT_MAP))]["channel"], VARIANT_MAP[next(iter(VARIANT_MAP))]["channel"]:
+            pass  # falls du normale Prefix-Logik einbauen willst
         content = message.content.strip()
         prefix = next((p for p in VARIANT_MAP if content.startswith(p)), None)
         if not prefix:
             return
+
+        variant = VARIANT_MAP[prefix]
+        if message.channel.id != variant["channel"]:
+            return  # nur im zugehörigen Channel erlauben
 
         prompt = content[len(prefix):].strip()
         if not prompt:
             return
 
         async with message.channel.typing():
-            img_bytes = await venice_generate(self.session, prompt, VARIANT_MAP[prefix])
+            img_bytes = await venice_generate(self.session, prompt, variant)
             if not img_bytes:
                 await message.reply("❌ Generation failed!")
                 return
