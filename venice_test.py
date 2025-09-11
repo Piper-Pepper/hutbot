@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import aiohttp
+import io
 import os
 from dotenv import load_dotenv
 
@@ -16,7 +17,7 @@ TEST_CHANNEL_ID = 1346843244067160074  # Replace with your test channel
 # Test models: Lustify fixed, 3 others we want to probe
 TEST_MODELS = {
     "Lustify": {"model": "lustify-sdxl", "steps": 30},
-    "ModelA": {"model": "pony-realism", "steps": 1},  # Start with 1, we increase until error
+    "ModelA": {"model": "pony-realism", "steps": 1},  # Start with 1, increase until error
     "ModelB": {"model": "flux-dev-uncensored", "steps": 1},
     "ModelC": {"model": "qwen-image", "steps": 1},
 }
@@ -60,9 +61,9 @@ class TestCog(commands.Cog):
             steps = TEST_MODELS[model_name]["steps"]
             img_bytes, error = await venice_generate(self.session, "Test prompt", model_name, steps)
             if error:
-                await ctx.send(f"Model `{model_name}` with {steps} steps failed:\n{error}")
+                await ctx.send(f"❌ Model `{model_name}` with {steps} steps failed:\n{error}")
             else:
-                await ctx.send(f"Model `{model_name}` with {steps} steps succeeded.")
+                await ctx.send(f"✅ Model `{model_name}` with {steps} steps succeeded.")
                 if img_bytes:
                     await ctx.send(file=discord.File(io.BytesIO(img_bytes), filename=f"{model_name}.png"))
 
