@@ -25,7 +25,7 @@ VARIANT_MAP = {
     "##": {"model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
     # SFW
     "?": {"model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 25, "channel": SFW_CHANNEL_ID},
-    "&": {"model": "pony-realism-sfw", "cfg_scale": 5.0, "steps": 35, "channel": SFW_CHANNEL_ID},
+    "&": {"model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
     "~": {"model": "qwen-image", "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
@@ -85,7 +85,7 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
         channel = interaction.client.get_channel(self.channel_id)
         if channel:
             await channel.send(
-                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`\nModel: `{self.variant['model']}`",
+                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`",
                 file=file
             )
             # Post buttons as a separate message
@@ -125,7 +125,7 @@ class VeniceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.session = aiohttp.ClientSession()
-        self.session.bot = bot  # attach bot to session
+        self.session.bot = bot
 
     def cog_unload(self):
         asyncio.create_task(self.session.close())
@@ -175,7 +175,7 @@ class VeniceCog(commands.Cog):
                 file=file
             )
 
-            # Post buttons as a separate message
+            # Post buttons in a separate message
             await message.channel.send(
                 "💡 Choose the next generation:",
                 view=VeniceView(self.session, message.channel.id)
