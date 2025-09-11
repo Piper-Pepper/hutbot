@@ -16,26 +16,33 @@ if not VENICE_API_KEY:
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 IMAGE_CHANNEL_ID = 1346843244067160074  # ⬅️ Deinen NSFW-Channel hier eintragen
 
+NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
+
+# === Varianten ===
 VARIANT_MAP = {
-    ">": {
+    ">": {  # Standard / Lustify
         "model": "lustify-sdxl",
         "cfg_scale": 4.0,
         "steps": 30,
     },
-    "!!": {
-        "model": "lustify-sdxl",
+    "!!": {  # Extreme / FLUX High Quality
+        "model": "flux-dev",
         "cfg_scale": 6.0,
+        "steps": 30,
+    },
+    "??": {  # Stylized / HiDream
+        "model": "hidream",
+        "cfg_scale": 3.5,
         "steps": 40,
     },
-    "??": {
-        "model": "anime-sdxl",
-        "cfg_scale": 3.5,
-        "steps": 25,
+    "~": {  # NSFW-focused / Pony Realism
+        "model": "pony-realism",
+        "cfg_scale": 5.0,
+        "steps": 50,
     },
 }
 
-NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
-
+# ===== Venice API call =====
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict) -> bytes | None:
     headers = {
         "Authorization": f"Bearer {VENICE_API_KEY}",
@@ -108,9 +115,13 @@ class VeniceView(discord.ui.View):
     async def extreme(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["!!"]))
 
-    @discord.ui.button(label="🎭 Anime", style=discord.ButtonStyle.blurple)
-    async def anime(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎭 Stylized", style=discord.ButtonStyle.blurple)
+    async def stylized(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["??"]))
+
+    @discord.ui.button(label="💋 NSFW", style=discord.ButtonStyle.gray)
+    async def nsfw(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["~"]))
 
 # ===== Cog =====
 class VeniceCog(commands.Cog):
