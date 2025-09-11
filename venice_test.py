@@ -11,7 +11,7 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
-TEST_CHANNEL_ID = 123456789012345678  # Replace with your test channel
+TEST_CHANNEL_ID = 1346843244067160074  # Replace with your test channel
 
 # Test models: Lustify fixed, 3 others we want to probe
 TEST_MODELS = {
