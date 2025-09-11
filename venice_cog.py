@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import aiohttp
 import io
 import asyncio
@@ -16,33 +15,31 @@ if not VENICE_API_KEY:
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 IMAGE_CHANNEL_ID = 1346843244067160074  # ⬅️ Deinen NSFW-Channel hier eintragen
 
-NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
-
-# === Varianten ===
 VARIANT_MAP = {
-    ">": {  # Standard / Lustify
-        "model": "lustify-sdxl",
+    ">": {  # Safe Normal
+        "model": "stable-diffusion-3.5",
         "cfg_scale": 4.0,
         "steps": 30,
     },
-    "!!": {  # Extreme / FLUX High Quality
-        "model": "flux-dev",
-        "cfg_scale": 6.0,
-        "steps": 30,
-    },
-    "??": {  # Stylized / HiDream
+    "??": {  # Safe Stylized
         "model": "hidream",
         "cfg_scale": 3.5,
+        "steps": 25,
+    },
+    "!!": {  # Extreme NSFW
+        "model": "lustify-sdxl",
+        "cfg_scale": 6.0,
         "steps": 40,
     },
-    "~": {  # NSFW-focused / Pony Realism
+    "~": {  # NSFW-focused
         "model": "pony-realism",
         "cfg_scale": 5.0,
         "steps": 50,
     },
 }
 
-# ===== Venice API call =====
+NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
+
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict) -> bytes | None:
     headers = {
         "Authorization": f"Bearer {VENICE_API_KEY}",
@@ -74,11 +71,11 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         return None
 
 # ===== Modal & View =====
-class VeniceModal(discord.ui.Modal, title="Generate NSFW Image"):
+class VeniceModal(discord.ui.Modal, title="Generate Image"):
     prompt = discord.ui.TextInput(
         label="Describe your image",
         style=discord.TextStyle.paragraph,
-        placeholder="A very naughty cyberpunk elf",
+        placeholder="A beautiful forest scene",
         required=True,
         max_length=500
     )
@@ -98,7 +95,7 @@ class VeniceModal(discord.ui.Modal, title="Generate NSFW Image"):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="venice.png")
         await interaction.followup.send(
-            content=f"🔞 Here’s your image, {interaction.user.mention}!\nPrompt: `{self.prompt.value}`",
+            content=f"Here’s your image, {interaction.user.mention}!\nPrompt: `{self.prompt.value}`",
             file=file
         )
 
@@ -107,19 +104,19 @@ class VeniceView(discord.ui.View):
         super().__init__(timeout=None)
         self.session = session
 
-    @discord.ui.button(label="🎨 Normal", style=discord.ButtonStyle.green)
-    async def normal(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎨 Normal Safe", style=discord.ButtonStyle.green)
+    async def normal_safe(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[">"]))
 
-    @discord.ui.button(label="🔥 Extreme", style=discord.ButtonStyle.red)
-    async def extreme(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["!!"]))
-
-    @discord.ui.button(label="🎭 Stylized", style=discord.ButtonStyle.blurple)
-    async def stylized(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎭 Stylized Safe", style=discord.ButtonStyle.blurple)
+    async def stylized_safe(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["??"]))
 
-    @discord.ui.button(label="💋 NSFW", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="🔥 Extreme NSFW", style=discord.ButtonStyle.red)
+    async def extreme_nsfw(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["!!"]))
+
+    @discord.ui.button(label="🔞 NSFW", style=discord.ButtonStyle.gray)
     async def nsfw(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP["~"]))
 
@@ -137,7 +134,7 @@ class VeniceCog(commands.Cog):
         channel = self.bot.get_channel(IMAGE_CHANNEL_ID)
         if channel:
             await channel.send(
-                "💡 **Tippe `> dein prompt` oder klicke einen Button, um ein NSFW-Bild zu generieren.**",
+                "💡 **Tippe `> dein prompt` oder klicke einen Button, um ein Bild zu generieren.**",
                 view=VeniceView(self.session)
             )
 
@@ -151,7 +148,7 @@ class VeniceCog(commands.Cog):
         content = message.content.strip()
         prefix = next((p for p in VARIANT_MAP if content.startswith(p)), None)
         if not prefix:
-            return  # Normale Nachricht, keine Generierung
+            return
 
         prompt = content[len(prefix):].strip()
         if not prompt:
@@ -166,7 +163,7 @@ class VeniceCog(commands.Cog):
             fp = io.BytesIO(img_bytes)
             file = discord.File(fp, filename="venice.png")
             await message.reply(
-                content=f"🔞 Generated (`{prefix}` variant): `{prompt}`",
+                content=f"Generated (`{prefix}` variant): `{prompt}`",
                 file=file
             )
 
