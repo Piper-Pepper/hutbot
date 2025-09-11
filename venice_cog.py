@@ -7,8 +7,12 @@ import io
 import asyncio
 
 # ===== CONFIG =====
-VENICE_API_KEY = "XrZfqomOD1LYrv7Vk3YFrtjQRHmBFLL63F5eeXJrw7"
-VENICE_IMAGE_URL = "VENICE_IMAGE_URL = "https://api.venice.ai/v1/images/generations"
+
+if not VENICE_API_KEY:
+    raise RuntimeError("VENICE_API_KEY not set in .env!")
+
+VENICE_IMAGE_URL = "https://api.venice.ai/v1/images/generations"
+
 # ==================
 
 async def venice_generate(session: aiohttp.ClientSession, prompt: str) -> bytes | None:
