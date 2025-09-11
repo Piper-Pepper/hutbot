@@ -101,13 +101,15 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
                          f"Model: `{self.variant['model']}` | Steps: {self.variant['steps']}"),
                 file=file
             )
-            # Post buttons only if last message is not a button message
-            last_msgs = [m async for m in channel.history(limit=1)]
-            if not last_msgs or not last_msgs[0].components:
-                await channel.send(
-                    "💡 Choose the next generation:",
-                    view=VeniceView(self.session, self.channel_id)
-                )
+            # Delete previous button posts in last 10 messages
+            async for msg in channel.history(limit=10):
+                if msg.components:
+                    await msg.delete()
+            # Post buttons
+            await channel.send(
+                "💡 Choose the next generation:",
+                view=VeniceView(self.session, self.channel_id)
+            )
 
 # ----- Button View -----
 class VeniceView(discord.ui.View):
@@ -122,13 +124,11 @@ class VeniceView(discord.ui.View):
 
     @discord.ui.button(label="Lustify", style=discord.ButtonStyle.red)
     async def button1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Immer Lustify (">") nehmen, egal welcher Channel
-        prefix = ">"
+        prefix = ">" if self.channel_id == NSFW_CHANNEL_ID else "?"
         await self._send_modal(interaction, prefix)
 
     @discord.ui.button(label="Pony", style=discord.ButtonStyle.red)
     async def button2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Unterschiedliche Modelle je nach Channel
         prefix = "!!" if self.channel_id == NSFW_CHANNEL_ID else "&"
         await self._send_modal(interaction, prefix)
 
@@ -152,13 +152,14 @@ class VeniceCog(commands.Cog):
         for channel_id in [NSFW_CHANNEL_ID, SFW_CHANNEL_ID]:
             channel = self.bot.get_channel(channel_id)
             if channel:
-                # Buttons will be posted only on first ready if last message has no buttons
-                last_msgs = [m async for m in channel.history(limit=1)]
-                if not last_msgs or not last_msgs[0].components:
-                    await channel.send(
-                        "💡 Use a prefix or click a button to generate an image!\nYou can also specify a negative prompt (optional).",
-                        view=VeniceView(self.session, channel_id)
-                    )
+                # Delete old button posts in last 10 messages
+                async for msg in channel.history(limit=10):
+                    if msg.components:
+                        await msg.delete()
+                await channel.send(
+                    "💡 Use a prefix or click a button to generate an image!\nYou can also specify a negative prompt (optional).",
+                    view=VeniceView(self.session, channel_id)
+                )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -200,13 +201,15 @@ class VeniceCog(commands.Cog):
                 file=file
             )
 
-            # Buttons only if last message is not a button message
-            last_msgs = [m async for m in message.channel.history(limit=1)]
-            if not last_msgs or not last_msgs[0].components:
-                await message.channel.send(
-                    "💡 Choose the next generation:",
-                    view=VeniceView(self.session, message.channel.id)
-                )
+            # Delete old button posts in last 10 messages
+            async for msg in message.channel.history(limit=10):
+                if msg.components:
+                    await msg.delete()
+            # Post buttons
+            await message.channel.send(
+                "💡 Choose the next generation:",
+                view=VeniceView(self.session, message.channel.id)
+            )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
