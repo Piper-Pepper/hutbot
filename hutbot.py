@@ -50,6 +50,7 @@ async def main():
         await bot.load_extension("hut_dm_app")
         await bot.load_extension("hutkick")
         await bot.load_extension("venice_cog")
+        await bot.load_extension("venice_test")
       
 
         # 🎂 Optional: persistent View für Geburtstag
