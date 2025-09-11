@@ -122,11 +122,13 @@ class VeniceView(discord.ui.View):
 
     @discord.ui.button(label="Lustify", style=discord.ButtonStyle.red)
     async def button1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        prefix = ">" if self.channel_id == NSFW_CHANNEL_ID else "?"
+        # Immer Lustify (">") nehmen, egal welcher Channel
+        prefix = ">"
         await self._send_modal(interaction, prefix)
 
     @discord.ui.button(label="Pony", style=discord.ButtonStyle.red)
     async def button2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Unterschiedliche Modelle je nach Channel
         prefix = "!!" if self.channel_id == NSFW_CHANNEL_ID else "&"
         await self._send_modal(interaction, prefix)
 
