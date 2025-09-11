@@ -21,15 +21,15 @@ SFW_CHANNEL_ID = 1415769966573260970
 VARIANT_MAP = {
     # NSFW
     ">": {"model": "lustify-sdxl", "cfg_scale": 4.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
-    "!!": {"model": "pony-realism", "cfg_scale": 5.0, "steps": 35, "channel": NSFW_CHANNEL_ID},
+    "!!": {"model": "pony-realism", "cfg_scale": 5.0, "steps": 8, "channel": NSFW_CHANNEL_ID},  # angepasste steps max
     "##": {"model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
     # SFW
-    "?": {"model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 25, "channel": SFW_CHANNEL_ID},
+    "?": {"model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 8, "channel": SFW_CHANNEL_ID},
     "&": {"model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
-    "~": {"model": "qwen-image", "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},
+    "~": {"model": "qwen-image", "cfg_scale": 3.5, "steps": 8, "channel": SFW_CHANNEL_ID},
 }
 
-NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
+DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
 # ----- Venice Image Generation -----
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict) -> bytes | None:
@@ -41,7 +41,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         "height": 1024,
         "steps": variant["steps"],
         "cfg_scale": variant["cfg_scale"],
-        "negative_prompt": NEGATIVE_PROMPT,
+        "negative_prompt": variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
         "safe_mode": False,
         "hide_watermark": True,
         "return_binary": True
@@ -67,6 +67,14 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
         max_length=500
     )
 
+    negative_prompt = discord.ui.TextInput(
+        label="Negative Prompt (optional)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Optional: describe things you DON'T want in the image (leave empty to use default)",
+        required=False,
+        max_length=300
+    )
+
     def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int):
         super().__init__()
         self.session = session
@@ -75,7 +83,11 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.send_message("🎨 Generating your image...", ephemeral=True)
-        img_bytes = await venice_generate(self.session, self.prompt.value, self.variant)
+        
+        # Use default negative prompt if field is empty
+        neg_prompt = self.negative_prompt.value.strip() or DEFAULT_NEGATIVE_PROMPT
+
+        img_bytes = await venice_generate(self.session, self.prompt.value, {**self.variant, "negative_prompt": neg_prompt})
         if not img_bytes:
             await interaction.followup.send("❌ Sorry, generation failed.", ephemeral=True)
             return
@@ -85,10 +97,9 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
         channel = interaction.client.get_channel(self.channel_id)
         if channel:
             await channel.send(
-                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`",
+                content=f"{interaction.user.mention} generated an image:\nPrompt: `{self.prompt.value}`\nNegative Prompt: `{neg_prompt}`",
                 file=file
             )
-            # Post buttons as a separate message
             await channel.send(
                 "💡 Choose the next generation:",
                 view=VeniceView(self.session, self.channel_id)
@@ -136,7 +147,7 @@ class VeniceCog(commands.Cog):
             channel = self.bot.get_channel(channel_id)
             if channel:
                 await channel.send(
-                    "💡 Use a prefix or click a button to generate an image!",
+                    "💡 Use a prefix or click a button to generate an image!\nYou can also specify a negative prompt (optional).",
                     view=VeniceView(self.session, channel_id)
                 )
 
@@ -158,12 +169,16 @@ class VeniceCog(commands.Cog):
         if message.channel.id != variant["channel"]:
             return
 
-        prompt = content[len(prefix):].strip()
-        if not prompt:
+        # Split prompt and optional negative prompt if user writes "prompt || negative"
+        parts = content[len(prefix):].split("||", 1)
+        prompt_text = parts[0].strip()
+        neg_text = parts[1].strip() if len(parts) > 1 else DEFAULT_NEGATIVE_PROMPT
+
+        if not prompt_text:
             return
 
         async with message.channel.typing():
-            img_bytes = await venice_generate(self.session, prompt, variant)
+            img_bytes = await venice_generate(self.session, prompt_text, {**variant, "negative_prompt": neg_text})
             if not img_bytes:
                 await message.reply("❌ Generation failed!")
                 return
@@ -171,11 +186,9 @@ class VeniceCog(commands.Cog):
             fp = io.BytesIO(img_bytes)
             file = discord.File(fp, filename="image.png")
             await message.reply(
-                content=f"Generated (`{prefix}` variant) using model `{variant['model']}`:\nPrompt: `{prompt}`",
+                content=f"Generated (`{prefix}` variant) using model `{variant['model']}`:\nPrompt: `{prompt_text}`\nNegative Prompt: `{neg_text}`",
                 file=file
             )
-
-            # Post buttons in a separate message
             await message.channel.send(
                 "💡 Choose the next generation:",
                 view=VeniceView(self.session, message.channel.id)
