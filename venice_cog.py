@@ -102,8 +102,8 @@ class VeniceModal(discord.ui.Modal, title="Generate Image"):
                 file=file
             )
             # Post buttons only if last message is not a button message
-            last_msg = await channel.history(limit=1).flatten()
-            if last_msg and not last_msg[0].components:
+            last_msgs = [m async for m in channel.history(limit=1)]
+            if not last_msgs or not last_msgs[0].components:
                 await channel.send(
                     "💡 Choose the next generation:",
                     view=VeniceView(self.session, self.channel_id)
@@ -151,8 +151,8 @@ class VeniceCog(commands.Cog):
             channel = self.bot.get_channel(channel_id)
             if channel:
                 # Buttons will be posted only on first ready if last message has no buttons
-                last_msg = await channel.history(limit=1).flatten()
-                if not last_msg or not last_msg[0].components:
+                last_msgs = [m async for m in channel.history(limit=1)]
+                if not last_msgs or not last_msgs[0].components:
                     await channel.send(
                         "💡 Use a prefix or click a button to generate an image!\nYou can also specify a negative prompt (optional).",
                         view=VeniceView(self.session, channel_id)
@@ -199,8 +199,8 @@ class VeniceCog(commands.Cog):
             )
 
             # Buttons only if last message is not a button message
-            last_msg = await message.channel.history(limit=1).flatten()
-            if not last_msg or not last_msg[0].components:
+            last_msgs = [m async for m in message.channel.history(limit=1)]
+            if not last_msgs or not last_msgs[0].components:
                 await message.channel.send(
                     "💡 Choose the next generation:",
                     view=VeniceView(self.session, message.channel.id)
