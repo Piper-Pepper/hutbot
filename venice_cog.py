@@ -114,11 +114,11 @@ class AspectRatioView(discord.ui.View):
         # Embed ohne Titel, Prompt max. 300 Zeichen
         truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.add_field(name="Prompt", value=truncated_prompt, inline=False)
+        embed.add_field(name="🔮Prompt:", value=truncated_prompt, inline=False)
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
+            embed.add_field(name="🚫Negative Prompt:", value=neg_prompt, inline=False)
 
         embed.set_image(url="attachment://image.png")
 
