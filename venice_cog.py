@@ -78,7 +78,7 @@ class MoreInfoButton(discord.ui.Button):
         msg = interaction.message
         if msg:
             lines = msg.content.split("\n")
-            lines[-1] = self.full_text  # Letzte Zeile ersetzen
+            lines[-1] = self.full_text  # letzte Zeile durch vollen Info-Text ersetzen
             await interaction.response.edit_message(content="\n".join(lines), view=None)
 
 # ---------------- Aspect Ratio View ----------------
@@ -132,14 +132,10 @@ class AspectRatioView(discord.ui.View):
             f"{self.truncated_info}"
         )
 
-        await interaction.followup.send(content=content, file=file, view=self if len(self.full_info_text) > 100 else None)
+        # [more info] Button nur hinzufügen, wenn Text >100 Zeichen
+        view = self if len(self.full_info_text) > 100 else None
 
-        # Buttons in Channel aktualisieren
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await VeniceCog.ensure_button_message_static(channel, self.session)
-
-        self.stop()
+        await interaction.followup.send(content=content, file=file, view=view)
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -216,6 +212,7 @@ class VeniceCog(commands.Cog):
         asyncio.create_task(self.session.close())
 
     async def ensure_button_message(self, channel: discord.TextChannel):
+        """Sicherstellen, dass die Venice-Buttons die letzten Nachrichten sind"""
         async for msg in channel.history(limit=10):
             if msg.components:
                 try:
@@ -223,17 +220,6 @@ class VeniceCog(commands.Cog):
                 except:
                     pass
         view = VeniceView(self.session, channel.id)
-        await channel.send("💡 Click a button to start generating images!", view=view)
-
-    @staticmethod
-    async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
-        async for msg in channel.history(limit=10):
-            if msg.components:
-                try:
-                    await msg.delete()
-                except:
-                    pass
-        view = VeniceView(session, channel.id)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
     @commands.Cog.listener()
