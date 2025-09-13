@@ -84,30 +84,31 @@ class AspectRatioView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
-        img_bytes = await venice_generate(
-            self.session,
-            self.prompt_text + self.hidden_suffix,
-            self.variant,
-            width,
-            height
-        )
+        payload_variant = {**self.variant, "width": width, "height": height}
+
+        # Interaction deferred
+        await interaction.response.defer(ephemeral=True)
+
+        # Venice Image Generation
+        img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, payload_variant)
         if not img_bytes:
-            await interaction.response.send_message("❌ Generation failed!", ephemeral=True)
+            await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             return
 
+        # File preparation
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
         content = (
             f"**Prompt:** {self.prompt_text}\n"
             f"||**Weitere Infos:**\n"
-            f"Model: {self.variant['model']}\n"
-            f"CFG: {self.variant['cfg_scale']}\n"
-            f"Steps: {self.variant['steps']}\n"
-            f"Negative Prompt: {self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}\n"
+            f"Model: {payload_variant['model']}\n"
+            f"CFG: {payload_variant['cfg_scale']}\n"
+            f"Steps: {payload_variant['steps']}\n"
+            f"Negative Prompt: {payload_variant['negative_prompt']}\n"
             f"Hidden Prompt Zusatz: {self.hidden_suffix}||"
         )
 
-        await interaction.response.send_message(content=content, file=file, ephemeral=True)
+        await interaction.followup.send(content=content, file=file, ephemeral=True)
         self.stop()
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
