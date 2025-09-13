@@ -40,8 +40,8 @@ VARIANT_MAP = {
     # ---------- SFW ----------
     "?":  {"label": "SD3.5",    "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 22, "channel": SFW_CHANNEL_ID},
     "&":  {"label": "Flux",     "model": "flux-dev",              "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
-    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 22, "channel": SFW_CHANNEL_ID},
-    "$$": {"label": "HiDream",  "model": "hidream",               "cfg_scale": 4.0, "steps": 25, "channel": SFW_CHANNEL_ID},
+    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 8, "channel": SFW_CHANNEL_ID},
+    "$$": {"label": "HiDream",  "model": "hidream",               "cfg_scale": 4.0, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
 # ---------------- Venice API Call ----------------
@@ -97,6 +97,13 @@ class AspectRatioView(discord.ui.View):
         img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height)
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
+
+            # Venice Buttons posten (alte löschen) auch bei Failure
+            channel = interaction.channel
+            if isinstance(channel, discord.TextChannel):
+                await VeniceCog.ensure_button_message_static(channel, self.session)
+
+            self.stop()
             return
 
         fp = io.BytesIO(img_bytes)
