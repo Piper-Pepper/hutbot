@@ -130,15 +130,34 @@ class AspectRatioView(discord.ui.View):
         footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        # View für More Info Button
+        # View for [more info] Button
         view = discord.ui.View()
         if len(self.prompt_text) > 50:
             button = discord.ui.Button(label="[more info]", style=discord.ButtonStyle.secondary)
+
             async def moreinfo_callback(inter: discord.Interaction):
-                if inter.user == self.author:
-                    await inter.response.send_message(f"Full Prompt:\n{self.prompt_text}", ephemeral=True)
+                if inter.user.id == self.author.id:
+                    embed = discord.Embed(
+                        title="📜 Full Image Info",
+                        description="Here are all the juicy details about your image generation:",
+                        color=discord.Color.gold()
+                    )
+                    embed.add_field(name="🖊️ Full Prompt", value=f"```{self.prompt_text + self.hidden_suffix}```", inline=False)
+                    embed.add_field(name="🚫 Negative Prompt", value=f"```{self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}```", inline=False)
+                    embed.add_field(name="🤫 Hidden Suffix", value=f"```{self.hidden_suffix.strip()}```", inline=False)
+                    embed.add_field(name="🎨 Model", value=self.variant["model"], inline=True)
+                    embed.add_field(name="🎚️ CFG", value=str(self.variant["cfg_scale"]), inline=True)
+                    embed.add_field(name="🧮 Steps", value=str(self.variant["steps"]), inline=True)
+                    embed.add_field(name="📅 Created", value=discord.utils.format_dt(inter.message.created_at, "F"), inline=False)
+
+                    creator = inter.guild.get_member(self.author.id)
+                    if creator:
+                        embed.set_author(name=f"Created by {creator.display_name}", icon_url=creator.avatar.url if creator.avatar else None)
+
+                    await inter.response.send_message(embed=embed, ephemeral=True)
                 else:
-                    await inter.response.send_message("Nur der Autor kann den vollständigen Prompt sehen.", ephemeral=True)
+                    await inter.response.send_message("❌ Only the original author can view the full prompt.", ephemeral=True)
+
             button.callback = moreinfo_callback
             view.add_item(button)
 
