@@ -1,11 +1,8 @@
+import asyncio
 import discord
 from discord.ext import commands
 
-# -----------------------------
-# ✅ Konfiguration
-# -----------------------------
-
-# Channels, in denen Bilder automatisch reagiert werden
+# ✅ Channels, in denen Bilder automatisch reagiert werden
 ALLOWED_CHANNELS = [
     1415769909874524262,
     1415769966573260970,
@@ -14,7 +11,7 @@ ALLOWED_CHANNELS = [
     1416267383160442901,
 ]
 
-# Emojis – die ersten drei sind "entscheidend"
+# ✅ Emojis – die ersten drei sind "entscheidend"
 REACTIONS = [
     "<:01hotlips:1347157151616995378>",     # Ziel 1
     "<:01smile_piper:1387083454575022213>", # Ziel 2
@@ -22,7 +19,7 @@ REACTIONS = [
     "<:011:1346549711817146400>",           # Bonus (kein Voting)
 ]
 
-# Zielkanäle für die ersten drei Reaktionen
+# ✅ Zielkanäle für die ersten drei Reaktionen
 TARGET_CHANNELS = {
     0: 1416267309399670917,  # reaction index 0
     1: 1416267352378572820,
@@ -30,49 +27,21 @@ TARGET_CHANNELS = {
 }
 
 
-# -----------------------------
-# ✅ Cog
-# -----------------------------
 class AutoReactCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Speichert, welche Original-Nachricht wohin gespiegelt wurde:
         # {original_msg_id: {target_channel_id: mirrored_msg_id}}
         self.mirrored_messages: dict[int, dict[int, int]] = {}
 
-    async def cog_load(self):
-        # Starte Hintergrundtask, damit Bot sofort online geht
+        # Starte Hintergrund-Scan, ohne den Bot zu blockieren
         self.bot.loop.create_task(self.background_scan())
 
-    async def background_scan(self):
-        """Scan beim Start die letzten 20 Nachrichten der ALLOWED_CHANNELS."""
-        await self.bot.wait_until_ready()
-        print("🔍 [ai_vote] Starte Hintergrund-Scan der ALLOWED_CHANNELS...")
-
-        for channel_id in ALLOWED_CHANNELS:
-            channel = await self._get_channel(channel_id)
-            if not channel:
-                print(f"⚠️ [ai_vote] Channel {channel_id} nicht gefunden oder keine Berechtigung")
-                continue
-
-            try:
-                async for msg in channel.history(limit=20):
-                    if msg.attachments:
-                        await self.ensure_all_reactions(msg)
-                        await self.handle_reactions(msg)
-            except discord.Forbidden:
-                print(f"⚠️ [ai_vote] Keine Berechtigung für Channel {channel_id}")
-            except Exception as e:
-                print(f"⚠️ [ai_vote] Fehler beim Scannen von Channel {channel_id}: {e}")
-
-    # -----------------------------
-    # Channel helper
-    # -----------------------------
     async def _get_channel(self, channel_id: int) -> discord.TextChannel | None:
-        """Versuche zuerst Cache, dann fetch."""
+        """Versucht zuerst den Channel aus dem Cache zu holen, sonst fetch_channel"""
         channel = self.bot.get_channel(channel_id)
-        if channel and isinstance(channel, discord.TextChannel):
+        if channel:
             return channel
-
         try:
             channel = await self.bot.fetch_channel(channel_id)
             if isinstance(channel, discord.TextChannel):
@@ -83,12 +52,31 @@ class AutoReactCog(commands.Cog):
             print(f"⚠️ [ai_vote] Keine Berechtigung für Channel {channel_id}")
         except Exception as e:
             print(f"⚠️ [ai_vote] Fehler beim Laden von Channel {channel_id}: {e}")
-
         return None
 
-    # -----------------------------
-    # Events
-    # -----------------------------
+    async def background_scan(self):
+        """Scannt alle ALLOWED_CHANNELS im Hintergrund"""
+        await self.bot.wait_until_ready()
+        print("🔍 [ai_vote] Starte Hintergrund-Scan der ALLOWED_CHANNELS...")
+
+        async def scan_channel(channel_id: int):
+            channel = await self._get_channel(channel_id)
+            if not channel:
+                print(f"⚠️ Channel {channel_id} nicht gefunden oder keine Berechtigung")
+                return
+
+            try:
+                async for msg in channel.history(limit=20):
+                    if msg.attachments:
+                        await self.ensure_all_reactions(msg)
+                        await self.handle_reactions(msg)
+                    await asyncio.sleep(0.5)  # Delay pro Nachricht
+            except discord.HTTPException as e:
+                print(f"⚠️ Fehler beim Scannen von Channel {channel_id}: {e}")
+
+        # Channels parallel scannen
+        await asyncio.gather(*(scan_channel(cid) for cid in ALLOWED_CHANNELS))
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.channel.id not in ALLOWED_CHANNELS:
@@ -116,21 +104,19 @@ class AutoReactCog(commands.Cog):
         if msg.attachments:
             await self.handle_reactions(msg)
 
-    # -----------------------------
-    # Reaction helpers
-    # -----------------------------
     async def ensure_all_reactions(self, msg: discord.Message):
-        """Fügt alle definierten Reaktionen hinzu, falls nicht vorhanden."""
+        """Sorgt dafür, dass alle definierten Reaktionen vorhanden sind"""
         existing = {str(r.emoji) for r in msg.reactions}
         for r in REACTIONS:
             if r not in existing:
                 try:
                     await msg.add_reaction(discord.PartialEmoji.from_str(r))
+                    await asyncio.sleep(0.2)  # kleine Pause pro Reaction
                 except discord.HTTPException:
-                    print(f"⚠️ [ai_vote] Konnte Reaction {r} nicht zu Nachricht {msg.id} hinzufügen")
+                    print(f"⚠️ [ai_vote] Konnte Reaction {r} nicht zu {msg.id} hinzufügen")
 
     async def handle_reactions(self, msg: discord.Message):
-        """Analysiert Reactions und spiegelt oder löscht Nachrichten."""
+        """Analysiert Reactions und spiegelt oder löscht Nachrichten"""
         counts = []
         for r in REACTIONS[:3]:
             emoji_obj = discord.PartialEmoji.from_str(r)
@@ -139,6 +125,7 @@ class AutoReactCog(commands.Cog):
 
         max_count = max(counts)
         if max_count <= 1:
+            # Weniger als 2 Stimmen → nur im Ursprungs-Channel behalten
             await self.remove_from_all_targets(msg.id)
             return
 
@@ -148,7 +135,7 @@ class AutoReactCog(commands.Cog):
 
         for idx in selected_indices:
             target_channel_id = TARGET_CHANNELS[idx]
-
+            # Prüfen, ob schon gespiegelt
             if msg.id in self.mirrored_messages and target_channel_id in self.mirrored_messages[msg.id]:
                 continue
 
@@ -167,7 +154,7 @@ class AutoReactCog(commands.Cog):
             self.mirrored_messages.setdefault(msg.id, {})[target_channel_id] = mirrored_msg.id
 
     async def remove_from_all_targets(self, original_msg_id: int, keep_channels: set[int] = None):
-        """Löscht alle Spiegelungen außer den keep_channels."""
+        """Löscht alle Spiegelungen, außer die, die in keep_channels stehen"""
         if original_msg_id not in self.mirrored_messages:
             return
 
@@ -180,6 +167,7 @@ class AutoReactCog(commands.Cog):
                 try:
                     m = await channel.fetch_message(mirrored_id)
                     await m.delete()
+                    await asyncio.sleep(0.3)  # kleine Pause
                 except discord.NotFound:
                     pass
             del self.mirrored_messages[original_msg_id][channel_id]
@@ -188,8 +176,5 @@ class AutoReactCog(commands.Cog):
             del self.mirrored_messages[original_msg_id]
 
 
-# -----------------------------
-# ✅ Setup
-# -----------------------------
-async def setup(bot: commands.Bot):
+async def setup(bot):
     await bot.add_cog(AutoReactCog(bot))

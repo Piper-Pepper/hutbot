@@ -49,7 +49,7 @@ async def main():
             # "birthday_cog",  # optional
             "hut_dm",
             "hut_dm_app",
-            "hutkick",
+            # "hutkick",
             "venice_cog",
             "ai_vote",  # <- vermutlich dein Problem-Cog
             "riddle",
