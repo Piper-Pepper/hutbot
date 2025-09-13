@@ -111,59 +111,22 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Titel
-        title_text = ("🎨 " + self.prompt_text[:30].capitalize() + "[...]") if len(self.prompt_text) > 30 else "🎨 " + self.prompt_text.capitalize()
+        # Titel (50 Zeichen)
+        if len(self.prompt_text) > 50:
+            title_text = "🎨 " + self.prompt_text[:50].capitalize() + "[...]"
+        else:
+            title_text = "🎨 " + self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-        # Prompt truncate & inline show more
-        truncated_prompt = self.prompt_text[:150] + "..." if len(self.prompt_text) > 150 else self.prompt_text
+        # Prompt-Feld (max 150 Zeichen)
+        truncated_prompt = self.prompt_text[:150] if len(self.prompt_text) <= 150 else self.prompt_text[:150] + "..."
         embed.add_field(name="Prompt", value=truncated_prompt, inline=False)
 
-        # Negative Prompt
-        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-        if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
+        # Continued Prompt, nur wenn Prompt länger als 50 Zeichen
+        if len(self.prompt_text) > 50:
+            continued_text = "..." + self.prompt_text[45:]
+            embed.add_field(name="Continued Prompt", value=continued_text, inline=False)
 
-        embed.set_image(url="attachment://image.png")
-
-        if hasattr(self.author, "avatar") and self.author.avatar:
-            embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
-
-        guild = interaction.guild
-        # Footer mit cfg und steps
-        footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
-        embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
-
-        # View für Show More Button
-        view = discord.ui.View(timeout=None)
-
-        if len(self.prompt_text) > 150:
-            class ShowMore(discord.ui.Button):
-                def __init__(self):
-                    super().__init__(label="Show More", style=discord.ButtonStyle.secondary)
-
-                async def callback(inner_self, inter: discord.Interaction):
-                    # vollständiges Prompt anzeigen
-                    full_embed = embed.copy()
-                    full_embed.set_field_at(0, name="Prompt", value=self.prompt_text, inline=False)
-                    await inter.response.edit_message(embed=full_embed, view=view)
-
-            view.add_item(ShowMore())
-
-        # Nachricht senden
-        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file, view=view)
-
-        # Custom Reactions
-        for emoji in CUSTOM_REACTIONS:
-            try:
-                await msg.add_reaction(emoji)
-            except Exception as e:
-                print(f"Fehler beim Hinzufügen der Reaktion {emoji}: {e}")
-
-        if isinstance(interaction.channel, discord.TextChannel):
-            await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
-
-        self.stop()
 
     # Aspect Ratio Buttons
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
@@ -244,7 +207,7 @@ class VeniceCog(commands.Cog):
                     pass
         view = VeniceView(self.session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
-        
+
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
         async for msg in channel.history(limit=10):
