@@ -114,8 +114,9 @@ class AspectRatioView(discord.ui.View):
         file = discord.File(fp, filename="image.png")
 
         # Titel erst nach 40 Zeichen kürzen
-        title_text = (self.prompt_text[:40].capitalize() + "...") if len(self.prompt_text) > 40 else self.prompt_text.capitalize()
+        title_text = ("<:01pepper_icon:1377636862847619213> " + self.prompt_text[:40].capitalize() + "...") if len(self.prompt_text) > 40 else "<:01thumb01:1378013768495140884> " + self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
+
 
         # Prompt erst nach 150 Zeichen kürzen
         display_text = self.prompt_text[:150] + "..." if len(self.prompt_text) > 150 else self.prompt_text
