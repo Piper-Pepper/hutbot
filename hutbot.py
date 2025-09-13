@@ -46,17 +46,8 @@ class AutoReactCog(commands.Cog):
             return
         if not message.attachments:
             return  # nur Bilder
-        for r in REACTIONS:
-            try:
-                if r.startswith("<:") and ":" in r:
-                    name_id = r[2:-1]
-                    name, id_ = name_id.split(":")
-                    emoji_obj = discord.PartialEmoji(name=name, id=int(id_))
-                    await message.add_reaction(emoji_obj)
-                else:
-                    await message.add_reaction(r)
-            except discord.HTTPException:
-                pass
+        # direkt alle Reaktionen hinzufügen
+        await self.ensure_all_reactions(message)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
@@ -71,8 +62,22 @@ class AutoReactCog(commands.Cog):
         if msg.attachments:
             await self.handle_reactions(msg)
 
+    async def ensure_all_reactions(self, msg: discord.Message):
+        """Stellt sicher, dass eine Nachricht alle vier Reaktionen hat."""
+        existing_emojis = {str(r.emoji) for r in msg.reactions}
+        for r in REACTIONS:
+            if r not in existing_emojis:
+                try:
+                    emoji_obj = discord.PartialEmoji.from_str(r)
+                    await msg.add_reaction(emoji_obj)
+                except discord.HTTPException:
+                    pass
+
     async def handle_reactions(self, msg: discord.Message):
         """Analysiert Reactions, kopiert oder entfernt Nachrichten in Zielkanälen."""
+        # Erst sicherstellen, dass alle Reaktionen vorhanden sind
+        await self.ensure_all_reactions(msg)
+
         counts = [0, 0, 0]  # nur für die ersten 3 Reactions relevant
         for i, r in enumerate(REACTIONS[:3]):
             emoji_obj = discord.PartialEmoji.from_str(r)
