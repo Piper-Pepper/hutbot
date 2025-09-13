@@ -90,12 +90,12 @@ class AspectRatioView(discord.ui.View):
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
 
-        # Fortschrittsanzeige simulieren
+        # Fake Fortschrittsanzeige
         steps = self.variant["steps"]
         cfg = self.variant["cfg_scale"]
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
         for i in range(1, 11):
-            await asyncio.sleep(0.2 + steps*0.01 + cfg*0.02)
+            await asyncio.sleep(0.2 + steps * 0.01 + cfg * 0.02)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -113,12 +113,11 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Titel erst nach 40 Zeichen kürzen
-        title_text = ("🎨" + self.prompt_text[:30].capitalize() + "[...]") if len(self.prompt_text) > 30 else "🎨" + self.prompt_text.capitalize()
+        # Titel nach 30 Zeichen kürzen
+        title_text = ("🎨 " + self.prompt_text[:30].capitalize() + "[...]") if len(self.prompt_text) > 30 else "🎨 " + self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-
-        # Prompt erst nach 150 Zeichen kürzen
+        # Prompt nach 150 Zeichen kürzen
         display_text = self.prompt_text[:150] + "..." if len(self.prompt_text) > 150 else self.prompt_text
         embed.add_field(name="Prompt", value=display_text, inline=False)
 
@@ -129,42 +128,42 @@ class AspectRatioView(discord.ui.View):
 
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
+
         guild = interaction.guild
         footer_text = f"{self.variant['model']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        # View for [more info] Button mit Emoji
+        # View + More Info Button (immer sichtbar)
         view = discord.ui.View()
-        if len(self.prompt_text) > 150:
-            button = discord.ui.Button(label="📜 More Info", style=discord.ButtonStyle.secondary)
+        button = discord.ui.Button(label="📜 More Info", style=discord.ButtonStyle.secondary)
 
-            async def moreinfo_callback(inter: discord.Interaction):
-                if inter.user.id == self.author.id:
-                    embed = discord.Embed(
-                        title="📜 Full Image Info",
-                        description="Here are all the juicy details about your image generation:",
-                        color=discord.Color.gold()
-                    )
-                    embed.add_field(name="🖊️ Full Prompt", value=f"```{self.prompt_text + self.hidden_suffix}```", inline=False)
-                    embed.add_field(name="🚫 Negative Prompt", value=f"```{self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}```", inline=False)
-                    embed.add_field(name="🤫 Hidden Suffix", value=f"```{self.hidden_suffix.strip()}```", inline=False)
-                    embed.add_field(name="🎨 Model", value=self.variant["model"], inline=True)
-                    embed.add_field(name="🎚️ CFG", value=str(self.variant["cfg_scale"]), inline=True)
-                    embed.add_field(name="🧮 Steps", value=str(self.variant["steps"]), inline=True)
-                    embed.add_field(name="📅 Created", value=discord.utils.format_dt(inter.message.created_at, "F"), inline=False)
+        async def moreinfo_callback(inter: discord.Interaction):
+            if inter.user.id == self.author.id:
+                full_embed = discord.Embed(
+                    title="📜 Full Image Info",
+                    description="All details of your image generation:",
+                    color=discord.Color.gold()
+                )
+                full_embed.add_field(name="🖊️ Full Prompt", value=f"```{self.prompt_text + self.hidden_suffix}```", inline=False)
+                full_embed.add_field(name="🚫 Negative Prompt", value=f"```{self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}```", inline=False)
+                full_embed.add_field(name="🤫 Hidden Suffix", value=f"```{self.hidden_suffix.strip()}```", inline=False)
+                full_embed.add_field(name="🎨 Model", value=self.variant["model"], inline=True)
+                full_embed.add_field(name="🎚️ CFG", value=str(self.variant["cfg_scale"]), inline=True)
+                full_embed.add_field(name="🧮 Steps", value=str(self.variant["steps"]), inline=True)
+                full_embed.add_field(name="📅 Created", value=discord.utils.format_dt(inter.message.created_at, "F"), inline=False)
 
-                    creator = inter.guild.get_member(self.author.id)
-                    if creator:
-                        embed.set_author(name=f"Created by {creator.display_name}", icon_url=creator.avatar.url if creator.avatar else None)
+                creator = inter.guild.get_member(self.author.id)
+                if creator:
+                    full_embed.set_author(name=f"Created by {creator.display_name}", icon_url=creator.avatar.url if creator.avatar else None)
 
-                    await inter.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await inter.response.send_message("❌ Only the original author can view the full prompt.", ephemeral=True)
+                await inter.response.send_message(embed=full_embed, ephemeral=True)
+            else:
+                await inter.response.send_message("❌ Only the original author can view the full prompt.", ephemeral=True)
 
-            button.callback = moreinfo_callback
-            view.add_item(button)
+        button.callback = moreinfo_callback
+        view.add_item(button)
 
-        # Bild posten
+        # Nachricht mit Bild + Button senden
         msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file, view=view)
 
         # Custom Emojis automatisch hinzufügen
@@ -179,7 +178,7 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
-
+    # --- Aspect Ratio Buttons ---
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024)
@@ -251,7 +250,6 @@ class VeniceCog(commands.Cog):
 
     async def ensure_button_message(self, channel: discord.TextChannel):
         async for msg in channel.history(limit=10):
-            # Nur Button-Nachrichten löschen, die KEIN Embed haben
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
@@ -270,7 +268,6 @@ class VeniceCog(commands.Cog):
                     pass
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
-
 
     @commands.Cog.listener()
     async def on_ready(self):
