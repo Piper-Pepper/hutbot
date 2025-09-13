@@ -5,6 +5,7 @@ import io
 import asyncio
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 VENICE_API_KEY = os.getenv("VENICE_API_KEY")
@@ -77,6 +78,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
+
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author):
@@ -116,41 +118,47 @@ class AspectRatioView(discord.ui.View):
         title_text = (self.prompt_text[:15].capitalize() + "...") if len(self.prompt_text) > 15 else self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-        # Kürzen + More Info Button
-        display_text = self.prompt_text[:50] + "..." if len(self.prompt_text) > 50 else self.prompt_text
-        embed.add_field(name="Prompt", value=display_text, inline=False)
+        if len(self.prompt_text) > 50:
+            short_prompt = f"{self.prompt_text[:50]}... *(click `[more info]` below)*"
+        else:
+            short_prompt = self.prompt_text
+
+        embed.add_field(name="Prompt", value=short_prompt, inline=False)
+
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
+            embed.add_field(name="Negative Prompt", value="*(custom negative prompt applied)*", inline=False)
+
         embed.set_image(url="attachment://image.png")
 
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
+
         guild = interaction.guild
         footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        # View für More Info Button
-        view = discord.ui.View()
-        if len(self.prompt_text) > 50:
-            button = discord.ui.Button(label="[more info]", style=discord.ButtonStyle.secondary)
-            async def moreinfo_callback(inter: discord.Interaction):
-                if inter.user == self.author:
-                    await inter.response.send_message(f"Full Prompt:\n{self.prompt_text}", ephemeral=True)
-                else:
-                    await inter.response.send_message("Nur der Autor kann den vollständigen Prompt sehen.", ephemeral=True)
-            button.callback = moreinfo_callback
-            view.add_item(button)
+        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
 
-        # Bild posten
-        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file, view=view)
+        # Metadaten in Message speichern (für /showfullprompt)
+        msg.bot_data = {
+            "full_prompt": full_prompt,
+            "negative_prompt": neg_prompt,
+            "model": self.variant['model'],
+            "cfg": self.variant['cfg_scale'],
+            "steps": self.variant['steps'],
+            "author": self.author.id
+        }
 
-        # Custom Emojis automatisch hinzufügen
+        # Custom Reactions automatisch hinzufügen
         for emoji in CUSTOM_REACTIONS:
             try:
                 await msg.add_reaction(emoji)
             except Exception as e:
                 print(f"Fehler beim Hinzufügen der Reaktion {emoji}: {e}")
+
+        if len(self.prompt_text) > 50:
+            await msg.reply(f"🔎 Type `/showfullprompt {msg.id}` to reveal full prompt info")
 
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
@@ -169,55 +177,8 @@ class AspectRatioView(discord.ui.View):
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 576, 1024)
 
-# ---------------- Modal ----------------
-class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict):
-        super().__init__(title=f"Generate with {variant['label']}")
-        self.session = session
-        self.variant = variant
-        self.prompt = discord.ui.TextInput(label="Describe your image", style=discord.TextStyle.paragraph, required=True, max_length=500)
-        self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, required=False, max_length=300)
-        normal_cfg = CFG_REFERENCE[variant['model']]
-        self.cfg_value = discord.ui.TextInput(label="CFG Value (optional)", style=discord.TextStyle.short, placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})", required=False, max_length=5)
-        self.add_item(self.prompt)
-        self.add_item(self.negative_prompt)
-        self.add_item(self.cfg_value)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            cfg_value = float(self.cfg_value.value)
-        except:
-            cfg_value = self.variant['cfg_scale']
-
-        category_id = interaction.channel.category.id if interaction.channel.category else None
-        hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
-        variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
-
-        await interaction.response.send_message(
-            f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_suffix, interaction.user),
-            ephemeral=True
-        )
-
-# ---------------- Buttons View ----------------
-class VeniceView(discord.ui.View):
-    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
-        super().__init__(timeout=None)
-        self.session = session
-        self.category_id = channel.category.id if channel.category else None
-        variants = VARIANT_MAP.get(self.category_id, [])
-        style = discord.ButtonStyle.red if self.category_id == NSFW_CATEGORY_ID else discord.ButtonStyle.blurple
-        for variant in variants:
-            btn = discord.ui.Button(label=variant['label'], style=style)
-            btn.callback = self.make_callback(variant)
-            self.add_item(btn)
-
-    def make_callback(self, variant):
-        async def callback(interaction: discord.Interaction):
-            await interaction.response.send_modal(VeniceModal(self.session, variant))
-        return callback
-
-# ---------------- Cog ----------------
+# ---------------- Slash Command für Full Info ----------------
 class VeniceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -228,7 +189,6 @@ class VeniceCog(commands.Cog):
 
     async def ensure_button_message(self, channel: discord.TextChannel):
         async for msg in channel.history(limit=10):
-            # Nur Button-Nachrichten löschen, die KEIN Embed haben
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
@@ -248,13 +208,32 @@ class VeniceCog(commands.Cog):
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
+    @commands.slash_command(name="showfullprompt", description="Shows the full prompt and generation details for an image message.")
+    async def show_full_prompt(self, ctx: discord.ApplicationContext, message_id: str):
+        try:
+            message = await ctx.channel.fetch_message(int(message_id))
+        except:
+            await ctx.respond("❌ Could not fetch message.", ephemeral=True)
+            return
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        for guild in self.bot.guilds:
-            for channel in guild.text_channels:
-                if channel.category and channel.category.id in VARIANT_MAP:
-                    await self.ensure_button_message(channel)
+        if not hasattr(message, "bot_data"):
+            await ctx.respond("❌ No generation data found for this message.", ephemeral=True)
+            return
+
+        data = message.bot_data
+        embed = discord.Embed(title="📜 Full Prompt Info", color=discord.Color.gold())
+        embed.add_field(name="Prompt", value=data["full_prompt"], inline=False)
+        embed.add_field(name="Negative Prompt", value=data["negative_prompt"], inline=False)
+        embed.add_field(name="Model", value=data["model"], inline=True)
+        embed.add_field(name="CFG", value=str(data["cfg"]), inline=True)
+        embed.add_field(name="Steps", value=str(data["steps"]), inline=True)
+        embed.add_field(name="Created At", value=discord.utils.format_dt(message.created_at, "F"), inline=False)
+        user = ctx.guild.get_member(data["author"])
+        if user:
+            embed.set_author(name=f"Created by {user.display_name}", icon_url=user.avatar.url if user.avatar else None)
+
+        await ctx.respond(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
