@@ -130,7 +130,7 @@ class AspectRatioView(discord.ui.View):
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
         guild = interaction.guild
-        footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
+        footer_text = f"{self.variant['model']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
         # View for [more info] Button mit Emoji
