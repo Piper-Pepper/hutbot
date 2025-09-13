@@ -19,7 +19,7 @@ SFW_CHANNEL_ID = 1415769966573260970
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
-# CFG map for user reference (optional, not enforced)
+# CFG reference for user guidance
 CFG_REFERENCE = {
     "lustify-sdxl": {"low": 3.5, "normal": 4.5, "high": 5.5},
     "flux-dev-uncensored": {"low": 3.5, "normal": 4.5, "high": 5.5},
@@ -30,6 +30,10 @@ CFG_REFERENCE = {
     "hidream": {"low": 3.0, "normal": 4.0, "high": 5.0},
     "venice-sd35": {"low": 3.0, "normal": 4.0, "high": 5.0},
 }
+
+# NSFW/SFW prompt suffixes (edit here)
+NSFW_PROMPT_SUFFIX = " NSFW, show explicit details"
+SFW_PROMPT_SUFFIX = " SFW, no explicit content"
 
 # 4 Buttons per channel
 VARIANT_MAP = {
@@ -72,7 +76,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
-# --- Modal ---
+# --- Modal für Bildgenerierung ---
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int):
         super().__init__(title=f"Generate with {variant['label']}")
@@ -80,7 +84,6 @@ class VeniceModal(discord.ui.Modal):
         self.variant = variant
         self.channel_id = channel_id
 
-        # Prompt
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
             style=discord.TextStyle.paragraph,
@@ -88,7 +91,7 @@ class VeniceModal(discord.ui.Modal):
             required=True,
             max_length=500
         )
-        # Negative Prompt
+
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -96,7 +99,7 @@ class VeniceModal(discord.ui.Modal):
             required=False,
             max_length=300
         )
-        # CFG Value (optional, frei wählbar)
+
         ref = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
             label="CFG Value (optional, number overrides normal)",
@@ -116,15 +119,17 @@ class VeniceModal(discord.ui.Modal):
         except (ValueError, TypeError):
             cfg_value = self.variant['cfg_scale']
 
-        variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
+        hidden_suffix = NSFW_PROMPT_SUFFIX if self.channel_id == NSFW_CHANNEL_ID else SFW_PROMPT_SUFFIX
+        prompt_text = self.prompt.value + hidden_suffix
 
-        prompt_text = self.prompt.value
-        if self.channel_id == NSFW_CHANNEL_ID:
-            prompt_text += " NSFW, show explicit details"
-        else:
-            prompt_text += " SFW, no explicit content"
+        variant = {
+            **self.variant,
+            "cfg_scale": cfg_value,
+            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT,
+            "hidden_suffix": hidden_suffix
+        }
 
-        await interaction.response.send_message(f"🎨 Generating with {variant['label']} (CFG: {cfg_value})...", ephemeral=True)
+        await interaction.response.send_message(f"🎨 Generating with {variant['label']}...", ephemeral=True)
         img_bytes = await venice_generate(self.session, prompt_text, variant)
 
         if not img_bytes:
@@ -135,12 +140,28 @@ class VeniceModal(discord.ui.Modal):
         if channel:
             fp = io.BytesIO(img_bytes)
             file = discord.File(fp, filename="image.png")
-            await channel.send(
-                content=(f"{interaction.user.mention} generated an image:\n"
-                         f"Model: {variant['model']}\nCFG: {variant['cfg_scale']}\nSteps: {variant['steps']}\nPrompt: {prompt_text}\nNegative Prompt: {variant['negative_prompt']}"),
-                file=file
+
+            embed = discord.Embed(
+                title=f"Image generated with {variant['label']}",
+                description=self.prompt.value,
+                color=discord.Color.green()
             )
-            await channel.send("💡 Choose the next generation:", view=VeniceView(self.session, self.channel_id))
+            info_button = discord.ui.Button(label="Info", style=discord.ButtonStyle.secondary, custom_id="info_button")
+            view = discord.ui.View()
+            view.add_item(info_button)
+
+            async def info_callback(interaction2: discord.Interaction):
+                info_text = (
+                    f"**Model:** {variant['model']}\n"
+                    f"**CFG:** {variant['cfg_scale']}\n"
+                    f"**Steps:** {variant['steps']}\n"
+                    f"**Negative Prompt:** {variant['negative_prompt']}\n"
+                    f"**Hidden Prompt Suffix:** {variant['hidden_suffix']}"
+                )
+                await interaction2.response.send_message(info_text, ephemeral=True)
+
+            info_button.callback = info_callback
+            await channel.send(embed=embed, file=file, view=view)
 
 # --- Buttons / View ---
 class VeniceView(discord.ui.View):
@@ -149,14 +170,15 @@ class VeniceView(discord.ui.View):
         self.session = session
         self.channel_id = channel_id
 
-        # Only 4 buttons per channel
         added = 0
         for prefix, variant in VARIANT_MAP.items():
             if variant['channel'] == channel_id and added < 4:
                 style = discord.ButtonStyle.red if channel_id == NSFW_CHANNEL_ID else discord.ButtonStyle.blurple
                 btn = discord.ui.Button(label=variant['label'], style=style, custom_id=prefix)
+
                 async def _cb(interaction: discord.Interaction, pref=prefix):
                     await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[pref], self.channel_id))
+
                 btn.callback = _cb
                 self.add_item(btn)
                 added += 1
