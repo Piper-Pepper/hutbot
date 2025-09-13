@@ -19,8 +19,8 @@ SFW_CHANNEL_ID = 1415769966573260970
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
-# CFG mapping
-CFG_MAP = {
+# CFG map for user reference (optional, not enforced)
+CFG_REFERENCE = {
     "lustify-sdxl": {"low": 3.5, "normal": 4.5, "high": 5.5},
     "flux-dev-uncensored": {"low": 3.5, "normal": 4.5, "high": 5.5},
     "pony-realism": {"low": 4.0, "normal": 5.0, "high": 6.0},
@@ -31,19 +31,19 @@ CFG_MAP = {
     "venice-sd35": {"low": 3.0, "normal": 4.0, "high": 5.0},
 }
 
-# 4 Buttons pro Channel
+# 4 Buttons per channel
 VARIANT_MAP = {
     # NSFW
-    ">": {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": CFG_MAP['lustify-sdxl']['normal'], "steps": 30, "channel": NSFW_CHANNEL_ID},
-    "!!": {"label": "Pony", "model": "pony-realism", "cfg_scale": CFG_MAP['pony-realism']['normal'], "steps": 20, "channel": NSFW_CHANNEL_ID},
-    "##": {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": CFG_MAP['flux-dev-uncensored']['normal'], "steps": 30, "channel": NSFW_CHANNEL_ID},
-    "**": {"label": "FluxDev", "model": "flux-dev", "cfg_scale": CFG_MAP['flux-dev']['normal'], "steps": 30, "channel": NSFW_CHANNEL_ID},
+    ">": {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    "!!": {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 20, "channel": NSFW_CHANNEL_ID},
+    "##": {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    "**": {"label": "FluxDev", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
 
     # SFW
-    "?": {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": CFG_MAP['stable-diffusion-3.5']['normal'], "steps": 8, "channel": SFW_CHANNEL_ID},
-    "&": {"label": "Flux", "model": "flux-dev", "cfg_scale": CFG_MAP['flux-dev']['normal'], "steps": 30, "channel": SFW_CHANNEL_ID},
-    "~": {"label": "Qwen", "model": "qwen-image", "cfg_scale": CFG_MAP['qwen-image']['normal'], "steps": 8, "channel": SFW_CHANNEL_ID},
-    "$$": {"label": "HiDream", "model": "hidream", "cfg_scale": CFG_MAP['hidream']['normal'], "steps": 20, "channel": SFW_CHANNEL_ID},
+    "?": {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 8, "channel": SFW_CHANNEL_ID},
+    "&": {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
+    "~": {"label": "Qwen", "model": "qwen-image", "cfg_scale": 3.5, "steps": 8, "channel": SFW_CHANNEL_ID},
+    "$$": {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
 # --- Venice API call ---
@@ -96,11 +96,12 @@ class VeniceModal(discord.ui.Modal):
             required=False,
             max_length=300
         )
-        # CFG Value (optional)
+        # CFG Value (optional, frei wählbar)
+        ref = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
             label="CFG Value (optional, number overrides normal)",
             style=discord.TextStyle.short,
-            placeholder=str(variant['cfg_scale']) + " (low, normal, high)",
+            placeholder=f"{variant['cfg_scale']} (approx Low: {ref['low']}, Normal: {ref['normal']}, High: {ref['high']})",
             required=False,
             max_length=5
         )
@@ -110,7 +111,6 @@ class VeniceModal(discord.ui.Modal):
         self.add_item(self.cfg_value)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # CFG override
         try:
             cfg_value = float(self.cfg_value.value)
         except (ValueError, TypeError):
