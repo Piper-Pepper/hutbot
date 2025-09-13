@@ -89,8 +89,13 @@ class AspectRatioView(discord.ui.View):
         payload_variant = {**self.variant, "width": width, "height": height}
         img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, payload_variant)
         if not img_bytes:
-            await interaction.response.send_message("❌ Generation failed!", ephemeral=True)
+            # Wenn noch nicht geantwortet, response nutzen; sonst followup
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Generation failed!", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             return
+
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
         content = (
@@ -102,7 +107,13 @@ class AspectRatioView(discord.ui.View):
             f"Negative Prompt: {payload_variant['negative_prompt']}\n"
             f"Hidden Prompt Zusatz: {self.hidden_suffix}||"
         )
-        await interaction.response.send_message(content=content, file=file)
+
+        # Wenn ephemeral (vom Modal) → followup für öffentlich
+        if not interaction.response.is_done():
+            await interaction.response.send_message(content=content, file=file)
+        else:
+            await interaction.followup.send(content=content, file=file)
+
         self.stop()
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
