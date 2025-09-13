@@ -79,13 +79,14 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, message_id=None):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
+        self.message_id = message_id  # optional, falls persistent
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
@@ -133,9 +134,13 @@ class AspectRatioView(discord.ui.View):
         footer_text = f"{self.variant['model']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        # View + More Info Button (immer sichtbar)
-        view = discord.ui.View()
-        button = discord.ui.Button(label="📜 More Info", style=discord.ButtonStyle.secondary)
+        # ---------------- Persistent More Info Button ----------------
+        view = discord.ui.View(timeout=None)
+        button = discord.ui.Button(
+            label="📜 More Info",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"more_info_{interaction.id}"  # unique persistent ID
+        )
 
         async def moreinfo_callback(inter: discord.Interaction):
             if inter.user.id == self.author.id:
@@ -163,7 +168,7 @@ class AspectRatioView(discord.ui.View):
         button.callback = moreinfo_callback
         view.add_item(button)
 
-        # Nachricht mit Bild + Button senden
+        # Nachricht senden
         msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file, view=view)
 
         # Custom Emojis automatisch hinzufügen
@@ -271,6 +276,7 @@ class VeniceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        # Persistent Views registrieren
         for guild in self.bot.guilds:
             for channel in guild.text_channels:
                 if channel.category and channel.category.id in VARIANT_MAP:
