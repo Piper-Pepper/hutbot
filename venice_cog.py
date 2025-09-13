@@ -56,8 +56,8 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
     payload = {
         "model": variant["model"],
         "prompt": prompt,
-        "width": 1024,
-        "height": 1024,
+        "width": variant.get("width", 1024),
+        "height": variant.get("height", 1024),
         "steps": variant["steps"],
         "cfg_scale": variant["cfg_scale"],
         "negative_prompt": variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
@@ -76,6 +76,47 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
+# --- Aspect Ratio View ---
+class AspectRatioView(discord.ui.View):
+    def __init__(self, session, variant, prompt_text, hidden_suffix):
+        super().__init__(timeout=None)
+        self.session = session
+        self.variant = variant
+        self.prompt_text = prompt_text
+        self.hidden_suffix = hidden_suffix
+
+    async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
+        payload_variant = {**self.variant, "width": width, "height": height}
+        img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, payload_variant)
+        if not img_bytes:
+            await interaction.response.send_message("❌ Generation failed!", ephemeral=True)
+            return
+        fp = io.BytesIO(img_bytes)
+        file = discord.File(fp, filename="image.png")
+        content = (
+            f"**Prompt:** {self.prompt_text}\n"
+            f"||**Weitere Infos:**\n"
+            f"Model: {payload_variant['model']}\n"
+            f"CFG: {payload_variant['cfg_scale']}\n"
+            f"Steps: {payload_variant['steps']}\n"
+            f"Negative Prompt: {payload_variant['negative_prompt']}\n"
+            f"Hidden Prompt Zusatz: {self.hidden_suffix}||"
+        )
+        await interaction.response.send_message(content=content, file=file)
+        self.stop()
+
+    @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
+    async def ratio_1_1(self, button, interaction):
+        await self.generate_image(interaction, 1024, 1024)
+
+    @discord.ui.button(label="16:9", style=discord.ButtonStyle.blurple)
+    async def ratio_16_9(self, button, interaction):
+        await self.generate_image(interaction, 1024, 576)
+
+    @discord.ui.button(label="9:16", style=discord.ButtonStyle.blurple)
+    async def ratio_9_16(self, button, interaction):
+        await self.generate_image(interaction, 576, 1024)
+
 # --- Modal für Bildgenerierung ---
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int):
@@ -91,7 +132,6 @@ class VeniceModal(discord.ui.Modal):
             required=True,
             max_length=500
         )
-
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -99,7 +139,6 @@ class VeniceModal(discord.ui.Modal):
             required=False,
             max_length=300
         )
-
         ref = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
             label="CFG Value (optional, number overrides normal)",
@@ -120,48 +159,18 @@ class VeniceModal(discord.ui.Modal):
             cfg_value = self.variant['cfg_scale']
 
         hidden_suffix = NSFW_PROMPT_SUFFIX if self.channel_id == NSFW_CHANNEL_ID else SFW_PROMPT_SUFFIX
-        prompt_text = self.prompt.value + hidden_suffix
 
         variant = {
             **self.variant,
             "cfg_scale": cfg_value,
-            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT,
-            "hidden_suffix": hidden_suffix
+            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
         }
 
-        await interaction.response.send_message(f"🎨 Generating with {variant['label']}...", ephemeral=True)
-        img_bytes = await venice_generate(self.session, prompt_text, variant)
-
-        if not img_bytes:
-            await interaction.followup.send("❌ Generation failed!", ephemeral=True)
-            return
-
-        channel = interaction.client.get_channel(self.channel_id)
-        if channel:
-            fp = io.BytesIO(img_bytes)
-            file = discord.File(fp, filename="image.png")
-
-            embed = discord.Embed(
-                title=f"Image generated with {variant['label']}",
-                description=self.prompt.value,
-                color=discord.Color.green()
-            )
-            info_button = discord.ui.Button(label="Info", style=discord.ButtonStyle.secondary, custom_id="info_button")
-            view = discord.ui.View()
-            view.add_item(info_button)
-
-            async def info_callback(interaction2: discord.Interaction):
-                info_text = (
-                    f"**Model:** {variant['model']}\n"
-                    f"**CFG:** {variant['cfg_scale']}\n"
-                    f"**Steps:** {variant['steps']}\n"
-                    f"**Negative Prompt:** {variant['negative_prompt']}\n"
-                    f"**Hidden Prompt Suffix:** {variant['hidden_suffix']}"
-                )
-                await interaction2.response.send_message(info_text, ephemeral=True)
-
-            info_button.callback = info_callback
-            await channel.send(embed=embed, file=file, view=view)
+        await interaction.response.send_message(
+            f"🎨 {variant['label']} ready! Choose an aspect ratio:",
+            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_suffix),
+            ephemeral=True
+        )
 
 # --- Buttons / View ---
 class VeniceView(discord.ui.View):
@@ -175,10 +184,8 @@ class VeniceView(discord.ui.View):
             if variant['channel'] == channel_id and added < 4:
                 style = discord.ButtonStyle.red if channel_id == NSFW_CHANNEL_ID else discord.ButtonStyle.blurple
                 btn = discord.ui.Button(label=variant['label'], style=style, custom_id=prefix)
-
                 async def _cb(interaction: discord.Interaction, pref=prefix):
                     await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[pref], self.channel_id))
-
                 btn.callback = _cb
                 self.add_item(btn)
                 added += 1
