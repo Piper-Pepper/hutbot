@@ -32,15 +32,17 @@ CFG_REFERENCE = {
 }
 
 VARIANT_MAP = {
-    ">": {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
-    "!!": {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 20, "channel": NSFW_CHANNEL_ID},
-    "##": {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
-    "**": {"label": "FluxDev", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    # ---------- NSFW ----------
+    ">":  {"label": "Lustify", "model": "lustify-sdxl",           "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    "!!": {"label": "Pony",     "model": "pony-realism",          "cfg_scale": 5.0, "steps": 25, "channel": NSFW_CHANNEL_ID},
+    "##": {"label": "FluxUnc",  "model": "flux-dev-uncensored",   "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
+    "**": {"label": "FluxDev",  "model": "flux-dev",              "cfg_scale": 5.0, "steps": 28, "channel": NSFW_CHANNEL_ID},
 
-    "?": {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 8, "channel": SFW_CHANNEL_ID},
-    "&": {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
-    "~": {"label": "Qwen", "model": "qwen-image", "cfg_scale": 3.5, "steps": 8, "channel": SFW_CHANNEL_ID},
-    "$$": {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 20, "channel": SFW_CHANNEL_ID},
+    # ---------- SFW ----------
+    "?":  {"label": "SD3.5",    "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 18, "channel": SFW_CHANNEL_ID},
+    "&":  {"label": "Flux",     "model": "flux-dev",              "cfg_scale": 5.0, "steps": 20, "channel": SFW_CHANNEL_ID},
+    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 15, "channel": SFW_CHANNEL_ID},
+    "$$": {"label": "HiDream",  "model": "hidream",               "cfg_scale": 4.0, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
 # ---------------- Venice API Call ----------------
@@ -99,7 +101,7 @@ class AspectRatioView(discord.ui.View):
 
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
-        
+
         # Embed zusammenbauen
         title_text = (self.prompt_text[:15] + "...") if len(self.prompt_text) > 15 else self.prompt_text
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
