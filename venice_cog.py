@@ -71,31 +71,63 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
-class VeniceModal(discord.ui.Modal, title="Generate Image"):
+class VeniceModal(discord.ui.Modal):
     def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int):
-        super().__init__()
+        super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
         self.channel_id = channel_id
-        self.prompt = discord.ui.TextInput(label="Describe your image", style=discord.TextStyle.paragraph, placeholder="Describe your character or scene", required=True, max_length=500)
-        self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, placeholder="Optional things to avoid", required=False, max_length=300)
-        self.cfg_select = discord.ui.Select(placeholder="CFG Level", options=[
-            discord.SelectOption(label="Niedrig", value="low"),
-            discord.SelectOption(label="Normal", value="normal", default=True),
-            discord.SelectOption(label="Hoch", value="high")
-        ])
+
+        # TextInput für Prompt
+        self.prompt = discord.ui.TextInput(
+            label="Describe your image",
+            style=discord.TextStyle.paragraph,
+            placeholder="Describe your character or scene",
+            required=True,
+            max_length=500
+        )
+
+        # TextInput für Negatives
+        self.negative_prompt = discord.ui.TextInput(
+            label="Negative Prompt (optional)",
+            style=discord.TextStyle.paragraph,
+            placeholder="Optional things to avoid",
+            required=False,
+            max_length=300
+        )
+
+        # TextInput für CFG Level (low / normal / high)
+        self.cfg_level = discord.ui.TextInput(
+            label="CFG Level (low, normal, high)",
+            style=discord.TextStyle.short,
+            placeholder="normal",
+            required=False,
+            max_length=10
+        )
+
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
-        self.add_item(self.cfg_select)
+        self.add_item(self.cfg_level)
 
     async def on_submit(self, interaction: discord.Interaction):
-        cfg_value = CFG_MAP[self.variant['model']][self.cfg_select.values[0]]
+        cfg_input = (self.cfg_level.value or "normal").lower()
+        cfg_value = CFG_MAP[self.variant['model']].get(cfg_input, CFG_MAP[self.variant['model']]['normal'])
         variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
+
+        # Optional: Zusatz für NSFW/SFW
+        prompt_text = self.prompt.value
+        if self.channel_id == NSFW_CHANNEL_ID:
+            prompt_text += " NSFW, show explicit details"
+        else:
+            prompt_text += " SFW, no explicit content"
+
         await interaction.response.send_message(f"🎨 Generating with {variant['label']} (CFG: {cfg_value})...", ephemeral=True)
-        img_bytes = await venice_generate(self.session, self.prompt.value + (" NSFW" if self.channel_id == NSFW_CHANNEL_ID else " SFW"), variant)
+        img_bytes = await venice_generate(self.session, prompt_text, variant)
+
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             return
+
         channel = interaction.client.get_channel(self.channel_id)
         if channel:
             fp = io.BytesIO(img_bytes)
