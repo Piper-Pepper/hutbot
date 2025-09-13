@@ -6,7 +6,7 @@ ALLOWED_CHANNELS = [
     1375457632394936340,
     1375457683531890688,
     1377502522788417558,
-    1378456514955710646
+    1378456514955710646,
 ]
 
 # Deine Emojis (die letzten drei sind "entscheidend")
@@ -14,30 +14,35 @@ REACTIONS = [
     "<:01hotlips:1347157151616995378>",  # Ziel 1
     "<:01smile_piper:1387083454575022213>",  # Ziel 2
     "<:01scream:1377706250690625576>",  # Ziel 3
-    "<:011:1346549711817146400>"  # entscheidet nichts
+    "<:011:1346549711817146400>",  # entscheidet nichts
 ]
 
 # Zielkanäle für Reaction 1-3
 TARGET_CHANNELS = {
     0: 1416267309399670917,  # reaction index 0
     1: 1416267352378572820,
-    2: 1416267383160442901
+    2: 1416267383160442901,
 }
+
 
 class AutoReactCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Merkt sich, wo Nachrichten gespiegelt wurden, um doppelte Posts zu verhindern
-        self.mirrored_messages = {}  # {original_msg_id: {target_channel_id: mirrored_msg_id}}
+        self.mirrored_messages: dict[int, dict[int, int]] = {}
+        # {original_msg_id: {target_channel_id: mirrored_msg_id}}
 
     async def cog_load(self):
-        # Beim Start die letzten 20 Nachrichten der relevanten Channels scannen
+        # Beim Start alle relevanten Channels scannen
+        print("🔍 [ai_vote] Scanne letzte 20 Nachrichten in ALLOWED_CHANNELS...")
         for channel_id in ALLOWED_CHANNELS:
             channel = self.bot.get_channel(channel_id)
             if not channel:
+                print(f"⚠️ [ai_vote] Channel {channel_id} nicht gefunden")
                 continue
+
             async for msg in channel.history(limit=20):
                 if msg.attachments:
+                    await self.ensure_all_reactions(msg)
                     await self.handle_reactions(msg)
 
     @commands.Cog.listener()
@@ -46,8 +51,9 @@ class AutoReactCog(commands.Cog):
             return
         if not message.attachments:
             return  # nur Bilder
-        # direkt alle Reaktionen hinzufügen
+
         await self.ensure_all_reactions(message)
+        await self.handle_reactions(message)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
@@ -63,62 +69,54 @@ class AutoReactCog(commands.Cog):
             await self.handle_reactions(msg)
 
     async def ensure_all_reactions(self, msg: discord.Message):
-        """Stellt sicher, dass eine Nachricht alle vier Reaktionen hat."""
-        existing_emojis = {str(r.emoji) for r in msg.reactions}
+        """Sorgt dafür, dass alle vier Reaktionen vorhanden sind."""
+        existing = {str(r.emoji) for r in msg.reactions}
         for r in REACTIONS:
-            if r not in existing_emojis:
+            if r not in existing:
                 try:
-                    emoji_obj = discord.PartialEmoji.from_str(r)
-                    await msg.add_reaction(emoji_obj)
+                    await msg.add_reaction(discord.PartialEmoji.from_str(r))
                 except discord.HTTPException:
                     pass
 
     async def handle_reactions(self, msg: discord.Message):
-        """Analysiert Reactions, kopiert oder entfernt Nachrichten in Zielkanälen."""
-        # Erst sicherstellen, dass alle Reaktionen vorhanden sind
-        await self.ensure_all_reactions(msg)
-
-        counts = [0, 0, 0]  # nur für die ersten 3 Reactions relevant
-        for i, r in enumerate(REACTIONS[:3]):
+        """Analysiert Reactions und spiegelt oder löscht Nachrichten."""
+        counts = []
+        for r in REACTIONS[:3]:
             emoji_obj = discord.PartialEmoji.from_str(r)
             reaction = discord.utils.get(msg.reactions, emoji=emoji_obj)
-            if reaction:
-                counts[i] = reaction.count
+            counts.append(reaction.count if reaction else 0)
 
         max_count = max(counts)
         if max_count <= 1:
-            # alles <= 1 → Nachricht bleibt nur im Ursprungs-Channel
+            # Reaktionen zu niedrig → nur im Ursprungs-Channel behalten
             await self.remove_from_all_targets(msg.id)
             return
 
-        # Alle Reactions, die gleichauf sind, bestimmen die Zielkanäle
         selected_indices = [i for i, c in enumerate(counts) if c == max_count]
-
-        # Zuerst alte Spiegelungen löschen, die nicht mehr gebraucht werden
-        current_targets = set(TARGET_CHANNELS[i] for i in selected_indices)
-        await self.remove_from_all_targets(msg.id, keep_channels=current_targets)
+        keep_channels = {TARGET_CHANNELS[i] for i in selected_indices}
+        await self.remove_from_all_targets(msg.id, keep_channels=keep_channels)
 
         for idx in selected_indices:
             target_channel_id = TARGET_CHANNELS[idx]
+            if msg.id in self.mirrored_messages and target_channel_id in self.mirrored_messages[msg.id]:
+                continue  # Spiegelung existiert schon
+
             target_channel = self.bot.get_channel(target_channel_id)
             if not target_channel:
                 continue
 
-            # Prüfen, ob bereits gespiegelt
-            if msg.id in self.mirrored_messages and target_channel_id in self.mirrored_messages[msg.id]:
-                continue  # existiert schon
-
-            embed = discord.Embed(description=f"[Jump to original message]({msg.jump_url})", color=discord.Color.purple())
+            embed = discord.Embed(
+                description=f"[Jump to original message]({msg.jump_url})",
+                color=discord.Color.purple(),
+            )
             embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
             embed.set_image(url=msg.attachments[0].url)
 
             mirrored_msg = await target_channel.send(embed=embed)
-
-            # speichern
             self.mirrored_messages.setdefault(msg.id, {})[target_channel_id] = mirrored_msg.id
 
     async def remove_from_all_targets(self, original_msg_id: int, keep_channels: set[int] = None):
-        """Löscht alle Spiegelungen außer denen, die in keep_channels bleiben sollen."""
+        """Löscht alle Spiegelungen, außer die, die in keep_channels stehen."""
         if original_msg_id not in self.mirrored_messages:
             return
         for channel_id, mirrored_id in list(self.mirrored_messages[original_msg_id].items()):
@@ -132,8 +130,10 @@ class AutoReactCog(commands.Cog):
                 except discord.NotFound:
                     pass
             del self.mirrored_messages[original_msg_id][channel_id]
+
         if not self.mirrored_messages[original_msg_id]:
             del self.mirrored_messages[original_msg_id]
+
 
 async def setup(bot):
     await bot.add_cog(AutoReactCog(bot))
