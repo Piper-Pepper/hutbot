@@ -113,12 +113,14 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        title_text = (self.prompt_text[:15].capitalize() + "...") if len(self.prompt_text) > 15 else self.prompt_text.capitalize()
+        # Titel erst nach 25 Zeichen kürzen
+        title_text = (self.prompt_text[:25].capitalize() + "...") if len(self.prompt_text) > 25 else self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-        # Kürzen + More Info Button
-        display_text = self.prompt_text[:50] + "..." if len(self.prompt_text) > 50 else self.prompt_text
+        # Prompt erst nach 120 Zeichen kürzen
+        display_text = self.prompt_text[:120] + "..." if len(self.prompt_text) > 120 else self.prompt_text
         embed.add_field(name="Prompt", value=display_text, inline=False)
+
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
@@ -130,10 +132,10 @@ class AspectRatioView(discord.ui.View):
         footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        # View for [more info] Button
+        # View for [more info] Button mit Emoji
         view = discord.ui.View()
-        if len(self.prompt_text) > 50:
-            button = discord.ui.Button(label="[more info]", style=discord.ButtonStyle.secondary)
+        if len(self.prompt_text) > 120:
+            button = discord.ui.Button(label="📜 More Info", style=discord.ButtonStyle.secondary)
 
             async def moreinfo_callback(inter: discord.Interaction):
                 if inter.user.id == self.author.id:
@@ -175,6 +177,7 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
+
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
