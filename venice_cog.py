@@ -31,7 +31,6 @@ CFG_REFERENCE = {
     "hidream": 4.0,
 }
 
-# Varianten pro Kategorie
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
@@ -45,7 +44,6 @@ VARIANT_MAP = {
     ]
 }
 
-# Custom Reactions
 CUSTOM_REACTIONS = [
     "<:01thumb02:1346577526478344272>",
     "<:01thumb01:1378013768495140884>",
@@ -79,14 +77,13 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, message_id=None):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
-        self.message_id = message_id  # optional, falls persistent
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
@@ -114,64 +111,49 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Titel nach 30 Zeichen kürzen
+        # Titel
         title_text = ("🎨 " + self.prompt_text[:30].capitalize() + "[...]") if len(self.prompt_text) > 30 else "🎨 " + self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-        # Prompt nach 150 Zeichen kürzen
-        display_text = self.prompt_text[:150] + "..." if len(self.prompt_text) > 150 else self.prompt_text
-        embed.add_field(name="Prompt", value=display_text, inline=False)
+        # Prompt truncate & inline show more
+        truncated_prompt = self.prompt_text[:150] + "..." if len(self.prompt_text) > 150 else self.prompt_text
+        embed.add_field(name="Prompt", value=truncated_prompt, inline=False)
 
+        # Negative Prompt
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
+
         embed.set_image(url="attachment://image.png")
 
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
 
         guild = interaction.guild
-        footer_text = f"{self.variant['model']}"
+        # Footer mit cfg und steps
+        footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        # ---------------- Persistent More Info Button ----------------
+        # View für Show More Button
         view = discord.ui.View(timeout=None)
-        button = discord.ui.Button(
-            label="📜 More Info",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"more_info_{interaction.id}"  # unique persistent ID
-        )
 
-        async def moreinfo_callback(inter: discord.Interaction):
-            if inter.user.id == self.author.id:
-                full_embed = discord.Embed(
-                    title="📜 Full Image Info",
-                    description="All details of your image generation:",
-                    color=discord.Color.gold()
-                )
-                full_embed.add_field(name="🖊️ Full Prompt", value=f"```{self.prompt_text}```", inline=False)
-                full_embed.add_field(name="🚫 Negative Prompt", value=f"```{self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}```", inline=False)
-                full_embed.add_field(name="🤫 Hidden Suffix", value=f"```{self.hidden_suffix.strip()}```", inline=False)
-                full_embed.add_field(name="🎨 Model", value=self.variant["model"], inline=True)
-                full_embed.add_field(name="🎚️ CFG", value=str(self.variant["cfg_scale"]), inline=True)
-                full_embed.add_field(name="🧮 Steps", value=str(self.variant["steps"]), inline=True)
-                full_embed.add_field(name="📅 Created", value=discord.utils.format_dt(inter.message.created_at, "F"), inline=False)
+        if len(self.prompt_text) > 150:
+            class ShowMore(discord.ui.Button):
+                def __init__(self):
+                    super().__init__(label="Show More", style=discord.ButtonStyle.secondary)
 
-                creator = inter.guild.get_member(self.author.id)
-                if creator:
-                    full_embed.set_author(name=f"Created by {creator.display_name}", icon_url=creator.avatar.url if creator.avatar else None)
+                async def callback(inner_self, inter: discord.Interaction):
+                    # vollständiges Prompt anzeigen
+                    full_embed = embed.copy()
+                    full_embed.set_field_at(0, name="Prompt", value=self.prompt_text, inline=False)
+                    await inter.response.edit_message(embed=full_embed, view=view)
 
-                await inter.response.send_message(embed=full_embed, ephemeral=True)
-            else:
-                await inter.response.send_message("❌ Only the original author can view the full prompt.", ephemeral=True)
-
-        button.callback = moreinfo_callback
-        view.add_item(button)
+            view.add_item(ShowMore())
 
         # Nachricht senden
         msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file, view=view)
 
-        # Custom Emojis automatisch hinzufügen
+        # Custom Reactions
         for emoji in CUSTOM_REACTIONS:
             try:
                 await msg.add_reaction(emoji)
@@ -183,7 +165,7 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
-    # --- Aspect Ratio Buttons ---
+    # Aspect Ratio Buttons
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024)
@@ -262,14 +244,14 @@ class VeniceCog(commands.Cog):
                     pass
         view = VeniceView(self.session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
-
+        
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
-                except:
+                except Exception:
                     pass
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
