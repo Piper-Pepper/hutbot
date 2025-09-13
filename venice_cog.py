@@ -45,7 +45,6 @@ VARIANT_MAP = {
     ]
 }
 
-
 # Custom Reactions
 CUSTOM_REACTIONS = [
     "<:01thumb02:1346577526478344272>",
@@ -115,26 +114,36 @@ class AspectRatioView(discord.ui.View):
         file = discord.File(fp, filename="image.png")
 
         title_text = (self.prompt_text[:15].capitalize() + "...") if len(self.prompt_text) > 15 else self.prompt_text.capitalize()
-
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
-        short_prompt = self.prompt_text[:50] + "... [more info]" if len(self.prompt_text) > 50 else self.prompt_text
-        embed.add_field(name="Prompt", value=short_prompt, inline=False)
 
+        # Kürzen + More Info Button
+        display_text = self.prompt_text[:50] + "..." if len(self.prompt_text) > 50 else self.prompt_text
+        embed.add_field(name="Prompt", value=display_text, inline=False)
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
-
         embed.set_image(url="attachment://image.png")
 
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
-
         guild = interaction.guild
         footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
+        # View für More Info Button
+        view = discord.ui.View()
+        if len(self.prompt_text) > 50:
+            button = discord.ui.Button(label="[more info]", style=discord.ButtonStyle.secondary)
+            async def moreinfo_callback(inter: discord.Interaction):
+                if inter.user == self.author:
+                    await inter.response.send_message(f"Full Prompt:\n{self.prompt_text}", ephemeral=True)
+                else:
+                    await inter.response.send_message("Nur der Autor kann den vollständigen Prompt sehen.", ephemeral=True)
+            button.callback = moreinfo_callback
+            view.add_item(button)
+
         # Bild posten
-        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
+        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file, view=view)
 
         # Custom Emojis automatisch hinzufügen
         for emoji in CUSTOM_REACTIONS:
@@ -142,9 +151,6 @@ class AspectRatioView(discord.ui.View):
                 await msg.add_reaction(emoji)
             except Exception as e:
                 print(f"Fehler beim Hinzufügen der Reaktion {emoji}: {e}")
-
-        if len(self.prompt_text) > 50:
-            await msg.reply("Click `[more info]` in the prompt field to see the full text via `/showfullprompt <msg_id>`")
 
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
@@ -169,12 +175,10 @@ class VeniceModal(discord.ui.Modal):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
-
         self.prompt = discord.ui.TextInput(label="Describe your image", style=discord.TextStyle.paragraph, required=True, max_length=500)
         self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, required=False, max_length=300)
         normal_cfg = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(label="CFG Value (optional)", style=discord.TextStyle.short, placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})", required=False, max_length=5)
-
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
@@ -187,7 +191,6 @@ class VeniceModal(discord.ui.Modal):
 
         category_id = interaction.channel.category.id if interaction.channel.category else None
         hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
-
         variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
 
         await interaction.response.send_message(
@@ -202,10 +205,8 @@ class VeniceView(discord.ui.View):
         super().__init__(timeout=None)
         self.session = session
         self.category_id = channel.category.id if channel.category else None
-
         variants = VARIANT_MAP.get(self.category_id, [])
         style = discord.ButtonStyle.red if self.category_id == NSFW_CATEGORY_ID else discord.ButtonStyle.blurple
-
         for variant in variants:
             btn = discord.ui.Button(label=variant['label'], style=style)
             btn.callback = self.make_callback(variant)
