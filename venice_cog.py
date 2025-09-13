@@ -74,7 +74,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
     except Exception as e:
         print(f"Exception calling Venice API: {e}")
         return None
-
+    
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author):
@@ -86,46 +86,68 @@ class AspectRatioView(discord.ui.View):
         self.author = author
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
-        await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
-        # Fake Fortschrittsanzeige
-        steps = self.variant["steps"]
-        cfg = self.variant["cfg_scale"]
-        progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
-        for i in range(1, 11):
-            await asyncio.sleep(0.2 + steps * 0.01 + cfg * 0.02)
-            try:
-                await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
-            except:
-                pass
+    # Fake Fortschrittsanzeige
+    steps = self.variant["steps"]
+    cfg = self.variant["cfg_scale"]
+    progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
+    for i in range(1, 11):
+        await asyncio.sleep(0.2 + steps * 0.01 + cfg * 0.02)
+        try:
+            await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
+        except:
+            pass
 
-        full_prompt = self.prompt_text + self.hidden_suffix
-        img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height)
-        if not img_bytes:
-            await interaction.followup.send("❌ Generation failed!", ephemeral=True)
-            if isinstance(interaction.channel, discord.TextChannel):
-                await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
-            self.stop()
-            return
+    full_prompt = self.prompt_text + self.hidden_suffix
+    img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height)
+    if not img_bytes:
+        await interaction.followup.send("❌ Generation failed!", ephemeral=True)
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+        self.stop()
+        return
 
-        fp = io.BytesIO(img_bytes)
-        file = discord.File(fp, filename="image.png")
+    fp = io.BytesIO(img_bytes)
+    file = discord.File(fp, filename="image.png")
 
-        # Titel (50 Zeichen)
-        if len(self.prompt_text) > 50:
-            title_text = "🎨 " + self.prompt_text[:50].capitalize() + "[...]"
-        else:
-            title_text = "🎨 " + self.prompt_text.capitalize()
-        embed = discord.Embed(title=title_text, color=discord.Color.blurple())
+    # Embed
+    title_text = ("🎨 " + self.prompt_text[:50].capitalize() + "[...]") if len(self.prompt_text) > 50 else "🎨 " + self.prompt_text.capitalize()
+    embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-        # Prompt-Feld (max 150 Zeichen)
-        truncated_prompt = self.prompt_text[:150] if len(self.prompt_text) <= 150 else self.prompt_text[:150] + "..."
-        embed.add_field(name="Prompt", value=truncated_prompt, inline=False)
+    truncated_prompt = self.prompt_text[:150] if len(self.prompt_text) <= 150 else self.prompt_text[:150] + "..."
+    embed.add_field(name="Prompt", value=truncated_prompt, inline=False)
 
-        # Continued Prompt, nur wenn Prompt länger als 50 Zeichen
-        if len(self.prompt_text) > 50:
-            continued_text = "..." + self.prompt_text[45:]
-            embed.add_field(name="Continued Prompt", value=continued_text, inline=False)
+    if len(self.prompt_text) > 50:
+        embed.add_field(name="Continued Prompt", value="..." + self.prompt_text[45:], inline=False)
+
+    neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+    if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+        embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
+
+    embed.set_image(url="attachment://image.png")
+
+    if hasattr(self.author, "avatar") and self.author.avatar:
+        embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
+
+    guild = interaction.guild
+    embed.set_footer(text=f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}",
+                     icon_url=guild.icon.url if guild and guild.icon else None)
+
+    msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
+
+    # Custom Reactions
+    for emoji in CUSTOM_REACTIONS:
+        try:
+            await msg.add_reaction(emoji)
+        except:
+            pass
+
+    if isinstance(interaction.channel, discord.TextChannel):
+        await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+
+    self.stop()
+
 
 
     # Aspect Ratio Buttons
