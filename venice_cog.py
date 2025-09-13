@@ -31,7 +31,7 @@ CFG_REFERENCE = {
     "hidream": 4.0,
 }
 
-# ---------- Varianten für NSFW/SFW ----------
+# Varianten pro Kategorie
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
@@ -47,7 +47,7 @@ VARIANT_MAP = {
     ]
 }
 
-# ---------------- Venice API Call ----------------
+# ---------------- Venice API ----------------
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict, width: int, height: int) -> bytes | None:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -74,16 +74,23 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, category_id):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
+        self.category_id = category_id
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
+
+        # NSFW-Schutz: Keine NSFW-Inhalte in SFW-Kategorien
+        if self.hidden_suffix == NSFW_PROMPT_SUFFIX and self.category_id != NSFW_CATEGORY_ID:
+            await interaction.followup.send("❌ Cannot generate NSFW image in SFW category!", ephemeral=True)
+            self.stop()
+            return
 
         # Fortschrittsanzeige
         steps = self.variant["steps"]
@@ -110,7 +117,6 @@ class AspectRatioView(discord.ui.View):
         file = discord.File(fp, filename="image.png")
 
         title_text = (self.prompt_text[:15].capitalize() + "...") if len(self.prompt_text) > 15 else self.prompt_text.capitalize()
-
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
         short_prompt = self.prompt_text[:50] + "... [more info]" if len(self.prompt_text) > 50 else self.prompt_text
         embed.add_field(name="Prompt", value=short_prompt, inline=False)
@@ -120,7 +126,6 @@ class AspectRatioView(discord.ui.View):
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
 
         embed.set_image(url="attachment://image.png")
-
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
 
@@ -128,10 +133,7 @@ class AspectRatioView(discord.ui.View):
         footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild and guild.icon else None)
 
-        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
-
-        if len(self.prompt_text) > 50:
-            await msg.reply("Click `[more info]` in the prompt field to see the full text via `/showfullprompt <msg_id>`")
+        await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
@@ -153,10 +155,11 @@ class AspectRatioView(discord.ui.View):
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict):
+    def __init__(self, session: aiohttp.ClientSession, variant: dict, category_id: int):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
+        self.category_id = category_id
 
         self.prompt = discord.ui.TextInput(label="Describe your image", style=discord.TextStyle.paragraph, required=True, max_length=500)
         self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, required=False, max_length=300)
@@ -173,17 +176,12 @@ class VeniceModal(discord.ui.Modal):
         except:
             cfg_value = self.variant['cfg_scale']
 
-        category_id = interaction.channel.category.id if interaction.channel.category else None
-        if category_id == NSFW_CATEGORY_ID:
-            hidden_suffix = NSFW_PROMPT_SUFFIX
-        else:
-            hidden_suffix = SFW_PROMPT_SUFFIX
-
+        hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
         variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_suffix, interaction.user),
+            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_suffix, interaction.user, self.category_id),
             ephemeral=True
         )
 
@@ -204,7 +202,7 @@ class VeniceView(discord.ui.View):
 
     def make_callback(self, variant):
         async def callback(interaction: discord.Interaction):
-            await interaction.response.send_modal(VeniceModal(self.session, variant))
+            await interaction.response.send_modal(VeniceModal(self.session, variant, self.category_id))
         return callback
 
 # ---------------- Cog ----------------
