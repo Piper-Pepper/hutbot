@@ -99,9 +99,10 @@ class AspectRatioView(discord.ui.View):
 
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
-
+        
         # Embed zusammenbauen
-        embed = discord.Embed(title="Generated Image", color=discord.Color.blurple())
+        title_text = (self.prompt_text[:15] + "...") if len(self.prompt_text) > 15 else self.prompt_text
+        embed = discord.Embed(title=title_text, color=discord.Color.blurple())
         embed.add_field(name="Prompt", value=self.prompt_text, inline=False)
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
