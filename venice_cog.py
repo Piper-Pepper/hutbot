@@ -144,7 +144,7 @@ class AspectRatioView(discord.ui.View):
                     description="All details of your image generation:",
                     color=discord.Color.gold()
                 )
-                full_embed.add_field(name="🖊️ Full Prompt", value=f"```{self.prompt_text + self.hidden_suffix}```", inline=False)
+                full_embed.add_field(name="🖊️ Full Prompt", value=f"```{self.prompt_text}```", inline=False)
                 full_embed.add_field(name="🚫 Negative Prompt", value=f"```{self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}```", inline=False)
                 full_embed.add_field(name="🤫 Hidden Suffix", value=f"```{self.hidden_suffix.strip()}```", inline=False)
                 full_embed.add_field(name="🎨 Model", value=self.variant["model"], inline=True)
