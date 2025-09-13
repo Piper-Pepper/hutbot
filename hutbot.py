@@ -51,7 +51,6 @@ async def main():
             "hut_dm_app",
             # "hutkick",
             "venice_cog",
-            "ai_vote",  # <- vermutlich dein Problem-Cog
             "riddle",
             "riddle_post"
         ]
