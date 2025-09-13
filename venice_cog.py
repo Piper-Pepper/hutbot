@@ -28,7 +28,6 @@ CFG_REFERENCE = {
     "flux-dev": 5.0,
     "stable-diffusion-3.5": 4.0,
     "hidream": 4.0,
-    "venice-sd35": 4.0,
 }
 
 VARIANT_MAP = {
@@ -39,10 +38,10 @@ VARIANT_MAP = {
     "**": {"label": "FluxDev",  "model": "flux-dev",              "cfg_scale": 5.0, "steps": 28, "channel": NSFW_CHANNEL_ID},
 
     # ---------- SFW ----------
-    "?":  {"label": "SD3.5",    "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30, "channel": SFW_CHANNEL_ID},
+    "?":  {"label": "SD3.5",    "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 22, "channel": SFW_CHANNEL_ID},
     "&":  {"label": "Flux",     "model": "flux-dev",              "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
-    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},
-    "$$": {"label": "HiDream",  "model": "hidream",               "cfg_scale": 4.0, "steps": 20, "channel": SFW_CHANNEL_ID},
+    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 22, "channel": SFW_CHANNEL_ID},
+    "$$": {"label": "HiDream",  "model": "hidream",               "cfg_scale": 4.0, "steps": 25, "channel": SFW_CHANNEL_ID},
 }
 
 # ---------------- Venice API Call ----------------
@@ -83,7 +82,7 @@ class AspectRatioView(discord.ui.View):
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
 
-        # Fortschritt
+        # Fortschrittsanzeige
         steps = self.variant["steps"]
         cfg = self.variant["cfg_scale"]
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
@@ -94,7 +93,8 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
-        img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, self.variant, width, height)
+        full_prompt = self.prompt_text + self.hidden_suffix
+        img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height)
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             return
@@ -102,11 +102,19 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Embed zusammenbauen
-        title_text = (self.prompt_text[:15] + "...") if len(self.prompt_text) > 15 else self.prompt_text
-        embed = discord.Embed(title=title_text, color=discord.Color.blurple())
-        embed.add_field(name="Prompt", value=self.prompt_text, inline=False)
+        # Embed-Titel (erste 15 Zeichen, Großbuchstabe)
+        title_text = (self.prompt_text[:15].capitalize() + "...") if len(self.prompt_text) > 15 else self.prompt_text.capitalize()
 
+        # Embed zusammenbauen
+        embed = discord.Embed(title=title_text, color=discord.Color.blurple())
+        # Prompt max 50 Zeichen + [more info]
+        if len(self.prompt_text) > 50:
+            short_prompt = self.prompt_text[:50] + "... [more info]"
+        else:
+            short_prompt = self.prompt_text
+        embed.add_field(name="Prompt", value=short_prompt, inline=False)
+
+        # Negative Prompt nur, wenn abweichend
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
@@ -126,9 +134,16 @@ class AspectRatioView(discord.ui.View):
             embed.set_footer(text=footer_text)
 
         # Bild posten
-        await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
+        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
 
-        # Danach Venice-Buttons posten
+        # [more info] - klickbare Ephemeral-Nachricht simulieren
+        if len(self.prompt_text) > 50:
+            async def show_full_prompt(inter: discord.Interaction):
+                await inter.response.send_message(f"Full Prompt:\n{self.prompt_text}", ephemeral=True)
+            # Add a "fake button" via a context menu hint
+            await msg.reply("Click `[more info]` in the prompt field to see the full text via `/showfullprompt <msg_id>`")
+
+        # Venice Buttons posten (alte löschen)
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(channel, self.session)
