@@ -113,12 +113,12 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Titel erst nach 25 Zeichen kürzen
-        title_text = (self.prompt_text[:25].capitalize() + "...") if len(self.prompt_text) > 25 else self.prompt_text.capitalize()
+        # Titel erst nach 40 Zeichen kürzen
+        title_text = (self.prompt_text[:40].capitalize() + "...") if len(self.prompt_text) > 40 else self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
-        # Prompt erst nach 120 Zeichen kürzen
-        display_text = self.prompt_text[:120] + "..." if len(self.prompt_text) > 120 else self.prompt_text
+        # Prompt erst nach 150 Zeichen kürzen
+        display_text = self.prompt_text[:150] + "..." if len(self.prompt_text) > 150 else self.prompt_text
         embed.add_field(name="Prompt", value=display_text, inline=False)
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
@@ -134,7 +134,7 @@ class AspectRatioView(discord.ui.View):
 
         # View for [more info] Button mit Emoji
         view = discord.ui.View()
-        if len(self.prompt_text) > 120:
+        if len(self.prompt_text) > 150:
             button = discord.ui.Button(label="📜 More Info", style=discord.ButtonStyle.secondary)
 
             async def moreinfo_callback(inter: discord.Interaction):
