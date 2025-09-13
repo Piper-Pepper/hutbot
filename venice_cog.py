@@ -31,7 +31,7 @@ CFG_REFERENCE = {
     "venice-sd35": {"low": 3.0, "normal": 4.0, "high": 5.0},
 }
 
-# NSFW/SFW prompt suffixes (edit here)
+# NSFW/SFW prompt suffixes
 NSFW_PROMPT_SUFFIX = " NSFW, show explicit details"
 SFW_PROMPT_SUFFIX = " SFW, no explicit content"
 
@@ -87,13 +87,19 @@ class AspectRatioView(discord.ui.View):
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         payload_variant = {**self.variant, "width": width, "height": height}
+
+        # Fake Progress
+        progress_msg = await interaction.response.send_message("⏳ Generating image: 0%", ephemeral=True)
+        for i in range(1, 6):
+            await asyncio.sleep(0.5)
+            try:
+                await interaction.edit_original_response(content=f"⏳ Generating image: {i*20}%")
+            except:
+                pass
+
         img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, payload_variant)
         if not img_bytes:
-            # Wenn noch nicht geantwortet, response nutzen; sonst followup
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ Generation failed!", ephemeral=True)
-            else:
-                await interaction.followup.send("❌ Generation failed!", ephemeral=True)
+            await interaction.edit_original_response(content="❌ Generation failed!")
             return
 
         fp = io.BytesIO(img_bytes)
@@ -108,12 +114,7 @@ class AspectRatioView(discord.ui.View):
             f"Hidden Prompt Zusatz: {self.hidden_suffix}||"
         )
 
-        # Wenn ephemeral (vom Modal) → followup für öffentlich
-        if not interaction.response.is_done():
-            await interaction.response.send_message(content=content, file=file)
-        else:
-            await interaction.followup.send(content=content, file=file)
-
+        await interaction.edit_original_response(content=content, attachments=[file])
         self.stop()
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
@@ -195,11 +196,14 @@ class VeniceView(discord.ui.View):
             if variant['channel'] == channel_id and added < 4:
                 style = discord.ButtonStyle.red if channel_id == NSFW_CHANNEL_ID else discord.ButtonStyle.blurple
                 btn = discord.ui.Button(label=variant['label'], style=style, custom_id=prefix)
-                async def _cb(interaction: discord.Interaction, pref=prefix):
-                    await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[pref], self.channel_id))
-                btn.callback = _cb
+                btn.callback = self.make_callback(variant, channel_id)
                 self.add_item(btn)
                 added += 1
+
+    def make_callback(self, variant, channel_id):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(VeniceModal(self.session, variant, channel_id))
+        return callback
 
 # --- Cog ---
 class VeniceCog(commands.Cog):
