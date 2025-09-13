@@ -85,7 +85,7 @@ class AspectRatioView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
         self.author = author
 
-        async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
+    async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
 
         # Fake Fortschrittsanzeige
@@ -111,12 +111,11 @@ class AspectRatioView(discord.ui.View):
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Embed: kein Titel, nur Prompt
+        # Embed ohne Titel, Prompt max. 300 Zeichen
         truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
         embed = discord.Embed(color=discord.Color.blurple())
         embed.add_field(name="Prompt", value=truncated_prompt, inline=False)
 
-        # Negative Prompt (optional)
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
@@ -145,7 +144,6 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
-
 
     # Aspect Ratio Buttons
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
