@@ -228,7 +228,8 @@ class VeniceCog(commands.Cog):
 
     async def ensure_button_message(self, channel: discord.TextChannel):
         async for msg in channel.history(limit=10):
-            if msg.components:
+            # Nur Button-Nachrichten löschen, die KEIN Embed haben
+            if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
                 except:
@@ -239,13 +240,14 @@ class VeniceCog(commands.Cog):
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
         async for msg in channel.history(limit=10):
-            if msg.components:
+            if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
                 except:
                     pass
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
+
 
     @commands.Cog.listener()
     async def on_ready(self):
