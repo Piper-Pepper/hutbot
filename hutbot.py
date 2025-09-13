@@ -39,7 +39,6 @@ async def on_ready():
 async def main():
     async with bot:
         # 📦 Load all extensions
-        await bot.load_extension("generate_cleaner")
         await bot.load_extension("pepper")
         await bot.load_extension("hutmember")
         await bot.load_extension("anti-mommy")
