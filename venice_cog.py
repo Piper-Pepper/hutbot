@@ -18,7 +18,7 @@ SFW_CHANNEL_ID = 1415769966573260970
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
-# CFG normal values only for modal placeholders
+# CFG normal values for reference in modal placeholders
 CFG_REFERENCE = {
     "lustify-sdxl": 4.5,
     "flux-dev-uncensored": 4.5,
@@ -62,6 +62,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         "hide_watermark": True,
         "return_binary": True
     }
+
     try:
         async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
             if resp.status != 200:
@@ -75,7 +76,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # --- Aspect Ratio View ---
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict, prompt_text: str, hidden_suffix: str):
+    def __init__(self, session, variant, prompt_text, hidden_suffix):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
@@ -83,22 +84,31 @@ class AspectRatioView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
+        payload_variant = {**self.variant}
+
+        # Interaction deferred
         await interaction.response.defer(ephemeral=True)
 
-        img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, self.variant, width, height)
+        # Venice Image Generation
+        img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, payload_variant, width, height)
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             return
 
+        # File preparation
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
+
+        # Spoiler für langen Prompt
+        prompt_display = f"||{self.prompt_text}||"
+
         content = (
-            f"**Prompt:** {self.prompt_text}\n"
+            f"**Prompt:** {prompt_display}\n"
             f"||**Weitere Infos:**\n"
-            f"Model: {self.variant['model']}\n"
-            f"CFG: {self.variant['cfg_scale']}\n"
-            f"Steps: {self.variant['steps']}\n"
-            f"Negative Prompt: {self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}\n"
+            f"Model: {payload_variant['model']}\n"
+            f"CFG: {payload_variant['cfg_scale']}\n"
+            f"Steps: {payload_variant['steps']}\n"
+            f"Negative Prompt: {payload_variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}\n"
             f"Hidden Prompt Zusatz: {self.hidden_suffix}||"
         )
 
@@ -139,7 +149,7 @@ class VeniceModal(discord.ui.Modal):
             required=False,
             max_length=300
         )
-
+        # Only show normal CFG as placeholder
         normal_cfg = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
             label="CFG Value (optional)",
@@ -198,18 +208,26 @@ class VeniceCog(commands.Cog):
     def cog_unload(self):
         asyncio.create_task(self.session.close())
 
+    async def ensure_button_message(self, channel: discord.TextChannel):
+        """Stellt sicher, dass im Channel die Venice-Buttons als letzter Post stehen."""
+        # Lösche alte Button-Posts aus den letzten 10 Nachrichten
+        async for msg in channel.history(limit=10):
+            if msg.components:
+                try:
+                    await msg.delete()
+                except Exception as e:
+                    print(f"Fehler beim Löschen alter Button-Message: {e}")
+
+        # Sende neuen Button-Post
+        view = VeniceView(self.session, channel.id)
+        await channel.send("💡 Click a button to start generating images!", view=view)
+
     @commands.Cog.listener()
     async def on_ready(self):
         for channel_id in [NSFW_CHANNEL_ID, SFW_CHANNEL_ID]:
             channel = self.bot.get_channel(channel_id)
-            if channel:
-                async for msg in channel.history(limit=10):
-                    if msg.components:
-                        try: 
-                            await msg.delete()
-                        except: 
-                            pass
-                await channel.send("💡 Click a button to start generating images!", view=VeniceView(self.session, channel_id))
+            if channel and isinstance(channel, discord.TextChannel):
+                await self.ensure_button_message(channel)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
