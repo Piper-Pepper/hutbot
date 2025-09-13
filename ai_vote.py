@@ -101,6 +101,21 @@ class AutoReactCog(commands.Cog):
                     return orig_id
         return None
 
+    async def ensure_reactions_on_msg(self, msg: discord.Message):
+        """Stellt sicher, dass die 4 REACTIONS an einer gegebenen Nachricht vorhanden sind."""
+        try:
+            existing = {str(r.emoji) for r in msg.reactions}
+        except Exception:
+            existing = set()
+        for r in REACTIONS:
+            if r not in existing:
+                try:
+                    await msg.add_reaction(discord.PartialEmoji.from_str(r))
+                    await asyncio.sleep(0.12)
+                except Exception:
+                    # falls fehlgeschlagen (z.B. Emoji nicht verfügbar), weiter
+                    pass
+
     # ---------- initial scan (nur SOURCE_CHANNELS) ----------
     async def initial_scan(self):
         await self.bot.wait_until_ready()
@@ -119,7 +134,7 @@ class AutoReactCog(commands.Cog):
             except Exception as e:
                 print(f"⚠️ Fehler beim Initial-Scan von {ch_id}: {e}")
 
-    # ---------- fügt alle 4 Reactions hinzu, falls fehlen ----------
+    # ---------- fügt alle 4 Reactions hinzu, falls fehlen (für SOURCE messages) ----------
     async def ensure_all_reactions(self, msg: discord.Message):
         existing = {str(r.emoji) for r in msg.reactions}
         for r in REACTIONS:
@@ -169,21 +184,19 @@ class AutoReactCog(commands.Cog):
         if max_count <= 1:
             # Wenn die Nachricht aktuell in a reaction channel -> restore in source and delete mirrors
             if msg.channel.id in REACTION_CHANNELS:
-                # finde zu welcher original-id diese mirrored message gehört (falls vorhanden)
                 orig = self._find_store_by_mirrored_id(msg.id)
                 if orig is not None:
-                    # restore original into its origin_channel stored (oder fallback)
                     record = self.store.get(orig)
                     if record:
-                        # poste zurück in origin_channel (oder in first SOURCE_CHANNEL wenn origin nicht erreichbar)
                         origin_ch = await self._get_channel(record.get("origin_channel")) or await self._get_channel(SOURCE_CHANNELS[0])
                         if origin_ch:
                             files = self._files_from_snapshot(record)
                             try:
                                 new_msg = await origin_ch.send(content=record.get("content", ""), files=files)
+                                # ensure reactions on restored source message
+                                await self.ensure_reactions_on_msg(new_msg)
                                 # cleanup: lösche alle mirrored messages, entferne store
                                 await self._delete_all_mirrored(orig)
-                                # optional: entferne store-Eintrag
                                 if orig in self.store:
                                     del self.store[orig]
                                 await asyncio.sleep(0.15)
@@ -197,8 +210,7 @@ class AutoReactCog(commands.Cog):
                     except Exception:
                         pass
             else:
-                # msg in SOURCE_CHANNEL und <=1 -> nichts tun (bleibt dort). 
-                # Falls diese msg zufällig in store existiert (z. B. vorherverschoben), nichts weiter.
+                # msg in SOURCE_CHANNEL und <=1 -> nichts tun (bleibt dort).
                 return
             return
 
@@ -209,7 +221,6 @@ class AutoReactCog(commands.Cog):
         # Falls die message aktuell in SOURCE_CHANNELS -> move it to target channels
         if msg.channel.id in SOURCE_CHANNELS:
             orig_id = msg.id
-            # Erstelle Snapshot bevor Löschen
             snapshot = await self._snapshot_message(msg)
             snapshot["origin_channel"] = msg.channel.id
             snapshot["content"] = snapshot.get("content", "")
@@ -224,6 +235,8 @@ class AutoReactCog(commands.Cog):
                 try:
                     files = self._files_from_snapshot(snapshot)
                     mirrored_msg = await t_ch.send(content=snapshot["content"], files=files)
+                    # ensure reactions on mirrored message
+                    await self.ensure_reactions_on_msg(mirrored_msg)
                     snapshot["mirrored"][t_id] = mirrored_msg.id
                     await asyncio.sleep(0.15)
                 except Exception as e:
@@ -242,25 +255,19 @@ class AutoReactCog(commands.Cog):
 
         # Falls die message aktuell in a REACTION_CHANNEL
         if msg.channel.id in REACTION_CHANNELS:
-            # Versuche zu finden, ob das eine mirror ist, zu dem wir einen store Eintrag haben
             orig = self._find_store_by_mirrored_id(msg.id)
             if orig is None:
-                # Falls keine Zuordnung: es könnte sein, dass jemand die Nachricht manuell in einem Reaction-Channel gepostet hat.
-                # Wir behandeln diesen Fall: wir behalten die Nachricht in diesem Channel, sorgen aber dafür,
-                # dass sie in *keinen* SOURCE_CHANNEL bleibt (falls es dort Kopien gäbe).
-                # Um Konsistenz zu wahren, wir kümmern uns nur um Löschungen in anderen REACTION_CHANNELS (keine weiteren Kopien).
-                # Best effort: lösche gleiche Inhalte in SOURCE_CHANNELS (falls vorhanden)
+                # Orphan: best-effort: ensure reactions exist on this message
+                await self.ensure_reactions_on_msg(msg)
+                # und entferne gleiche posts in SOURCE/anderen reaction channels
                 await self._ensure_unique_for_orphan(msg, target_channel_ids)
                 return
 
-            # Nun haben wir einen record für dieses orig
             record = self.store.get(orig)
             if not record:
-                # safety: falls record fehlt, nichts tun
                 return
 
             # Ziel: die message soll in genau target_channel_ids stehen.
-            # Prüfe vorhandene mirrored ids
             existing_mirrored = set(record.get("mirrored", {}).keys())
 
             # Erstelle fehlende Kopien in target channels
@@ -272,6 +279,7 @@ class AutoReactCog(commands.Cog):
                 try:
                     files = self._files_from_snapshot(record)
                     new_m = await t_ch.send(content=record.get("content", ""), files=files)
+                    await self.ensure_reactions_on_msg(new_m)
                     record["mirrored"][t_id] = new_m.id
                     await asyncio.sleep(0.12)
                 except Exception as e:
@@ -285,7 +293,6 @@ class AutoReactCog(commands.Cog):
                     continue
                 ch = await self._get_channel(t_id)
                 if not ch:
-                    # entferne mapping, falls channel nicht erreichbar
                     del record["mirrored"][t_id]
                     continue
                 try:
@@ -296,22 +303,18 @@ class AutoReactCog(commands.Cog):
                     pass
                 except Exception as e:
                     print(f"⚠️ Fehler beim Löschen Spiegelung in {t_id}: {e}")
-                # mapping entfernen
                 record["mirrored"].pop(t_id, None)
 
-            # Falls die origin noch existiert in SOURCE (selten), lösche sie, weil jetzt highest >=2
+            # Falls die origin noch existiert in SOURCE, lösche sie, weil jetzt highest >=2
             origin_ch = await self._get_channel(record.get("origin_channel"))
-            if origin_ch:
+            if origin_ch and not record.get("origin_deleted"):
                 try:
-                    # versuche die origin message id zu löschen, falls noch da
-                    if not record.get("origin_deleted"):
-                        try:
-                            orig_msg = await origin_ch.fetch_message(orig)
-                            await orig_msg.delete()
-                            record["origin_deleted"] = True
-                            await asyncio.sleep(0.12)
-                        except discord.NotFound:
-                            record["origin_deleted"] = True
+                    orig_msg = await origin_ch.fetch_message(orig)
+                    await orig_msg.delete()
+                    record["origin_deleted"] = True
+                    await asyncio.sleep(0.12)
+                except discord.NotFound:
+                    record["origin_deleted"] = True
                 except Exception:
                     pass
 
@@ -325,7 +328,6 @@ class AutoReactCog(commands.Cog):
         stelle sicher, dass keine Kopie in SOURCE_CHANNELS existiert (lösche sie), und
         lösche ggf. Kopien in anderen Reaction-Channels, die nicht zu target_channel_ids gehören."""
         # Lösche gleiche Inhalte in SOURCE_CHANNELS (falls vorhanden)
-        # (Best-effort: vergleiche content und Anzahl attachments)
         for src in SOURCE_CHANNELS:
             ch = await self._get_channel(src)
             if not ch:
@@ -334,7 +336,6 @@ class AutoReactCog(commands.Cog):
                 async for m in ch.history(limit=SCAN_LIMIT):
                     if not m.attachments:
                         continue
-                    # grobe Erkennung: gleicher content und gleiche Anzahlder attachments
                     if (m.content or "") == (msg.content or "") and len(m.attachments) == len(msg.attachments):
                         try:
                             await m.delete()
@@ -381,6 +382,7 @@ class AutoReactCog(commands.Cog):
                 print(f"⚠️ Fehler beim Löschen mirror {mid} in {ch_id}: {e}")
         # remove mapping
         rec["mirrored"].clear()
+
 
 # ---------- setup ----------
 async def setup(bot: commands.Bot):
