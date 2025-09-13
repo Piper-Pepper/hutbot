@@ -13,29 +13,26 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
-# Channels
 NSFW_CHANNEL_ID = 1415769909874524262
 SFW_CHANNEL_ID = 1415769966573260970
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
-# CFG reference for user guidance
+# CFG normal values for reference in modal placeholders
 CFG_REFERENCE = {
-    "lustify-sdxl": {"low": 3.5, "normal": 4.5, "high": 5.5},
-    "flux-dev-uncensored": {"low": 3.5, "normal": 4.5, "high": 5.5},
-    "pony-realism": {"low": 4.0, "normal": 5.0, "high": 6.0},
-    "qwen-image": {"low": 3.0, "normal": 3.5, "high": 4.5},
-    "flux-dev": {"low": 4.0, "normal": 5.0, "high": 6.0},
-    "stable-diffusion-3.5": {"low": 3.0, "normal": 4.0, "high": 5.0},
-    "hidream": {"low": 3.0, "normal": 4.0, "high": 5.0},
-    "venice-sd35": {"low": 3.0, "normal": 4.0, "high": 5.0},
+    "lustify-sdxl": 4.5,
+    "flux-dev-uncensored": 4.5,
+    "pony-realism": 5.0,
+    "qwen-image": 3.5,
+    "flux-dev": 5.0,
+    "stable-diffusion-3.5": 4.0,
+    "hidream": 4.0,
+    "venice-sd35": 4.0,
 }
 
-# NSFW/SFW prompt suffixes
 NSFW_PROMPT_SUFFIX = " NSFW, show explicit details"
 SFW_PROMPT_SUFFIX = " SFW, no explicit content"
 
-# 4 Buttons per channel
 VARIANT_MAP = {
     # NSFW
     ">": {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30, "channel": NSFW_CHANNEL_ID},
@@ -51,13 +48,13 @@ VARIANT_MAP = {
 }
 
 # --- Venice API call ---
-async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict) -> bytes | None:
+async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict, width: int, height: int) -> bytes | None:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": variant["model"],
         "prompt": prompt,
-        "width": variant.get("width", 1024),
-        "height": variant.get("height", 1024),
+        "width": width,
+        "height": height,
         "steps": variant["steps"],
         "cfg_scale": variant["cfg_scale"],
         "negative_prompt": variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
@@ -65,6 +62,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         "hide_watermark": True,
         "return_binary": True
     }
+
     try:
         async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
             if resp.status != 200:
@@ -86,20 +84,15 @@ class AspectRatioView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
-        payload_variant = {**self.variant, "width": width, "height": height}
-
-        # Fake Progress
-        progress_msg = await interaction.response.send_message("⏳ Generating image: 0%", ephemeral=True)
-        for i in range(1, 6):
-            await asyncio.sleep(0.5)
-            try:
-                await interaction.edit_original_response(content=f"⏳ Generating image: {i*20}%")
-            except:
-                pass
-
-        img_bytes = await venice_generate(self.session, self.prompt_text + self.hidden_suffix, payload_variant)
+        img_bytes = await venice_generate(
+            self.session,
+            self.prompt_text + self.hidden_suffix,
+            self.variant,
+            width,
+            height
+        )
         if not img_bytes:
-            await interaction.edit_original_response(content="❌ Generation failed!")
+            await interaction.response.send_message("❌ Generation failed!", ephemeral=True)
             return
 
         fp = io.BytesIO(img_bytes)
@@ -107,29 +100,29 @@ class AspectRatioView(discord.ui.View):
         content = (
             f"**Prompt:** {self.prompt_text}\n"
             f"||**Weitere Infos:**\n"
-            f"Model: {payload_variant['model']}\n"
-            f"CFG: {payload_variant['cfg_scale']}\n"
-            f"Steps: {payload_variant['steps']}\n"
-            f"Negative Prompt: {payload_variant['negative_prompt']}\n"
+            f"Model: {self.variant['model']}\n"
+            f"CFG: {self.variant['cfg_scale']}\n"
+            f"Steps: {self.variant['steps']}\n"
+            f"Negative Prompt: {self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}\n"
             f"Hidden Prompt Zusatz: {self.hidden_suffix}||"
         )
 
-        await interaction.edit_original_response(content=content, attachments=[file])
+        await interaction.response.send_message(content=content, file=file, ephemeral=True)
         self.stop()
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
-    async def ratio_1_1(self, button, interaction):
+    async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024)
 
     @discord.ui.button(label="16:9", style=discord.ButtonStyle.blurple)
-    async def ratio_16_9(self, button, interaction):
+    async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 576)
 
     @discord.ui.button(label="9:16", style=discord.ButtonStyle.blurple)
-    async def ratio_9_16(self, button, interaction):
+    async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 576, 1024)
 
-# --- Modal für Bildgenerierung ---
+# --- Modal ---
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int):
         super().__init__(title=f"Generate with {variant['label']}")
@@ -151,11 +144,12 @@ class VeniceModal(discord.ui.Modal):
             required=False,
             max_length=300
         )
-        ref = CFG_REFERENCE[variant['model']]
+        # Only show normal CFG as placeholder
+        normal_cfg = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
-            label="CFG Value (optional, number overrides normal)",
+            label="CFG Value (optional)",
             style=discord.TextStyle.short,
-            placeholder=f"{variant['cfg_scale']} (approx Low: {ref['low']}, Normal: {ref['normal']}, High: {ref['high']})",
+            placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})",
             required=False,
             max_length=5
         )
@@ -171,12 +165,7 @@ class VeniceModal(discord.ui.Modal):
             cfg_value = self.variant['cfg_scale']
 
         hidden_suffix = NSFW_PROMPT_SUFFIX if self.channel_id == NSFW_CHANNEL_ID else SFW_PROMPT_SUFFIX
-
-        variant = {
-            **self.variant,
-            "cfg_scale": cfg_value,
-            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
-        }
+        variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
@@ -184,7 +173,7 @@ class VeniceModal(discord.ui.Modal):
             ephemeral=True
         )
 
-# --- Buttons / View ---
+# --- Buttons View ---
 class VeniceView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
@@ -224,35 +213,6 @@ class VeniceCog(commands.Cog):
                         try: await msg.delete()
                         except: pass
                 await channel.send("💡 Click a button to start generating images!", view=VeniceView(self.session, channel_id))
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-        content = message.content.strip()
-        sorted_prefixes = sorted(VARIANT_MAP.keys(), key=len, reverse=True)
-        prefix = next((p for p in sorted_prefixes if content.startswith(p)), None)
-        if not prefix:
-            return
-        variant = VARIANT_MAP[prefix]
-        if message.channel.id != variant['channel']:
-            return
-        parts = content[len(prefix):].split("||", 1)
-        prompt_text = parts[0].strip()
-        neg_text = parts[1].strip() if len(parts) > 1 else DEFAULT_NEGATIVE_PROMPT
-        variant = {**variant, "negative_prompt": neg_text}
-        img_bytes = await venice_generate(self.session, prompt_text, variant)
-        if not img_bytes:
-            await message.reply("❌ Generation failed!")
-            return
-        fp = io.BytesIO(img_bytes)
-        file = discord.File(fp, filename="image.png")
-        await message.reply(content=f"Generated with {variant['label']} | CFG: {variant['cfg_scale']} | Steps: {variant['steps']}", file=file)
-        async for msg in message.channel.history(limit=10):
-            if msg.components:
-                try: await msg.delete()
-                except: pass
-        await message.channel.send("💡 Choose the next generation:", view=VeniceView(self.session, message.channel.id))
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
