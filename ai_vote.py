@@ -2,41 +2,35 @@ import asyncio
 import discord
 from discord.ext import commands
 
-# ✅ Channels, in denen Bilder automatisch reagiert werden
-ALLOWED_CHANNELS = [
+# Ursprungskanäle (dort stehen die ersten Posts mit allen 4 Reaktionen)
+SOURCE_CHANNELS = [
     1415769909874524262,
-    1415769966573260970,
-    1416267309399670917,
-    1416267352378572820,
-    1416267383160442901,
-    1416276593709420544
+    1415769966573260970
 ]
 
-# ✅ Emojis – die ersten drei sind "entscheidend"
+# Reaktions-Emojis
 REACTIONS = [
     "<:01hotlips:1347157151616995378>",     # Ziel 1
     "<:01smile_piper:1387083454575022213>", # Ziel 2
     "<:01scream:1377706250690625576>",      # Ziel 3
-    "<:011:1346549711817146400>",           # Bonus-Reaction
+    "<:011:1346549711817146400>",           # Ziel 4
 ]
 
-# ✅ Zielkanäle für die ersten drei Reaktionen
-TARGET_CHANNELS = {
-    0: 1416267309399670917,  # reaction index 0
-    1: 1416267352378572820,
-    2: 1416267383160442901,
-}
-
-# ✅ Channel für die vierte Reaction
-BONUS_CHANNEL = 1416276593709420544
-
+# Channels, die jeweils die Reaktion repräsentieren
+REACTION_CHANNELS = [
+    1416267309399670917, # <:01hotlips>
+    1416267352378572820, # <:01smile_piper>
+    1416267383160442901, # <:01scream>
+    1416276593709420544  # <:011>
+]
 
 class AutoReactCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # {original_msg_id: {target_channel_id: mirrored_msg_id}}
         self.mirrored_messages: dict[int, dict[int, int]] = {}
-        self.bot.loop.create_task(self.background_scan())
+        # Startet nur den Initial-Scan der SOURCE_CHANNELS beim Bot-Start
+        self.bot.loop.create_task(self.initial_scan())
 
     async def _get_channel(self, channel_id: int) -> discord.TextChannel | None:
         channel = self.bot.get_channel(channel_id)
@@ -54,9 +48,10 @@ class AutoReactCog(commands.Cog):
             print(f"⚠️ Fehler beim Laden von Channel {channel_id}: {e}")
         return None
 
-    async def background_scan(self):
+    async def initial_scan(self):
+        """Beim Start: prüft die letzten 20 Nachrichten der SOURCE_CHANNELS und fügt fehlende Reaktionen hinzu"""
         await self.bot.wait_until_ready()
-        print("🔍 Starte Hintergrund-Scan der ALLOWED_CHANNELS...")
+        print("🔍 Starte Initial-Scan der SOURCE_CHANNELS (letzte 20 Nachrichten)...")
 
         async def scan_channel(channel_id: int):
             channel = await self._get_channel(channel_id)
@@ -66,23 +61,22 @@ class AutoReactCog(commands.Cog):
                 async for msg in channel.history(limit=20):
                     if msg.attachments:
                         await self.ensure_all_reactions(msg)
-                        await self.handle_reactions(msg)
                     await asyncio.sleep(0.5)
             except discord.HTTPException as e:
                 print(f"⚠️ Fehler beim Scannen von Channel {channel_id}: {e}")
 
-        await asyncio.gather(*(scan_channel(cid) for cid in ALLOWED_CHANNELS))
+        await asyncio.gather(*(scan_channel(cid) for cid in SOURCE_CHANNELS))
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.channel.id not in ALLOWED_CHANNELS or not message.attachments:
+        if message.channel.id not in SOURCE_CHANNELS or not message.attachments:
             return
         await self.ensure_all_reactions(message)
         await self.handle_reactions(message)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        if payload.channel_id not in ALLOWED_CHANNELS:
+        if payload.channel_id not in SOURCE_CHANNELS:
             return
         channel = await self._get_channel(payload.channel_id)
         if not channel:
@@ -95,6 +89,7 @@ class AutoReactCog(commands.Cog):
             await self.handle_reactions(msg)
 
     async def ensure_all_reactions(self, msg: discord.Message):
+        """Sorgt dafür, dass alle definierten Reaktionen vorhanden sind"""
         existing = {str(r.emoji) for r in msg.reactions}
         for r in REACTIONS:
             if r not in existing:
@@ -105,8 +100,9 @@ class AutoReactCog(commands.Cog):
                     print(f"⚠️ Konnte Reaction {r} nicht zu {msg.id} hinzufügen")
 
     async def handle_reactions(self, msg: discord.Message):
+        """Analysiert Reaktionen und verschiebt Nachricht in die entsprechenden REACTION_CHANNELS"""
         counts = []
-        for r in REACTIONS[:3]:
+        for r in REACTIONS:
             emoji_obj = discord.PartialEmoji.from_str(r)
             reaction = discord.utils.get(msg.reactions, emoji=emoji_obj)
             counts.append(reaction.count if reaction else 0)
@@ -116,32 +112,25 @@ class AutoReactCog(commands.Cog):
             await self.remove_from_all_targets(msg.id)
             return
 
-        # Channels für gleichstarke Reaktionen auswählen
+        # Indexe mit maximaler Reaktion auswählen
         selected_indices = [i for i, c in enumerate(counts) if c == max_count]
-        keep_channels = {TARGET_CHANNELS[i] for i in selected_indices}
+
+        # Zielchannels entsprechend der höchsten Reaktion
+        keep_channels = {REACTION_CHANNELS[i] for i in selected_indices}
         await self.remove_from_all_targets(msg.id, keep_channels=keep_channels)
 
-        # Nachricht in alle Zielkanäle verschieben
         for idx in selected_indices:
-            target_channel_id = TARGET_CHANNELS[idx]
+            target_channel_id = REACTION_CHANNELS[idx]
             if msg.id in self.mirrored_messages and target_channel_id in self.mirrored_messages[msg.id]:
                 continue
             target_channel = await self._get_channel(target_channel_id)
             if not target_channel:
                 continue
+            # Nachricht verschieben (Content + Dateien)
             content = msg.content or ""
             files = [await attachment.to_file() for attachment in msg.attachments]
             mirrored_msg = await target_channel.send(content=content, files=files)
             self.mirrored_messages.setdefault(msg.id, {})[target_channel_id] = mirrored_msg.id
-
-        # Bonus-Reaction immer hinzufügen
-        bonus_channel = await self._get_channel(BONUS_CHANNEL)
-        if bonus_channel:
-            if msg.id not in self.mirrored_messages or BONUS_CHANNEL not in self.mirrored_messages[msg.id]:
-                content = msg.content or ""
-                files = [await attachment.to_file() for attachment in msg.attachments]
-                mirrored_msg = await bonus_channel.send(content=content, files=files)
-                self.mirrored_messages.setdefault(msg.id, {})[BONUS_CHANNEL] = mirrored_msg.id
 
     async def remove_from_all_targets(self, original_msg_id: int, keep_channels: set[int] = None):
         if original_msg_id not in self.mirrored_messages:
