@@ -102,22 +102,25 @@ class AspectRatioView(discord.ui.View):
 
         # Embed zusammenbauen
         embed = discord.Embed(title="Generated Image", color=discord.Color.blurple())
-        embed.add_field(name="Prompt", value=f"{self.prompt_text}{self.hidden_suffix}", inline=False)
+        embed.add_field(name="Prompt", value=self.prompt_text, inline=False)
 
-        # Nur anzeigen, wenn negativ prompt anders als default
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="Negative Prompt", value=neg_prompt, inline=False)
 
-        # Bild
         embed.set_image(url="attachment://image.png")
 
-        # Autor (Avatar falls möglich)
+        # Autor & Avatar
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
-            embed.set_footer(text=f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}")
+
+        # Footer mit Servername + Icon + Modellinfo
+        guild = interaction.guild
+        footer_text = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
+        if guild:
+            embed.set_footer(text=footer_text, icon_url=guild.icon.url if guild.icon else None)
         else:
-            embed.set_footer(text=f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']} | by {self.author}")
+            embed.set_footer(text=footer_text)
 
         # Bild posten
         await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
