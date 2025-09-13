@@ -37,12 +37,10 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
         {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 25},
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
-        {"label": "FluxDev", "model": "flux-dev", "cfg_scale": 5.0, "steps": 28},
     ],
     SFW_CATEGORY_ID: [
-        {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 22},
+        {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 20},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
-        {"label": "Qwen", "model": "qwen-image", "cfg_scale": 3.5, "steps": 8},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 20},
     ]
 }
