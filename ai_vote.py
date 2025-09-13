@@ -2,7 +2,7 @@ import asyncio
 import discord
 from discord.ext import commands
 
-# Ursprungskanäle (dort stehen die ersten Posts mit allen 4 Reaktionen)
+# Ursprungskanäle (Originalposts mit allen Reaktionen)
 SOURCE_CHANNELS = [
     1415769909874524262,
     1415769966573260970
@@ -10,18 +10,18 @@ SOURCE_CHANNELS = [
 
 # Reaktions-Emojis
 REACTIONS = [
-    "<:01hotlips:1347157151616995378>",     # Ziel 1
-    "<:01smile_piper:1387083454575022213>", # Ziel 2
-    "<:01scream:1377706250690625576>",      # Ziel 3
-    "<:011:1346549711817146400>",           # Ziel 4
+    "<:01hotlips:1347157151616995378>",     
+    "<:01smile_piper:1387083454575022213>", 
+    "<:01scream:1377706250690625576>",      
+    "<:011:1346549711817146400>",           
 ]
 
 # Channels, die jeweils die Reaktion repräsentieren
 REACTION_CHANNELS = [
-    1416267309399670917, # <:01hotlips>
-    1416267352378572820, # <:01smile_piper>
-    1416267383160442901, # <:01scream>
-    1416276593709420544  # <:011>
+    1416267309399670917, 
+    1416267352378572820, 
+    1416267383160442901, 
+    1416276593709420544  
 ]
 
 class AutoReactCog(commands.Cog):
@@ -29,7 +29,6 @@ class AutoReactCog(commands.Cog):
         self.bot = bot
         # {original_msg_id: {target_channel_id: mirrored_msg_id}}
         self.mirrored_messages: dict[int, dict[int, int]] = {}
-        # Startet nur den Initial-Scan der SOURCE_CHANNELS beim Bot-Start
         self.bot.loop.create_task(self.initial_scan())
 
     async def _get_channel(self, channel_id: int) -> discord.TextChannel | None:
@@ -89,7 +88,6 @@ class AutoReactCog(commands.Cog):
             await self.handle_reactions(msg)
 
     async def ensure_all_reactions(self, msg: discord.Message):
-        """Sorgt dafür, dass alle definierten Reaktionen vorhanden sind"""
         existing = {str(r.emoji) for r in msg.reactions}
         for r in REACTIONS:
             if r not in existing:
@@ -100,7 +98,7 @@ class AutoReactCog(commands.Cog):
                     print(f"⚠️ Konnte Reaction {r} nicht zu {msg.id} hinzufügen")
 
     async def handle_reactions(self, msg: discord.Message):
-        """Analysiert Reaktionen und verschiebt Nachricht in die entsprechenden REACTION_CHANNELS"""
+        """Spiegelt nur Posts mit >1 Reaktionen in REACTION_CHANNELS"""
         counts = []
         for r in REACTIONS:
             emoji_obj = discord.PartialEmoji.from_str(r)
@@ -109,6 +107,7 @@ class AutoReactCog(commands.Cog):
 
         max_count = max(counts)
         if max_count <= 1:
+            # Weniger als 2 Reaktionen → nichts in REACTION_CHANNELS
             await self.remove_from_all_targets(msg.id)
             return
 
@@ -126,7 +125,7 @@ class AutoReactCog(commands.Cog):
             target_channel = await self._get_channel(target_channel_id)
             if not target_channel:
                 continue
-            # Nachricht verschieben (Content + Dateien)
+            # Post kopieren (Content + Dateien)
             content = msg.content or ""
             files = [await attachment.to_file() for attachment in msg.attachments]
             mirrored_msg = await target_channel.send(content=content, files=files)
