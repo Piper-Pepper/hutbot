@@ -19,26 +19,27 @@ SFW_CHANNEL_ID = 1415769966573260970
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
 
+# CFG map (nur normal und high)
 CFG_MAP = {
-    "lustify-sdxl": {"low": 3.5, "normal": 4.5, "high": 5.5},
-    "flux-dev-uncensored": {"low": 3.5, "normal": 4.5, "high": 5.5},
-    "pony-realism": {"low": 4.0, "normal": 5.0, "high": 6.0},
-    "qwen-image": {"low": 3.0, "normal": 3.5, "high": 4.5},
-    "flux-dev": {"low": 4.0, "normal": 5.0, "high": 6.0},
-    "stable-diffusion-3.5": {"low": 3.0, "normal": 4.0, "high": 5.0},
-    "hidream": {"low": 3.0, "normal": 4.0, "high": 5.0},
-    "venice-sd35": {"low": 3.0, "normal": 4.0, "high": 5.0},
+    "lustify-sdxl": {"normal": 4.5, "high": 5.5},
+    "flux-dev-uncensored": {"normal": 4.5, "high": 5.5},
+    "pony-realism": {"normal": 5.0, "high": 6.0},
+    "qwen-image": {"normal": 3.5, "high": 4.5},
+    "flux-dev": {"normal": 5.0, "high": 6.0},
+    "stable-diffusion-3.5": {"normal": 4.0, "high": 5.0},
+    "hidream": {"normal": 4.0, "high": 5.0},
+    "venice-sd35": {"normal": 4.0, "high": 5.0},
 }
 
 VARIANT_MAP = {
-    # NSFW (5)
+    # NSFW
     ">":  {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": CFG_MAP['lustify-sdxl']['normal'], "steps": 30, "channel": NSFW_CHANNEL_ID},
     "!!": {"label": "Pony", "model": "pony-realism", "cfg_scale": CFG_MAP['pony-realism']['normal'], "steps": 20, "channel": NSFW_CHANNEL_ID},
     "##": {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": CFG_MAP['flux-dev-uncensored']['normal'], "steps": 30, "channel": NSFW_CHANNEL_ID},
     "**": {"label": "FluxDev", "model": "flux-dev", "cfg_scale": CFG_MAP['flux-dev']['normal'], "steps": 30, "channel": NSFW_CHANNEL_ID},
     "++": {"label": "Qwen", "model": "qwen-image", "cfg_scale": CFG_MAP['qwen-image']['normal'], "steps": 12, "channel": NSFW_CHANNEL_ID},
 
-    # SFW (5)
+    # SFW
     "?":  {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": CFG_MAP['stable-diffusion-3.5']['normal'], "steps": 8, "channel": SFW_CHANNEL_ID},
     "&":  {"label": "Flux", "model": "flux-dev", "cfg_scale": CFG_MAP['flux-dev']['normal'], "steps": 30, "channel": SFW_CHANNEL_ID},
     "~":  {"label": "Qwen", "model": "qwen-image", "cfg_scale": CFG_MAP['qwen-image']['normal'], "steps": 8, "channel": SFW_CHANNEL_ID},
@@ -46,6 +47,7 @@ VARIANT_MAP = {
     "%%": {"label": "Venice", "model": "venice-sd35", "cfg_scale": CFG_MAP['venice-sd35']['normal'], "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
+# Venice API call
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict) -> bytes | None:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -71,14 +73,16 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
+# Modal
 class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int):
+    def __init__(self, session: aiohttp.ClientSession, variant: dict, channel_id: int, cfg_value: float, cfg_label: str):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
         self.channel_id = channel_id
+        self.cfg_value = cfg_value
+        self.cfg_label = cfg_label
 
-        # TextInput für Prompt
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
             style=discord.TextStyle.paragraph,
@@ -87,43 +91,33 @@ class VeniceModal(discord.ui.Modal):
             max_length=500
         )
 
-        # TextInput für Negatives
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
-            placeholder="Optional things to avoid",
+            placeholder="Things to avoid",
             required=False,
             max_length=300
         )
 
-        # TextInput für CFG Level (low / normal / high)
-        self.cfg_level = discord.ui.TextInput(
-            label="CFG Level (low, normal, high)",
-            style=discord.TextStyle.short,
-            placeholder="normal",
-            required=False,
-            max_length=10
-        )
-
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
-        self.add_item(self.cfg_level)
 
     async def on_submit(self, interaction: discord.Interaction):
-        cfg_input = (self.cfg_level.value or "normal").lower()
-        cfg_value = CFG_MAP[self.variant['model']].get(cfg_input, CFG_MAP[self.variant['model']]['normal'])
-        variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
-
-        # Optional: Zusatz für NSFW/SFW
+        variant = {**self.variant,
+                   "cfg_scale": self.cfg_value,
+                   "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
         prompt_text = self.prompt.value
         if self.channel_id == NSFW_CHANNEL_ID:
-            prompt_text += " NSFW, show explicit details"
+            prompt_text += " NSFW, explicit content"
         else:
             prompt_text += " SFW, no explicit content"
 
-        await interaction.response.send_message(f"🎨 Generating with {variant['label']} (CFG: {cfg_value})...", ephemeral=True)
-        img_bytes = await venice_generate(self.session, prompt_text, variant)
+        await interaction.response.send_message(
+            f"🎨 Generating with {variant['label']} | CFG: {self.cfg_label} ({self.cfg_value}) | Steps: {variant['steps']}...",
+            ephemeral=True
+        )
 
+        img_bytes = await venice_generate(self.session, prompt_text, variant)
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             return
@@ -132,9 +126,14 @@ class VeniceModal(discord.ui.Modal):
         if channel:
             fp = io.BytesIO(img_bytes)
             file = discord.File(fp, filename="image.png")
-            await channel.send(content=f"{interaction.user.mention} generated an image with {variant['label']}", file=file)
+            await channel.send(
+                content=(f"{interaction.user.mention} generated an image with {variant['label']}\n"
+                         f"CFG: {self.cfg_label} ({self.cfg_value}) | Model: {variant['model']} | Steps: {variant['steps']}"),
+                file=file
+            )
             await channel.send("💡 Choose the next generation:", view=VeniceView(self.session, self.channel_id))
 
+# Button View
 class VeniceView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
@@ -143,12 +142,14 @@ class VeniceView(discord.ui.View):
         for prefix, variant in VARIANT_MAP.items():
             if variant['channel'] == channel_id:
                 style = discord.ButtonStyle.red if channel_id == NSFW_CHANNEL_ID else discord.ButtonStyle.blurple
-                btn = discord.ui.Button(label=variant['label'], style=style, custom_id=prefix)
-                async def _cb(interaction: discord.Interaction, pref=prefix):
-                    await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[pref], self.channel_id))
-                btn.callback = _cb
-                self.add_item(btn)
+                for cfg_label, cfg_value in {"Normal": CFG_MAP[variant['model']]['normal'], "High": CFG_MAP[variant['model']]['high']}.items():
+                    btn = discord.ui.Button(label=f"{variant['label']} | {cfg_label}", style=style)
+                    async def _cb(interaction: discord.Interaction, pref=prefix, cfg_value=cfg_value, cfg_label=cfg_label):
+                        await interaction.response.send_modal(VeniceModal(self.session, VARIANT_MAP[pref], self.channel_id, cfg_value, cfg_label))
+                    btn.callback = _cb
+                    self.add_item(btn)
 
+# Cog
 class VeniceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -192,7 +193,7 @@ class VeniceCog(commands.Cog):
             return
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
-        await message.reply(content=f"Generated with {variant['label']} | CFG: {variant['cfg_scale']}", file=file)
+        await message.reply(content=f"Generated with {variant['label']} | CFG: {variant['cfg_scale']} | Steps: {variant['steps']} | Model: {variant['model']}", file=file)
         async for msg in message.channel.history(limit=10):
             if msg.components:
                 try:
