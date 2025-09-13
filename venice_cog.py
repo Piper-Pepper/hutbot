@@ -114,7 +114,7 @@ class AspectRatioView(discord.ui.View):
         file = discord.File(fp, filename="image.png")
 
         # Titel erst nach 40 Zeichen kürzen
-        title_text = ("🎨" + self.prompt_text[:30].capitalize() + "[...]") if len(self.prompt_text) > 30 else "🚫" + self.prompt_text.capitalize()
+        title_text = ("🎨" + self.prompt_text[:30].capitalize() + "[...]") if len(self.prompt_text) > 30 else "🎨" + self.prompt_text.capitalize()
         embed = discord.Embed(title=title_text, color=discord.Color.blurple())
 
 
@@ -180,15 +180,15 @@ class AspectRatioView(discord.ui.View):
         self.stop()
 
 
-    @discord.ui.button(label="1:1", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024)
 
-    @discord.ui.button(label="16:9", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 576)
 
-    @discord.ui.button(label="9:16", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 576, 1024)
 
