@@ -39,9 +39,9 @@ VARIANT_MAP = {
     "**": {"label": "FluxDev",  "model": "flux-dev",              "cfg_scale": 5.0, "steps": 28, "channel": NSFW_CHANNEL_ID},
 
     # ---------- SFW ----------
-    "?":  {"label": "SD3.5",    "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 18, "channel": SFW_CHANNEL_ID},
-    "&":  {"label": "Flux",     "model": "flux-dev",              "cfg_scale": 5.0, "steps": 20, "channel": SFW_CHANNEL_ID},
-    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 15, "channel": SFW_CHANNEL_ID},
+    "?":  {"label": "SD3.5",    "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30, "channel": SFW_CHANNEL_ID},
+    "&":  {"label": "Flux",     "model": "flux-dev",              "cfg_scale": 5.0, "steps": 30, "channel": SFW_CHANNEL_ID},
+    "~":  {"label": "Qwen",     "model": "qwen-image",            "cfg_scale": 3.5, "steps": 20, "channel": SFW_CHANNEL_ID},
     "$$": {"label": "HiDream",  "model": "hidream",               "cfg_scale": 4.0, "steps": 20, "channel": SFW_CHANNEL_ID},
 }
 
