@@ -190,3 +190,29 @@ class VeniceView(discord.ui.View):
 # --- Cog ---
 class VeniceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.session = aiohttp.ClientSession()
+
+    def cog_unload(self):
+        asyncio.create_task(self.session.close())
+
+    async def ensure_button_message(self, channel: discord.TextChannel):
+        """Ensure Venice buttons are the last message in the channel."""
+        async for msg in channel.history(limit=10):
+            if msg.components:
+                try:
+                    await msg.delete()
+                except:
+                    pass
+        view = VeniceView(self.session, channel.id)
+        await channel.send("💡 Click a button to start generating images!", view=view)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for channel_id in [NSFW_CHANNEL_ID, SFW_CHANNEL_ID]:
+            channel = self.bot.get_channel(channel_id)
+            if channel and isinstance(channel, discord.TextChannel):
+                await self.ensure_button_message(channel)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(VeniceCog(bot))
