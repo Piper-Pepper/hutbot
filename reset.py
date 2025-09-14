@@ -16,12 +16,12 @@ class ReactionResetCog(commands.Cog):
     @commands.has_permissions(manage_messages=True)
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Durchsucht die letzten 50 Nachrichten:
-        Wenn Embed mit Bild und die gewünschten Reactions NICHT alle da sind →
+        Durchsucht die letzten 200 Nachrichten:
+        Wenn Embed mit Bild und die Reactions NICHT genau den Custom-Reactions entsprechen →
         alle Reaktionen löschen und die Custom-Reactions setzen.
         """
         changed = 0
-        async for msg in ctx.channel.history(limit=50):
+        async for msg in ctx.channel.history(limit=200):
             if not msg.embeds:
                 continue
             embed = msg.embeds[0]
@@ -31,8 +31,8 @@ class ReactionResetCog(commands.Cog):
             # Aktuelle Reactions einsammeln
             current = {str(r.emoji) for r in msg.reactions}
 
-            # Wenn alle Custom-Reactions schon da sind → skip
-            if all(e in current for e in CUSTOM_REACTIONS):
+            # Wenn exakt die gleichen Reactions schon vorhanden sind → skip
+            if set(CUSTOM_REACTIONS) == current:
                 continue
 
             # Sonst: alles löschen + neu setzen
