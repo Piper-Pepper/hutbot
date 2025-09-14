@@ -13,12 +13,12 @@ class ReactionResetCog(commands.Cog):
         self.bot = bot
 
     @commands.hybrid_command(name="reset_reactions")
-    @commands.has_permissions(manage_messages=True)
+    @commands.has_permissions(administrator=True)  # Only admins can run
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Durchsucht die letzten 200 Nachrichten:
-        Reset nur, wenn **eine der 4 Custom-Reactions fehlt**.
-        Anzahl der Vorkommen ist egal.
+        Scans the last 200 messages:
+        Resets reactions only if **any of the 4 custom reactions are missing**.
+        Number of occurrences does not matter.
         """
         await ctx.defer(ephemeral=True)
 
@@ -30,21 +30,21 @@ class ReactionResetCog(commands.Cog):
             if not embed.image or not embed.image.url:
                 continue
 
-            # Aktuelle Reactions als Set sammeln (nur die Emojis)
+            # Gather current reactions as a set (only emojis)
             current = {str(r.emoji) for r in msg.reactions}
 
-            # Wenn alle 4 Custom-Reactions vorhanden sind → skip
+            # If all 4 custom reactions are present → skip
             if all(emoji in current for emoji in CUSTOM_REACTIONS):
                 continue
 
-            # Sonst: alles löschen + neu setzen
+            # Otherwise: clear and re-add reactions
             try:
                 await msg.clear_reactions()
             except discord.Forbidden:
-                await ctx.send("❌ Keine Berechtigung, Reaktionen zu löschen.", ephemeral=True)
+                await ctx.send("❌ Missing permissions to clear reactions.", ephemeral=True)
                 return
             except discord.HTTPException:
-                pass  # Falls schon leer oder Fehler
+                pass  # Already empty or other minor error
 
             for emoji in CUSTOM_REACTIONS:
                 try:
@@ -54,7 +54,7 @@ class ReactionResetCog(commands.Cog):
 
             changed += 1
 
-        await ctx.send(f"✅ {changed} Nachrichten wurden neu mit Reaktionen versehen.", ephemeral=True)
+        await ctx.send(f"✅ {changed} messages have been reset with reactions.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
