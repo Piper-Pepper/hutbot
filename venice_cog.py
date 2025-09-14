@@ -235,7 +235,12 @@ class VeniceView(discord.ui.View):
 
     def make_callback(self, variant):
         async def callback(interaction: discord.Interaction):
-            await interaction.response.send_modal(VeniceModal(self.session, variant))
+            # Hidden suffix abhängig von der Kategorie
+            category_id = interaction.channel.category.id if interaction.channel.category else None
+            hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+
+            # Modal jetzt mit hidden_suffix übergeben
+            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix))
         return callback
 
 # ---------------- Cog ----------------
