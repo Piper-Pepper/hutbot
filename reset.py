@@ -1,12 +1,11 @@
 import discord
 from discord.ext import commands
 
-# Custom Emoji IDs
-CUSTOM_EMOJI_IDS = [
-    1387086056498921614,  # <:01sthumb:1387086056498921614>
-    1387083454575022213,  # <:01smile_piper:1387083454575022213>
-    1347536448831754383,  # <:02No:1347536448831754383>
-    1346549711817146300   # <:011:1346549711817146300>
+CUSTOM_REACTIONS = [
+    "<:01sthumb:1387086056498921614>",
+    "<:01smile_piper:1387083454575022213>",
+    "<:02No:1347536448831754383>",
+    "<:011:1346549711817146400>"
 ]
 
 class ReactionResetCog(commands.Cog):
@@ -17,60 +16,39 @@ class ReactionResetCog(commands.Cog):
     @commands.has_permissions(manage_messages=True)
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Durchsucht die letzten 300 Nachrichten:
-        Reset nur, wenn eine der 4 Custom-Reactions fehlt.
-        Gilt für Nachrichten mit:
-          - Embed mit Bild
-          - oder Attachment, das ein Bild ist
+        Durchsucht die letzten 200 Nachrichten:
+        Reset nur, wenn **eine der 4 Custom-Reactions fehlt**.
+        Anzahl der Vorkommen ist egal.
         """
         await ctx.defer(ephemeral=True)
 
         changed = 0
-        async for msg in ctx.channel.history(limit=300):
-            has_image = False
+        async for msg in ctx.channel.history(limit=200):
+            if not msg.embeds:
+                continue
+            embed = msg.embeds[0]
+            if not embed.image or not embed.image.url:
+                continue
 
-            # Prüfen: Embed mit Bild
-            if msg.embeds:
-                for embed in msg.embeds:
-                    if embed.image and embed.image.url:
-                        has_image = True
-                        break
+            # Aktuelle Reactions als Set sammeln (nur die Emojis)
+            current = {str(r.emoji) for r in msg.reactions}
 
-            # Prüfen: Attachment ist ein Bild
-            if not has_image and msg.attachments:
-                for att in msg.attachments:
-                    if att.content_type and att.content_type.startswith("image"):
-                        has_image = True
-                        break
+            # Wenn alle 4 Custom-Reactions vorhanden sind → skip
+            if all(emoji in current for emoji in CUSTOM_REACTIONS):
+                continue
 
-            if not has_image:
-                continue  # keine Bildnachricht
-
-            # Aktuelle Reactions als Set von IDs sammeln
-            current_ids = set()
-            for r in msg.reactions:
-                if isinstance(r.emoji, discord.Emoji):
-                    current_ids.add(r.emoji.id)
-
-            # Prüfen: alle Custom-Emojis vorhanden?
-            if all(eid in current_ids for eid in CUSTOM_EMOJI_IDS):
-                continue  # alles da, nix löschen
-
-            # Sonst: löschen + neu setzen
+            # Sonst: alles löschen + neu setzen
             try:
                 await msg.clear_reactions()
             except discord.Forbidden:
                 await ctx.send("❌ Keine Berechtigung, Reaktionen zu löschen.", ephemeral=True)
                 return
             except discord.HTTPException:
-                pass  # falls schon leer oder Fehler
+                pass  # Falls schon leer oder Fehler
 
-            # Reactions hinzufügen
-            for eid in CUSTOM_EMOJI_IDS:
+            for emoji in CUSTOM_REACTIONS:
                 try:
-                    emoji = discord.utils.get(ctx.guild.emojis, id=eid)
-                    if emoji:
-                        await msg.add_reaction(emoji)
+                    await msg.add_reaction(emoji)
                 except discord.HTTPException:
                     pass
 
