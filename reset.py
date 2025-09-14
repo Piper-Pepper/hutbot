@@ -1,11 +1,12 @@
 import discord
 from discord.ext import commands
 
-CUSTOM_REACTIONS = [
-    "<:01sthumb:1387086056498921614>",
-    "<:01smile_piper:1387083454575022213>",
-    "<:02No:1347536448831754383>",
-    "<:011:1346549711817146400>"
+# Custom Emoji IDs
+CUSTOM_EMOJI_IDS = [
+    1387086056498921614,  # <:01sthumb:1387086056498921614>
+    1387083454575022213,  # <:01smile_piper:1387083454575022213>
+    1347536448831754383,  # <:02No:1347536448831754383>
+    1346549711817146400   # <:011:1346549711817146400>
 ]
 
 class ReactionResetCog(commands.Cog):
@@ -18,37 +19,44 @@ class ReactionResetCog(commands.Cog):
         """
         Durchsucht die letzten 200 Nachrichten:
         Reset nur, wenn **eine der 4 Custom-Reactions fehlt**.
-        Anzahl der Vorkommen ist egal.
         """
         await ctx.defer(ephemeral=True)
 
         changed = 0
         async for msg in ctx.channel.history(limit=200):
+            # Nur Nachrichten mit Embed
             if not msg.embeds:
                 continue
             embed = msg.embeds[0]
+            # Nur Embed mit Bild
             if not embed.image or not embed.image.url:
                 continue
 
-            # Aktuelle Reactions als Set sammeln (nur die Emojis)
-            current = {str(r.emoji) for r in msg.reactions}
+            # Aktuelle Reactions als Set von IDs sammeln
+            current_ids = set()
+            for r in msg.reactions:
+                if isinstance(r.emoji, discord.Emoji):
+                    current_ids.add(r.emoji.id)
 
-            # Wenn alle 4 Custom-Reactions vorhanden sind → skip
-            if all(emoji in current for emoji in CUSTOM_REACTIONS):
-                continue
+            # Prüfen: alle Custom-Emojis vorhanden?
+            if all(eid in current_ids for eid in CUSTOM_EMOJI_IDS):
+                continue  # alles da, nix löschen
 
-            # Sonst: alles löschen + neu setzen
+            # Sonst: löschen + neu setzen
             try:
                 await msg.clear_reactions()
             except discord.Forbidden:
                 await ctx.send("❌ Keine Berechtigung, Reaktionen zu löschen.", ephemeral=True)
                 return
             except discord.HTTPException:
-                pass  # Falls schon leer oder Fehler
+                pass  # falls schon leer oder Fehler
 
-            for emoji in CUSTOM_REACTIONS:
+            # Reactions hinzufügen
+            for eid in CUSTOM_EMOJI_IDS:
                 try:
-                    await msg.add_reaction(emoji)
+                    emoji = discord.utils.get(ctx.guild.emojis, id=eid)
+                    if emoji:
+                        await msg.add_reaction(emoji)
                 except discord.HTTPException:
                     pass
 
