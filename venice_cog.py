@@ -161,36 +161,64 @@ class AspectRatioView(discord.ui.View):
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict):
+    def __init__(self, session: aiohttp.ClientSession, variant: dict, hidden_suffix: str):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
-        self.prompt = discord.ui.TextInput(label="Describe your image", style=discord.TextStyle.paragraph, required=True, max_length=500)
-        self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, required=False, max_length=300)
+        self.hidden_suffix = hidden_suffix
+
         normal_cfg = CFG_REFERENCE[variant['model']]
-        self.cfg_value = discord.ui.TextInput(
-            label="CFG (Higher=stricter AI adherence)", style=discord.TextStyle.short,
-            placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})", required=False, max_length=5
+
+        # Prompt-Feld zeigt als Placeholder den geheimen Zusatz
+        self.prompt = discord.ui.TextInput(
+            label="Describe your image",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=500,
+            placeholder=f"Additional hidden prompt added: {hidden_suffix}"
         )
+
+        # Negative Prompt zeigt den Standardwert als Placeholder
+        self.negative_prompt = discord.ui.TextInput(
+            label="Negative Prompt (optional)",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=300,
+            placeholder=f"Default: {DEFAULT_NEGATIVE_PROMPT}"
+        )
+
+        # CFG zeigt den normalen Wert
+        self.cfg_value = discord.ui.TextInput(
+            label="CFG (Higher=stricter AI adherence)",
+            style=discord.TextStyle.short,
+            placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})",
+            required=False,
+            max_length=5
+        )
+
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # CFG auslesen, Standardwert falls leer/ungültig
         try:
             cfg_value = float(self.cfg_value.value)
         except:
             cfg_value = self.variant['cfg_scale']
 
-        category_id = interaction.channel.category.id if interaction.channel.category else None
-        hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
-        variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
+        variant = {
+            **self.variant,
+            "cfg_scale": cfg_value,
+            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
+        }
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_suffix, interaction.user),
+            view=AspectRatioView(self.session, variant, self.prompt.value, self.hidden_suffix, interaction.user),
             ephemeral=True
         )
+
 
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
