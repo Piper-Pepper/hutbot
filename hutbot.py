@@ -52,6 +52,7 @@ async def main():
             # "hutkick",
             "venice_cog",
             "gather",
+            "reset",
             "riddle",
             "riddle_post"
         ]
