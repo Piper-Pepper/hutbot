@@ -38,9 +38,9 @@ VARIANT_MAP = {
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
     ],
     SFW_CATEGORY_ID: [
-        {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 25},
+        {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
-        {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 25},
+        {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
     ]
 }
 
