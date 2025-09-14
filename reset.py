@@ -18,19 +18,33 @@ class ReactionResetCog(commands.Cog):
     async def reset_reactions(self, ctx: commands.Context):
         """
         Durchsucht die letzten 200 Nachrichten:
-        Reset nur, wenn **eine der 4 Custom-Reactions fehlt**.
+        Reset nur, wenn eine der 4 Custom-Reactions fehlt.
+        Gilt für Nachrichten mit:
+          - Embed mit Bild
+          - oder Attachment, das ein Bild ist
         """
         await ctx.defer(ephemeral=True)
 
         changed = 0
         async for msg in ctx.channel.history(limit=200):
-            # Nur Nachrichten mit Embed
-            if not msg.embeds:
-                continue
-            embed = msg.embeds[0]
-            # Nur Embed mit Bild
-            if not embed.image or not embed.image.url:
-                continue
+            has_image = False
+
+            # Prüfen: Embed mit Bild
+            if msg.embeds:
+                for embed in msg.embeds:
+                    if embed.image and embed.image.url:
+                        has_image = True
+                        break
+
+            # Prüfen: Attachment ist ein Bild
+            if not has_image and msg.attachments:
+                for att in msg.attachments:
+                    if att.content_type and att.content_type.startswith("image"):
+                        has_image = True
+                        break
+
+            if not has_image:
+                continue  # keine Bildnachricht
 
             # Aktuelle Reactions als Set von IDs sammeln
             current_ids = set()
