@@ -166,10 +166,10 @@ class VeniceModal(discord.ui.Modal):
         self.session = session
         self.variant = variant
         self.prompt = discord.ui.TextInput(label="Describe your image", style=discord.TextStyle.paragraph, required=True, max_length=500)
-        self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, required=False, max_length=300)
+        self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional, things the AI should avoid)", style=discord.TextStyle.paragraph, required=False, max_length=300)
         normal_cfg = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
-            label="CFG Value (optional)", style=discord.TextStyle.short,
+            label="CFG (Higher = Stricter adherence to your prompt. Empty = Default value)", style=discord.TextStyle.short,
             placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})", required=False, max_length=5
         )
         self.add_item(self.prompt)
