@@ -17,9 +17,11 @@ class ReactionResetCog(commands.Cog):
     async def reset_reactions(self, ctx: commands.Context):
         """
         Durchsucht die letzten 200 Nachrichten:
-        Wenn Embed mit Bild und die Reactions NICHT genau den Custom-Reactions entsprechen →
-        alle Reaktionen löschen und die Custom-Reactions setzen.
+        Reset nur, wenn **eine der 4 Custom-Reactions fehlt**.
+        Anzahl der Vorkommen ist egal.
         """
+        await ctx.defer(ephemeral=True)
+
         changed = 0
         async for msg in ctx.channel.history(limit=200):
             if not msg.embeds:
@@ -28,21 +30,21 @@ class ReactionResetCog(commands.Cog):
             if not embed.image or not embed.image.url:
                 continue
 
-            # Aktuelle Reactions einsammeln
+            # Aktuelle Reactions als Set sammeln (nur die Emojis)
             current = {str(r.emoji) for r in msg.reactions}
 
-            # Wenn exakt die gleichen Reactions schon vorhanden sind → skip
-            if set(CUSTOM_REACTIONS) == current:
+            # Wenn alle 4 Custom-Reactions vorhanden sind → skip
+            if all(emoji in current for emoji in CUSTOM_REACTIONS):
                 continue
 
             # Sonst: alles löschen + neu setzen
             try:
                 await msg.clear_reactions()
             except discord.Forbidden:
-                await ctx.reply("❌ Keine Berechtigung, Reaktionen zu löschen.", ephemeral=True)
+                await ctx.send("❌ Keine Berechtigung, Reaktionen zu löschen.", ephemeral=True)
                 return
             except discord.HTTPException:
-                pass
+                pass  # Falls schon leer oder Fehler
 
             for emoji in CUSTOM_REACTIONS:
                 try:
@@ -52,7 +54,7 @@ class ReactionResetCog(commands.Cog):
 
             changed += 1
 
-        await ctx.reply(f"✅ {changed} Nachrichten wurden neu mit Reaktionen versehen.", ephemeral=True)
+        await ctx.send(f"✅ {changed} Nachrichten wurden neu mit Reaktionen versehen.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
