@@ -17,9 +17,9 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 
-DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, text, watermark"
-NSFW_PROMPT_SUFFIX = " NSFW, show explicit details"
-SFW_PROMPT_SUFFIX = " SFW, no explicit content"
+DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
+NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
+SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
 CFG_REFERENCE = {
     "lustify-sdxl": 4.5,
