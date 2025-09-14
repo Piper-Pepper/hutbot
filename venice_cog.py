@@ -34,7 +34,7 @@ CFG_REFERENCE = {
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
-        {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 25},
+        {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 30},
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
     ],
     SFW_CATEGORY_ID: [
