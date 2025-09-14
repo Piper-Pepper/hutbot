@@ -6,7 +6,7 @@ CUSTOM_EMOJI_IDS = [
     1387086056498921614,  # <:01sthumb:1387086056498921614>
     1387083454575022213,  # <:01smile_piper:1387083454575022213>
     1347536448831754383,  # <:02No:1347536448831754383>
-    1346549711817146400   # <:011:1346549711817146400>
+    1346549711817146300   # <:011:1346549711817146300>
 ]
 
 class ReactionResetCog(commands.Cog):
@@ -17,7 +17,7 @@ class ReactionResetCog(commands.Cog):
     @commands.has_permissions(manage_messages=True)
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Durchsucht die letzten 400 Nachrichten:
+        Durchsucht die letzten 300 Nachrichten:
         Reset nur, wenn eine der 4 Custom-Reactions fehlt.
         Gilt für Nachrichten mit:
           - Embed mit Bild
@@ -26,7 +26,7 @@ class ReactionResetCog(commands.Cog):
         await ctx.defer(ephemeral=True)
 
         changed = 0
-        async for msg in ctx.channel.history(limit=400):
+        async for msg in ctx.channel.history(limit=300):
             has_image = False
 
             # Prüfen: Embed mit Bild
