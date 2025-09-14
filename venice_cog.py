@@ -169,7 +169,7 @@ class VeniceModal(discord.ui.Modal):
         self.negative_prompt = discord.ui.TextInput(label="Negative Prompt (optional)", style=discord.TextStyle.paragraph, required=False, max_length=300)
         normal_cfg = CFG_REFERENCE[variant['model']]
         self.cfg_value = discord.ui.TextInput(
-            label="CFG (Higher = Stricter adherence to your prompt)", style=discord.TextStyle.short,
+            label="CFG (Higher=stricter AI adherence)", style=discord.TextStyle.short,
             placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})", required=False, max_length=5
         )
         self.add_item(self.prompt)
