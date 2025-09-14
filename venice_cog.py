@@ -108,10 +108,10 @@ class AspectRatioView(discord.ui.View):
             self.stop()
             return
 
+        # --- Bild und Embed senden ---
         fp = io.BytesIO(img_bytes)
         file = discord.File(fp, filename="image.png")
 
-        # Embed ohne Titel, Prompt max. 300 Zeichen
         truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
         embed = discord.Embed(color=discord.Color.blurple())
         embed.add_field(name="🔮Prompt:", value=truncated_prompt, inline=False)
@@ -131,9 +131,10 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        msg = await interaction.followup.send(content=self.author.mention, embed=embed, file=file)
+        # 📌 WICHTIG: Statt followup.send -> channel.send
+        msg = await interaction.channel.send(content=self.author.mention, embed=embed, file=file)
 
-        # Custom Reactions
+        # Reactions hinzufügen
         for emoji in CUSTOM_REACTIONS:
             try:
                 await msg.add_reaction(emoji)
