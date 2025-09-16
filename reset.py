@@ -19,12 +19,10 @@ class ReactionResetCog(commands.Cog):
         """
         Scans the last 300 messages:
         Adds missing reactions only. Works for both embeds with images AND messages with attachments.
-        Provides feedback whether a message was updated or skipped.
+        Provides live feedback via followups.
         """
-        if ctx.interaction:
-            await ctx.interaction.response.defer(ephemeral=True)
-        else:
-            await ctx.defer()
+        await ctx.defer(ephemeral=True)  # nur einmal defer am Anfang
+        followup = ctx.followup
 
         changed = 0
         skipped = 0
@@ -37,7 +35,6 @@ class ReactionResetCog(commands.Cog):
             if not has_image:
                 continue
 
-            # Sammle aktuelle Reactions
             current_ids = {r.emoji.id for r in msg.reactions if isinstance(r.emoji, discord.PartialEmoji)}
             current_str = {str(r.emoji) for r in msg.reactions if not isinstance(r.emoji, discord.PartialEmoji)}
 
@@ -60,7 +57,7 @@ class ReactionResetCog(commands.Cog):
                             await msg.add_reaction(emoji_obj)
                         else:
                             await msg.add_reaction(emoji)
-                        await asyncio.sleep(0.3)  # kurze Pause zwischen Reactions
+                        await asyncio.sleep(0.25)  # Pause zwischen Reactions
                     except discord.HTTPException:
                         pass
                 changed += 1
@@ -69,14 +66,14 @@ class ReactionResetCog(commands.Cog):
                 skipped += 1
                 print(f"⏭️ Skipped message {msg.id}, all reactions already present")
 
-            # Optional: kleine Pause zwischen Nachrichten
-            await asyncio.sleep(0.2)
-
             # Feedback alle 10 Nachrichten
             if processed % 10 == 0:
-                await ctx.send(f"⚡ Processed {processed} messages: {changed} updated, {skipped} skipped...", ephemeral=True)
+                await followup.send(f"⚡ Processed {processed} messages: {changed} updated, {skipped} skipped...", ephemeral=True)
 
-        await ctx.send(f"✅ Done! Processed {processed} messages: {changed} updated, {skipped} skipped.", ephemeral=True)
+            # Kleine Pause zwischen Nachrichten, nur um Rate-Limits zu vermeiden
+            await asyncio.sleep(0.2 if missing else 0.05)
+
+        await followup.send(f"✅ Done! Processed {processed} messages: {changed} updated, {skipped} skipped.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ReactionResetCog(bot))
