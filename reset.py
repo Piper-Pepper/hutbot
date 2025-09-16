@@ -18,38 +18,38 @@ class ReactionResetCog(commands.Cog):
     async def reset_reactions(self, ctx: commands.Context):
         """
         Scans the last 300 messages:
-        Resets reactions only if any of the 4 custom reactions are missing.
+        Resets reactions if any of the 4 custom reactions are missing.
+        Works for both embeds with images AND messages with attachments.
         """
-        # Unterschied zwischen Slash & Text:
         if ctx.interaction:
             await ctx.interaction.response.defer(ephemeral=True)
         else:
-            await ctx.defer()  # klassisches Command
+            await ctx.defer()
 
         changed = 0
         async for msg in ctx.channel.history(limit=300):
-            # Nur Nachrichten mit Embed und Bild
-            if not msg.embeds or not msg.embeds[0].image or not msg.embeds[0].image.url:
+            # Check if message has either an embed with an image OR attachments
+            has_image = (msg.embeds and msg.embeds[0].image and msg.embeds[0].image.url) or msg.attachments
+            if not has_image:
                 continue
 
             current_reactions = {str(r.emoji) for r in msg.reactions}
 
-            # Alle Reactions vorhanden? → skip
+            # All reactions present? Skip
             if all(emoji in current_reactions for emoji in CUSTOM_REACTIONS):
                 continue
 
-            # Reactions zurücksetzen
+            # Reset reactions
             try:
                 await msg.clear_reactions()
             except discord.Forbidden:
                 await ctx.send("❌ Missing permissions to clear reactions.")
                 return
             except discord.HTTPException:
-                pass  # minor error
+                pass
 
             for emoji in CUSTOM_REACTIONS:
                 try:
-                    # Custom-Emoji korrekt hinzufügen
                     if emoji.startswith("<:") and ":" in emoji:
                         name_id = emoji[2:-1]
                         name, id_ = name_id.split(":")
@@ -61,7 +61,7 @@ class ReactionResetCog(commands.Cog):
                     pass
 
             changed += 1
-            await asyncio.sleep(0.25)  # kurz warten gegen Rate-Limits
+            await asyncio.sleep(0.25)  # short wait to avoid rate limits
 
         await ctx.send(f"✅ {changed} messages have been reset with reactions.")
 
