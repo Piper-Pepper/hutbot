@@ -27,33 +27,45 @@ class ReactionResetCog(commands.Cog):
 
         changed = 0
         async for msg in ctx.channel.history(limit=300):
+            # nur Nachrichten mit Embed-Bild oder Anhängen
             has_image = (msg.embeds and msg.embeds[0].image and msg.embeds[0].image.url) or msg.attachments
             if not has_image:
                 continue
 
-            current_reactions = {str(r.emoji) for r in msg.reactions}
-            missing = [emoji for emoji in CUSTOM_REACTIONS if emoji not in current_reactions]
+            # Alle Custom-Emojis aktuell als Set (IDs)
+            current_ids = {r.emoji.id for r in msg.reactions if isinstance(r.emoji, discord.PartialEmoji)}
+            # Normale Emojis als String
+            current_str = {str(r.emoji) for r in msg.reactions if not isinstance(r.emoji, discord.PartialEmoji)}
+
+            # fehlende Emojis erkennen
+            missing = []
+            for emoji in CUSTOM_REACTIONS:
+                if emoji.startswith("<:") and ":" in emoji:
+                    name, id_ = emoji[2:-1].split(":")
+                    if int(id_) not in current_ids:
+                        missing.append(emoji)
+                else:
+                    if emoji not in current_str:
+                        missing.append(emoji)
 
             if not missing:
                 continue  # alles da, skip
 
+            # fehlende Reactions hinzufügen
             for emoji in missing:
                 try:
                     if emoji.startswith("<:") and ":" in emoji:
-                        name_id = emoji[2:-1]
-                        name, id_ = name_id.split(":")
+                        name, id_ = emoji[2:-1].split(":")
                         emoji_obj = discord.PartialEmoji(name=name, id=int(id_))
                         await msg.add_reaction(emoji_obj)
                     else:
                         await msg.add_reaction(emoji)
-                    # Dynamische Pause zwischen Reactions
-                    await asyncio.sleep(0.1 + 0.05 * len(missing))
+                    await asyncio.sleep(0.3)  # kurze Pause zwischen Reactions
                 except discord.HTTPException:
                     pass
 
             changed += 1
-            # Dynamische Pause zwischen Nachrichten
-            await asyncio.sleep(0.2 + 0.1 * len(missing))
+            await asyncio.sleep(0.2)  # kleine Pause zwischen Nachrichten, nur bei Änderungen
 
         await ctx.send(f"✅ {changed} messages had missing reactions added.")
 
