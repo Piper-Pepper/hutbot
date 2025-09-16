@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import asyncio
 
 CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
@@ -13,49 +14,56 @@ class ReactionResetCog(commands.Cog):
         self.bot = bot
 
     @commands.hybrid_command(name="reset_reactions")
-    @commands.has_permissions(administrator=True)  # Only admins can run
+    @commands.has_permissions(administrator=True)
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Scans the last 200 messages:
-        Resets reactions only if **any of the 4 custom reactions are missing**.
-        Number of occurrences does not matter.
+        Scans the last 300 messages:
+        Resets reactions only if any of the 4 custom reactions are missing.
         """
-        await ctx.defer(ephemeral=True)
+        # Unterschied zwischen Slash & Text:
+        if ctx.interaction:
+            await ctx.interaction.response.defer(ephemeral=True)
+        else:
+            await ctx.defer()  # klassisches Command
 
         changed = 0
-        async for msg in ctx.channel.history(limit=200):
-            if not msg.embeds:
-                continue
-            embed = msg.embeds[0]
-            if not embed.image or not embed.image.url:
+        async for msg in ctx.channel.history(limit=300):
+            # Nur Nachrichten mit Embed und Bild
+            if not msg.embeds or not msg.embeds[0].image or not msg.embeds[0].image.url:
                 continue
 
-            # Gather current reactions as a set (only emojis)
-            current = {str(r.emoji) for r in msg.reactions}
+            current_reactions = {str(r.emoji) for r in msg.reactions}
 
-            # If all 4 custom reactions are present → skip
-            if all(emoji in current for emoji in CUSTOM_REACTIONS):
+            # Alle Reactions vorhanden? → skip
+            if all(emoji in current_reactions for emoji in CUSTOM_REACTIONS):
                 continue
 
-            # Otherwise: clear and re-add reactions
+            # Reactions zurücksetzen
             try:
                 await msg.clear_reactions()
             except discord.Forbidden:
-                await ctx.send("❌ Missing permissions to clear reactions.", ephemeral=True)
+                await ctx.send("❌ Missing permissions to clear reactions.")
                 return
             except discord.HTTPException:
-                pass  # Already empty or other minor error
+                pass  # minor error
 
             for emoji in CUSTOM_REACTIONS:
                 try:
-                    await msg.add_reaction(emoji)
+                    # Custom-Emoji korrekt hinzufügen
+                    if emoji.startswith("<:") and ":" in emoji:
+                        name_id = emoji[2:-1]
+                        name, id_ = name_id.split(":")
+                        emoji_obj = discord.PartialEmoji(name=name, id=int(id_))
+                        await msg.add_reaction(emoji_obj)
+                    else:
+                        await msg.add_reaction(emoji)
                 except discord.HTTPException:
                     pass
 
             changed += 1
+            await asyncio.sleep(0.25)  # kurz warten gegen Rate-Limits
 
-        await ctx.send(f"✅ {changed} messages have been reset with reactions.", ephemeral=True)
-
+        await ctx.send(f"✅ {changed} messages have been reset with reactions.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ReactionResetCog(bot))
