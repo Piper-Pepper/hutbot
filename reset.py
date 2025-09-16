@@ -19,10 +19,16 @@ class ReactionResetCog(commands.Cog):
         """
         Scans the last 300 messages:
         Adds missing reactions only. Works for both embeds with images AND messages with attachments.
-        Provides live feedback via followups.
+        Provides live feedback.
         """
-        await ctx.defer(ephemeral=True)  # nur einmal defer am Anfang
-        followup = ctx.followup
+        # Unterschied zwischen Slash & Text
+        if ctx.interaction:
+            interaction = ctx.interaction
+            await interaction.response.defer(ephemeral=True)
+            send_func = interaction.followup.send  # für Slash-Commands
+        else:
+            await ctx.defer()
+            send_func = ctx.send  # für normale Commands
 
         changed = 0
         skipped = 0
@@ -68,12 +74,11 @@ class ReactionResetCog(commands.Cog):
 
             # Feedback alle 10 Nachrichten
             if processed % 10 == 0:
-                await followup.send(f"⚡ Processed {processed} messages: {changed} updated, {skipped} skipped...", ephemeral=True)
+                await send_func(f"⚡ Processed {processed} messages: {changed} updated, {skipped} skipped...", ephemeral=True if ctx.interaction else False)
 
-            # Kleine Pause zwischen Nachrichten, nur um Rate-Limits zu vermeiden
             await asyncio.sleep(0.2 if missing else 0.05)
 
-        await followup.send(f"✅ Done! Processed {processed} messages: {changed} updated, {skipped} skipped.", ephemeral=True)
+        await send_func(f"✅ Done! Processed {processed} messages: {changed} updated, {skipped} skipped.", ephemeral=True if ctx.interaction else False)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ReactionResetCog(bot))
