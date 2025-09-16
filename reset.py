@@ -46,12 +46,14 @@ class ReactionResetCog(commands.Cog):
                         await msg.add_reaction(emoji_obj)
                     else:
                         await msg.add_reaction(emoji)
-                    await asyncio.sleep(0.3)  # kleine Pause zwischen Reactions
+                    # Dynamische Pause zwischen Reactions
+                    await asyncio.sleep(0.1 + 0.05 * len(missing))
                 except discord.HTTPException:
                     pass
 
             changed += 1
-            await asyncio.sleep(0.5)  # kleine Pause zwischen Nachrichten, reduziert Rate-Limits
+            # Dynamische Pause zwischen Nachrichten
+            await asyncio.sleep(0.2 + 0.1 * len(missing))
 
         await ctx.send(f"✅ {changed} messages had missing reactions added.")
 
