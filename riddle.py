@@ -13,6 +13,7 @@ from typing import Optional
 JSONBIN_BIN_ID = "685442458a456b7966b13207"
 SOLVED_BIN_ID = "686699c18960c979a5b67e34"
 SOLVED_BIN_URL = f"https://api.jsonbin.io/v3/b/{SOLVED_BIN_ID}"
+JSONBIN_API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 JSONBIN_BASE_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 HEADERS = {
     "X-Master-Key": JSONBIN_API_KEY,
