@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import random
 
 ROLE_ID = 1387850018471284760  # Rolle "DM open"
-PAGE_SIZE = 20  # Buttons pro Seite
+PAGE_SIZE = 10  # Buttons pro Seite
 
 # Footer
 FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"
