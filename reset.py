@@ -17,68 +17,60 @@ class ReactionResetCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Scans the last 300 messages:
-        Adds missing reactions only. Works for both embeds with images AND messages with attachments.
-        Provides live feedback.
+        Scans the last 300 messages in the channel.
+        Adds missing reactions only (Embeds with images & attachments).
+        Provides detailed feedback per message.
         """
-        # Unterschied zwischen Slash & Text
+        # Slash vs Text Command
         if ctx.interaction:
-            interaction = ctx.interaction
-            await interaction.response.defer(ephemeral=True)
-            send_func = interaction.followup.send  # für Slash-Commands
+            await ctx.interaction.response.defer(ephemeral=True)
+            feedback_method = ctx.interaction.followup
         else:
             await ctx.defer()
-            send_func = ctx.send  # für normale Commands
+            feedback_method = ctx
 
         changed = 0
         skipped = 0
-        processed = 0
 
-        async for msg in ctx.channel.history(limit=300):
-            processed += 1
-
+        async for msg in ctx.channel.history(limit=300, oldest_first=True):
             has_image = (msg.embeds and msg.embeds[0].image and msg.embeds[0].image.url) or msg.attachments
             if not has_image:
+                continue  # Keine Bilder/Embeds, skip
+
+            # Aktuelle Reactions als Set
+            current_reactions = {str(r.emoji) for r in msg.reactions}
+            missing = [emoji for emoji in CUSTOM_REACTIONS if emoji not in current_reactions]
+
+            if not missing:
+                skipped += 1
+                print(f"⏭ Skipped message {msg.id} (all reactions present)")
                 continue
 
-            current_ids = {r.emoji.id for r in msg.reactions if isinstance(r.emoji, discord.PartialEmoji)}
-            current_str = {str(r.emoji) for r in msg.reactions if not isinstance(r.emoji, discord.PartialEmoji)}
+            # Fehlende Reactions hinzufügen
+            success = True
+            for emoji in missing:
+                try:
+                    if emoji.startswith("<:") and ":" in emoji:
+                        name_id = emoji[2:-1]
+                        name, id_ = name_id.split(":")
+                        emoji_obj = discord.PartialEmoji(name=name, id=int(id_))
+                        await msg.add_reaction(emoji_obj)
+                    else:
+                        await msg.add_reaction(emoji)
+                    await asyncio.sleep(0.3)  # kurze Pause pro Reaction
+                except discord.HTTPException:
+                    success = False
+                    print(f"⚠️ Failed to add {emoji} to message {msg.id}")
 
-            missing = []
-            for emoji in CUSTOM_REACTIONS:
-                if emoji.startswith("<:") and ":" in emoji:
-                    name, id_ = emoji[2:-1].split(":")
-                    if int(id_) not in current_ids:
-                        missing.append(emoji)
-                else:
-                    if emoji not in current_str:
-                        missing.append(emoji)
-
-            if missing:
-                for emoji in missing:
-                    try:
-                        if emoji.startswith("<:") and ":" in emoji:
-                            name, id_ = emoji[2:-1].split(":")
-                            emoji_obj = discord.PartialEmoji(name=name, id=int(id_))
-                            await msg.add_reaction(emoji_obj)
-                        else:
-                            await msg.add_reaction(emoji)
-                        await asyncio.sleep(0.25)  # Pause zwischen Reactions
-                    except discord.HTTPException:
-                        pass
+            if success:
                 changed += 1
                 print(f"✅ Updated message {msg.id} with missing reactions: {missing}")
-            else:
-                skipped += 1
-                print(f"⏭️ Skipped message {msg.id}, all reactions already present")
 
-            # Feedback alle 10 Nachrichten
-            if processed % 10 == 0:
-                await send_func(f"⚡ Processed {processed} messages: {changed} updated, {skipped} skipped...", ephemeral=True if ctx.interaction else False)
+            await asyncio.sleep(0.5)  # Pause pro Message, nur bei Änderungen
 
-            await asyncio.sleep(0.2 if missing else 0.05)
-
-        await send_func(f"✅ Done! Processed {processed} messages: {changed} updated, {skipped} skipped.", ephemeral=True if ctx.interaction else False)
+        await feedback_method.send(
+            f"✅ {changed} messages updated with missing reactions.\n⏭ {skipped} messages skipped (all reactions present)."
+        )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ReactionResetCog(bot))
