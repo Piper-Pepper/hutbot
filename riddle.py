@@ -1,28 +1,27 @@
+import os
 import discord
-from discord import app_commands
+from discord import app_commands, Interaction, Role
 from discord.ext import commands
 from discord.ui import View, Button, Modal, TextInput
-from discord import Interaction
-from discord import Role
-
+from dotenv import load_dotenv
 import aiohttp
 import logging
 from typing import Optional
+
+# 🔐 Load secrets first
+load_dotenv()
+JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 
 # 🔐 JSONBin Configuration
 JSONBIN_BIN_ID = "685442458a456b7966b13207"
 SOLVED_BIN_ID = "686699c18960c979a5b67e34"
 SOLVED_BIN_URL = f"https://api.jsonbin.io/v3/b/{SOLVED_BIN_ID}"
-JSONBIN_API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
 JSONBIN_BASE_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+
 HEADERS = {
     "X-Master-Key": JSONBIN_API_KEY,
     "Content-Type": "application/json"
 }
-
-
-from discord.ui import View, Button
-from discord import Interaction
 
 class ChampionsView(View):
     def __init__(
