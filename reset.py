@@ -17,37 +17,54 @@ class ReactionResetCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Scans the last 300 messages in the channel.
-        Adds missing reactions only (Embeds with images & attachments).
-        Provides detailed feedback per message.
+        Scans the last 300 messages:
+        Adds missing reactions only. Works for both embeds with images AND messages with attachments.
+        Provides detailed feedback for each message.
         """
-        # Slash vs Text Command
+        # Unterschied zwischen Slash & Text
         if ctx.interaction:
             await ctx.interaction.response.defer(ephemeral=True)
-            feedback_method = ctx.interaction.followup
+            followup = ctx.interaction.followup
         else:
             await ctx.defer()
-            feedback_method = ctx
+            followup = ctx
 
-        changed = 0
-        skipped = 0
+        total_checked = 0
+        updated = 0
+        skipped_full = 0
+        skipped_no_image = 0
+        skipped_deleted = 0
 
         async for msg in ctx.channel.history(limit=300, oldest_first=True):
+            total_checked += 1
+
+            # Existiert die Nachricht noch?
+            try:
+                await ctx.channel.fetch_message(msg.id)
+            except discord.NotFound:
+                skipped_deleted += 1
+                await followup.send(f"⚠️ Skipped deleted message ID {msg.id}")
+                continue
+            except discord.Forbidden:
+                await followup.send(f"⚠️ Cannot access message ID {msg.id} (Forbidden)")
+                continue
+
+            # Hat die Nachricht Bild oder Attachment?
             has_image = (msg.embeds and msg.embeds[0].image and msg.embeds[0].image.url) or msg.attachments
             if not has_image:
-                continue  # Keine Bilder/Embeds, skip
+                skipped_no_image += 1
+                await followup.send(f"⏭ Skipped message ID {msg.id} (no image/attachment)")
+                continue
 
-            # Aktuelle Reactions als Set
             current_reactions = {str(r.emoji) for r in msg.reactions}
             missing = [emoji for emoji in CUSTOM_REACTIONS if emoji not in current_reactions]
 
             if not missing:
-                skipped += 1
-                print(f"⏭ Skipped message {msg.id} (all reactions present)")
+                skipped_full += 1
+                await followup.send(f"✅ Message ID {msg.id} already has all reactions, skipping")
                 continue
 
-            # Fehlende Reactions hinzufügen
-            success = True
+            # Fehlen Reactions → hinzufügen
             for emoji in missing:
                 try:
                     if emoji.startswith("<:") and ":" in emoji:
@@ -57,19 +74,21 @@ class ReactionResetCog(commands.Cog):
                         await msg.add_reaction(emoji_obj)
                     else:
                         await msg.add_reaction(emoji)
-                    await asyncio.sleep(0.3)  # kurze Pause pro Reaction
+                    await asyncio.sleep(0.25)  # kleine Pause zwischen Reactions
                 except discord.HTTPException:
-                    success = False
-                    print(f"⚠️ Failed to add {emoji} to message {msg.id}")
+                    await followup.send(f"⚠️ Failed to add {emoji} to message ID {msg.id}")
 
-            if success:
-                changed += 1
-                print(f"✅ Updated message {msg.id} with missing reactions: {missing}")
+            updated += 1
+            await followup.send(f"✅ Updated message {msg.id} with missing reactions: {missing}")
+            await asyncio.sleep(0.3)  # kurze Pause zwischen Nachrichten, reduziert Rate-Limits
 
-            await asyncio.sleep(0.5)  # Pause pro Message, nur bei Änderungen
-
-        await feedback_method.send(
-            f"✅ {changed} messages updated with missing reactions.\n⏭ {skipped} messages skipped (all reactions present)."
+        # Zusammenfassung
+        await followup.send(
+            f"🔄 Done! Checked {total_checked} messages.\n"
+            f"✅ Updated: {updated}\n"
+            f"⏭ Already complete: {skipped_full}\n"
+            f"⏭ No image/attachment: {skipped_no_image}\n"
+            f"⚠️ Deleted/Forbidden: {skipped_deleted}"
         )
 
 async def setup(bot: commands.Bot):
