@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-import asyncio
 
 CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
@@ -14,50 +13,49 @@ class ReactionResetCog(commands.Cog):
         self.bot = bot
 
     @commands.hybrid_command(name="reset_reactions")
-    @commands.has_permissions(administrator=True)
+    @commands.has_permissions(administrator=True)  # Only admins can run
     async def reset_reactions(self, ctx: commands.Context):
         """
-        Scans the last 300 messages.
-        Adds missing reactions only.
-        Works for embeds with images AND messages with attachments.
-        Feedback only in console/log.
+        Scans the last 300 messages:
+        Resets reactions only if **any of the 4 custom reactions are missing**.
+        Number of occurrences does not matter.
         """
-        if ctx.interaction:
-            await ctx.interaction.response.defer(ephemeral=True)
+        await ctx.defer(ephemeral=True)
 
-        updated_count = 0
-        skipped_count = 0
-
-        async for msg in ctx.channel.history(limit=300, oldest_first=True):
-            has_image = (msg.embeds and msg.embeds[0].image and msg.embeds[0].image.url) or msg.attachments
-            if not has_image:
+        changed = 0
+        async for msg in ctx.channel.history(limit=300):
+            if not msg.embeds:
+                continue
+            embed = msg.embeds[0]
+            if not embed.image or not embed.image.url:
                 continue
 
-            current_reactions = {str(r.emoji) for r in msg.reactions}
-            missing = [emoji for emoji in CUSTOM_REACTIONS if emoji not in current_reactions]
+            # Gather current reactions as a set (only emojis)
+            current = {str(r.emoji) for r in msg.reactions}
 
-            if not missing:
-                skipped_count += 1
-                print(f"⏩ Skipped message {msg.id} (all reactions present)")
+            # If all 4 custom reactions are present → skip
+            if all(emoji in current for emoji in CUSTOM_REACTIONS):
                 continue
 
-            for emoji in missing:
+            # Otherwise: clear and re-add reactions
+            try:
+                await msg.clear_reactions()
+            except discord.Forbidden:
+                await ctx.send("❌ Missing permissions to clear reactions.", ephemeral=True)
+                return
+            except discord.HTTPException:
+                pass  # Already empty or other minor error
+
+            for emoji in CUSTOM_REACTIONS:
                 try:
-                    if emoji.startswith("<:") and ":" in emoji:
-                        name_id = emoji[2:-1]
-                        name, id_ = name_id.split(":")
-                        await msg.add_reaction(discord.PartialEmoji(name=name, id=int(id_)))
-                    else:
-                        await msg.add_reaction(emoji)
-                    await asyncio.sleep(0.25)  # kurze Pause zwischen Reactions
+                    await msg.add_reaction(emoji)
                 except discord.HTTPException:
                     pass
 
-            updated_count += 1
-            print(f"✅ Updated message {msg.id} with missing reactions: {missing}")
-            await asyncio.sleep(0.5)  # Pause zwischen Nachrichten
+            changed += 1
 
-        print(f"🎯 Done! {updated_count} messages updated, {skipped_count} messages already complete.")
+        await ctx.send(f"✅ {changed} messages have been reset with reactions.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ReactionResetCog(bot))
