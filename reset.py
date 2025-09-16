@@ -20,17 +20,15 @@ class ReactionResetCog(commands.Cog):
         Scans the last 300 messages.
         Adds missing reactions only.
         Works for embeds with images AND messages with attachments.
-        Provides feedback for each message.
+        Feedback only in console/log.
         """
-        is_slash = ctx.interaction is not None
-        # Erste Antwort vorbereiten
-        if is_slash:
+        if ctx.interaction:
             await ctx.interaction.response.defer(ephemeral=True)
 
         updated_count = 0
         skipped_count = 0
 
-        for msg in await ctx.channel.history(limit=300).flatten():
+        async for msg in ctx.channel.history(limit=300, oldest_first=True):
             has_image = (msg.embeds and msg.embeds[0].image and msg.embeds[0].image.url) or msg.attachments
             if not has_image:
                 continue
@@ -40,14 +38,9 @@ class ReactionResetCog(commands.Cog):
 
             if not missing:
                 skipped_count += 1
-                feedback = f"✅ Skipped message {msg.id} (all reactions present)"
-                if is_slash:
-                    await ctx.interaction.followup.send(feedback, ephemeral=True)
-                else:
-                    await ctx.send(feedback)
+                print(f"⏩ Skipped message {msg.id} (all reactions present)")
                 continue
 
-            # Fehlende Reactions hinzufügen
             for emoji in missing:
                 try:
                     if emoji.startswith("<:") and ":" in emoji:
@@ -56,25 +49,15 @@ class ReactionResetCog(commands.Cog):
                         await msg.add_reaction(discord.PartialEmoji(name=name, id=int(id_)))
                     else:
                         await msg.add_reaction(emoji)
-                    await asyncio.sleep(0.25)  # Pause zwischen Reactions
+                    await asyncio.sleep(0.25)  # kurze Pause zwischen Reactions
                 except discord.HTTPException:
                     pass
 
             updated_count += 1
-            feedback = f"✅ Updated message {msg.id} with missing reactions: {missing}"
-            if is_slash:
-                await ctx.interaction.followup.send(feedback, ephemeral=True)
-            else:
-                await ctx.send(feedback)
-
+            print(f"✅ Updated message {msg.id} with missing reactions: {missing}")
             await asyncio.sleep(0.5)  # Pause zwischen Nachrichten
 
-        final_summary = f"✅ Done! {updated_count} messages updated, {skipped_count} messages already complete."
-        if is_slash:
-            await ctx.interaction.followup.send(final_summary, ephemeral=True)
-        else:
-            await ctx.send(final_summary)
-
+        print(f"🎯 Done! {updated_count} messages updated, {skipped_count} messages already complete.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ReactionResetCog(bot))
