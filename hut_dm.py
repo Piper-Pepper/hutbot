@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import random
 
 ROLE_ID = 1387850018471284760  # Rolle "DM open"
-PAGE_SIZE = 20  # 20 Buttons pro Seite
+PAGE_SIZE = 20  # Buttons pro Seite
 
 # Footer
 FOOTER_ICON_URL = "https://cdn-icons-png.flaticon.com/512/25/25231.png"
@@ -19,12 +19,13 @@ DEFAULT_IMAGE_POOL = [
     "https://cdn.discordapp.com/attachments/1383652563408392232/1396193294429716480/dm_open3.jpg",
     "https://cdn.discordapp.com/attachments/1383652563408392232/1396193609858023444/alcohol.jpg",
     "https://cdn.discordapp.com/attachments/1383652563408392232/1396193784747786363/lick_it2.jpg",
-    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193419277369424/dm_open4.jpg?"
+    "https://cdn.discordapp.com/attachments/1383652563408392232/1396193419277369424/dm_open4.jpg"
 ]
 
-# Zufälliges Bild wählen
-DEFAULT_IMAGE_URL = random.choice(DEFAULT_IMAGE_POOL)
+def get_random_image():
+    return random.choice(DEFAULT_IMAGE_POOL)
 
+# ----- Modal -----
 class DMModal(Modal, title="Send a DM"):
     def __init__(self, target_user: discord.User):
         super().__init__()
@@ -47,10 +48,9 @@ class DMModal(Modal, title="Send a DM"):
                 "❌ Cannot send DM — user might have DMs disabled.", ephemeral=True
             )
 
-
+# ----- Member Button -----
 class MemberButton(Button):
     def __init__(self, user: discord.Member):
-        days_on_server = (datetime.now(timezone.utc) - user.joined_at).days if user.joined_at else 0
         label = f"📩 {user.display_name}"
         if len(label) > 80:
             label = label[:77] + "..."
@@ -60,7 +60,7 @@ class MemberButton(Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(DMModal(self.user))
 
-
+# ----- Navigation Button -----
 class NavButton(Button):
     def __init__(self, label: str, target_page: int, row: Optional[int] = None):
         super().__init__(label=label, style=discord.ButtonStyle.secondary, row=row)
@@ -70,28 +70,26 @@ class NavButton(Button):
         view = self.view
         if not isinstance(view, PaginationView):
             return
-        new_view = PaginationView(view.members, self.target_page, view.image_url)
+        new_view = PaginationView(view.members, self.target_page)
         embed = new_view.create_embed()
         await interaction.response.edit_message(embed=embed, view=new_view)
         new_view.message = await interaction.original_response()
 
-
+# ----- Pagination View -----
 class PaginationView(View):
-    def __init__(self, members: list[discord.Member], page: int = 0, image_url: Optional[str] = None):
+    def __init__(self, members: list[discord.Member], page: int = 0):
         super().__init__(timeout=None)
         self.members = members
         self.page = page
         self.total_pages = (len(members) - 1) // PAGE_SIZE + 1
         self.message: Optional[discord.Message] = None
-        self.image_url = image_url
+        self.image_url = get_random_image()
         self.update_buttons()
 
     def update_buttons(self):
         self.clear_items()
-
         start = self.page * PAGE_SIZE
         end = start + PAGE_SIZE
-
         for member in self.members[start:end]:
             self.add_item(MemberButton(member))
 
@@ -111,14 +109,13 @@ class PaginationView(View):
             text=f"{FOOTER_TEXT} — Page {self.page + 1}/{self.total_pages}",
             icon_url=FOOTER_ICON_URL
         )
-        embed.set_image(url=self.image_url or DEFAULT_IMAGE_URL)
+        embed.set_image(url=self.image_url)
         return embed
 
-
+# ----- Cog -----
 class HutDM(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
         self.hut_dm_group = app_commands.Group(
             name="hut_dm",
             description="🛖📬Hut DM commands"
@@ -127,19 +124,16 @@ class HutDM(commands.Cog):
             name="list",
             description="Show members with open DMs"
         )(self.hut_dm_list)
-
         bot.tree.add_command(self.hut_dm_group)
 
     @app_commands.describe(
         visible="Show publicly in channel or only to you (default: False)",
-        image_url="Optional image to decorate the embed",
         mention="Optional role(s) to ping above the list"
     )
     async def hut_dm_list(
         self,
         interaction: discord.Interaction,
         visible: Optional[bool] = False,
-        image_url: Optional[str] = None,
         mention: Optional[discord.Role] = None
     ):
         guild = interaction.guild
@@ -168,59 +162,15 @@ class HutDM(commands.Cog):
 
         members = sorted(members, key=lambda m: m.display_name.lower())
 
-        view = PaginationView(members, page=0, image_url=image_url)
+        view = PaginationView(members)
         embed = view.create_embed()
-
         content = f"{mention.mention}" if mention else None
 
-        await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=not visible)
+        await interaction.response.send_message(
+            content=content, embed=embed, view=view, ephemeral=not visible
+        )
         view.message = await interaction.original_response()
 
-    async def startup_refresh_dm_embed(self):
-        await self.bot.wait_until_ready()
-        channel_id = 1393750777050431558
-        channel = self.bot.get_channel(channel_id)
-
-        if not isinstance(channel, discord.TextChannel):
-            print(f"❌ Channel with ID {channel_id} not found or not a text channel.")
-            return
-
-        try:
-            async for message in channel.history(limit=25):
-                if message.author == self.bot.user and message.embeds:
-                    embed = message.embeds[0]
-                    if embed.title and "DM Open Members" in embed.title:
-                        await message.delete()
-                        print("🗑️ Old hut_dm Nachricht deleted.")
-                        break
-        except discord.Forbidden:
-            print("❌ Missing permission to read/delete messages in the channel.")
-            return
-
-        # Rolle "DM open" holen
-        guild = channel.guild
-        role = guild.get_role(ROLE_ID)
-        if not role:
-            print(f"❌ Role with ID {ROLE_ID} not found.")
-            return
-
-        members = [m for m in role.members if not m.bot]
-        if not members:
-            await channel.send("No DM-open members found.")
-            return
-
-        members = sorted(members, key=lambda m: m.display_name.lower())
-
-        # Embed und View vorbereiten
-        view = PaginationView(members, page=0)
-        embed = view.create_embed()
-
-        message = await channel.send(embed=embed, view=view)
-        view.message = message
-
-        print("📬 New hut_dm Embed posted!")
-
+# ----- Setup -----
 async def setup(bot: commands.Bot):
-    cog = HutDM(bot)
-    await bot.add_cog(cog)
-    bot.loop.create_task(cog.startup_refresh_dm_embed())
+    await bot.add_cog(HutDM(bot))
