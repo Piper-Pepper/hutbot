@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import time
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -57,7 +58,7 @@ CUSTOM_REACTIONS = [
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
-    return f"{base}_{int(time.time())}.png"
+    return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
 # ---------------- Venice API Call ----------------
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict, width: int, height: int) -> bytes | None:
@@ -120,7 +121,8 @@ class AspectRatioView(discord.ui.View):
         # --- Bild und Embed senden ---
         filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
-        file = discord.File(fp, filename=filename)
+        fp.seek(0)
+        discord_file = discord.File(fp, filename=filename)
 
         truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
         embed = discord.Embed(color=discord.Color.blurple())
@@ -141,8 +143,20 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        # 📌 Statt followup.send -> channel.send
-        msg = await interaction.channel.send(content=self.author.mention, embed=embed, file=file)
+        # Fallback für Discord-Bug: unsichtbare Description
+        if not embed.description:
+            embed.description = "\u200b"
+
+        # 📌 Wichtig: files=[...] statt file=...
+        msg = await interaction.channel.send(
+            content=self.author.mention,
+            embed=embed,
+            files=[discord_file]
+        )
+
+        # Debug (optional):
+        # print("Attachments:", [a.filename for a in msg.attachments])
+        # print("Embed image url:", msg.embeds[0].image.url if msg.embeds else None)
 
         # Reactions hinzufügen
         for emoji in CUSTOM_REACTIONS:
