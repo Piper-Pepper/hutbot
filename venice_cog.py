@@ -16,7 +16,6 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
-# Kategorie IDs
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 
@@ -100,7 +99,6 @@ class AspectRatioView(discord.ui.View):
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
 
-        # Fake Fortschrittsanzeige
         steps = self.variant["steps"]
         cfg = self.variant["cfg_scale"]
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
@@ -112,6 +110,10 @@ class AspectRatioView(discord.ui.View):
                 pass
 
         full_prompt = self.prompt_text + self.hidden_suffix
+        # Sonderzeichen am Anfang behandeln
+        if full_prompt and not full_prompt[0].isalnum():
+            full_prompt = " " + full_prompt
+
         img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height)
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
@@ -120,7 +122,6 @@ class AspectRatioView(discord.ui.View):
             self.stop()
             return
 
-        # --- Bild und Embed senden (Mentions oben, Bild + Embed darunter) ---
         filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
         fp.seek(0)
@@ -137,8 +138,7 @@ class AspectRatioView(discord.ui.View):
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫Negative Prompt:", value=neg_prompt, inline=False)
 
-        embed.set_image(url=f"attachment://{filename}")
-
+        # Bild NICHT im Embed, erscheint als Attachment
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
 
@@ -148,7 +148,7 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        # ✅ Send one message: mention first, then image + embed
+        # ✅ Alles in einem Post: Mention oben, Bild als Attachment, Embed darunter
         msg = await interaction.channel.send(
             content=self.author.mention,
             embed=embed,
