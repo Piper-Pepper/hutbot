@@ -58,6 +58,8 @@ CUSTOM_REACTIONS = [
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
+    if not base[0].isalnum():
+        base = "img_" + base
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
 # ---------------- Venice API Call ----------------
@@ -124,7 +126,10 @@ class AspectRatioView(discord.ui.View):
         fp.seek(0)
         discord_file = discord.File(fp, filename=filename)
 
-        truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
+        truncated_prompt = self.prompt_text.replace("\n\n", "\n")
+        if len(truncated_prompt) > 300:
+            truncated_prompt = truncated_prompt[:300] + "..."
+
         embed = discord.Embed(color=discord.Color.blurple())
         embed.add_field(name="🔮Prompt:", value=truncated_prompt, inline=False)
 
@@ -143,18 +148,12 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        # 📌 Wichtig: files=[...] statt file=...
         msg = await interaction.channel.send(
-            content=self.author.mention,
+            content=None,
             embed=embed,
             files=[discord_file]
         )
 
-        # Debug (optional):
-        # print("Attachments:", [a.filename for a in msg.attachments])
-        # print("Embed image url:", msg.embeds[0].image.url if msg.embeds else None)
-
-        # Reactions hinzufügen
         for emoji in CUSTOM_REACTIONS:
             try:
                 await msg.add_reaction(emoji)
