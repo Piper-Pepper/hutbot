@@ -111,7 +111,8 @@ class AspectRatioView(discord.ui.View):
 
         # --- Bild und Embed senden ---
         fp = io.BytesIO(img_bytes)
-        file = discord.File(fp, filename="image.png")
+        safe_name = "_".join(self.prompt_text.split()[:5])  # erste 5 Wörter
+        file = discord.File(fp, filename=f"{safe_name}.png")
 
         truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
         embed = discord.Embed(color=discord.Color.blurple())
