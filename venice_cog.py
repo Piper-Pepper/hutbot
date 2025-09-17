@@ -4,6 +4,8 @@ import aiohttp
 import io
 import asyncio
 import os
+import re
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -50,6 +52,12 @@ CUSTOM_REACTIONS = [
     "<:02No:1347536448831754383>",
     "<:011:1346549711817146400>"
 ]
+
+# ---------------- Helper: Safe Filename ----------------
+def make_safe_filename(prompt: str) -> str:
+    base = "_".join(prompt.split()[:5]) or "image"
+    base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
+    return f"{base}_{int(time.time())}.png"
 
 # ---------------- Venice API Call ----------------
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict, width: int, height: int) -> bytes | None:
@@ -110,9 +118,9 @@ class AspectRatioView(discord.ui.View):
             return
 
         # --- Bild und Embed senden ---
+        filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
-        safe_name = "_".join(self.prompt_text.split()[:5])  # erste 5 Wörter
-        file = discord.File(fp, filename=f"{safe_name}.png")
+        file = discord.File(fp, filename=filename)
 
         truncated_prompt = self.prompt_text if len(self.prompt_text) <= 300 else self.prompt_text[:300] + "..."
         embed = discord.Embed(color=discord.Color.blurple())
@@ -122,7 +130,7 @@ class AspectRatioView(discord.ui.View):
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫Negative Prompt:", value=neg_prompt, inline=False)
 
-        embed.set_image(url="attachment://image.png")
+        embed.set_image(url=f"attachment://{filename}")
 
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
@@ -133,7 +141,7 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        # 📌 WICHTIG: Statt followup.send -> channel.send
+        # 📌 Statt followup.send -> channel.send
         msg = await interaction.channel.send(content=self.author.mention, embed=embed, file=file)
 
         # Reactions hinzufügen
@@ -171,7 +179,6 @@ class VeniceModal(discord.ui.Modal):
 
         normal_cfg = CFG_REFERENCE[variant['model']]
 
-        # Prompt-Feld zeigt als Placeholder den geheimen Zusatz
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
             style=discord.TextStyle.paragraph,
@@ -180,7 +187,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=f"Additional hidden prompt added: {hidden_suffix}"
         )
 
-        # Negative Prompt zeigt den Standardwert als Placeholder
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -189,7 +195,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=f"Default: {DEFAULT_NEGATIVE_PROMPT}"
         )
 
-        # CFG zeigt den normalen Wert
         self.cfg_value = discord.ui.TextInput(
             label="CFG (Higher=stricter AI adherence)",
             style=discord.TextStyle.short,
@@ -203,7 +208,6 @@ class VeniceModal(discord.ui.Modal):
         self.add_item(self.cfg_value)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # CFG auslesen, Standardwert falls leer/ungültig
         try:
             cfg_value = float(self.cfg_value.value)
         except:
@@ -221,7 +225,6 @@ class VeniceModal(discord.ui.Modal):
             ephemeral=True
         )
 
-
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
@@ -237,11 +240,8 @@ class VeniceView(discord.ui.View):
 
     def make_callback(self, variant):
         async def callback(interaction: discord.Interaction):
-            # Hidden suffix abhängig von der Kategorie
             category_id = interaction.channel.category.id if interaction.channel.category else None
             hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
-
-            # Modal jetzt mit hidden_suffix übergeben
             await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix))
         return callback
 
@@ -255,33 +255,28 @@ class VeniceCog(commands.Cog):
         asyncio.create_task(self.session.close())
 
     async def ensure_button_message(self, channel: discord.TextChannel):
-        # Alte Venice-Button-Nachrichten löschen
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
                 except:
                     pass
-        # Neue Buttons posten
         view = VeniceView(self.session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
-        # Alte Venice-Button-Nachrichten löschen
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
                 except:
                     pass
-        # Neue Buttons posten
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # Beim Botstart in allen relevanten Channels prüfen
         for guild in self.bot.guilds:
             for channel in guild.text_channels:
                 if channel.category and channel.category.id in VARIANT_MAP:
