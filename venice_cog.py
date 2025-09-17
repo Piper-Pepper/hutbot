@@ -120,7 +120,7 @@ class AspectRatioView(discord.ui.View):
             self.stop()
             return
 
-        # --- Bild und Embed senden ---
+        # --- Bild und Embed senden (Mentions oben, Bild + Embed darunter) ---
         filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
         fp.seek(0)
@@ -148,8 +148,9 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
+        # ✅ Send one message: mention first, then image + embed
         msg = await interaction.channel.send(
-            content=None,
+            content=self.author.mention,
             embed=embed,
             files=[discord_file]
         )
