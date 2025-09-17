@@ -143,10 +143,6 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        # Fallback für Discord-Bug: unsichtbare Description
-        if not embed.description:
-            embed.description = "\u200b"
-
         # 📌 Wichtig: files=[...] statt file=...
         msg = await interaction.channel.send(
             content=self.author.mention,
