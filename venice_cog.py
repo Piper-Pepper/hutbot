@@ -31,7 +31,7 @@ CFG_REFERENCE = {
     "stable-diffusion-3.5": {"cfg_scale": 4.0, "steps": 30},
     "flux-dev": {"cfg_scale": 5.0, "steps": 30},
     "hidream": {"cfg_scale": 4.0, "steps": 30},
-    "anime-wai": {"cfg_scale": 4.0, "steps": 30},  # neu
+    "anime": {"cfg_scale": 4.0, "steps": 30},  # ✅ richtiger Name
 }
 
 VARIANT_MAP = {
@@ -44,7 +44,7 @@ VARIANT_MAP = {
         {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
-        {"label": "Anime", "model": "anime-wai", "cfg_scale": 4.0, "steps": 30},  # neu
+        {"label": "Anime", "model": "anime", "cfg_scale": 4.0, "steps": 30},  # ✅ fixed
     ]
 }
 
@@ -112,7 +112,6 @@ class AspectRatioView(discord.ui.View):
                 pass
 
         full_prompt = self.prompt_text + self.hidden_suffix
-        # Sonderzeichen am Anfang behandeln
         if full_prompt and not full_prompt[0].isalnum():
             full_prompt = " " + full_prompt
 
@@ -134,38 +133,17 @@ class AspectRatioView(discord.ui.View):
             truncated_prompt = truncated_prompt[:300] + "..."
 
         embed = discord.Embed(color=discord.Color.blurple())
+        embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
 
-        # Prompt
-        embed.add_field(
-            name="🔮 Prompt:",
-            value=truncated_prompt,
-            inline=False
-        )
-
-        # Negative Prompt (falls vorhanden)
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.add_field(
-                name="🚫 Negative Prompt:",
-                value=neg_prompt,
-                inline=False
-            )
+            embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
-        # Technical Info
         technical_info = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
-        embed.add_field(
-            name="📊 Technical Info:",
-            value=technical_info,
-            inline=False
-        )
+        embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
-        # Immer Avatar + Name setzen
-        embed.set_author(
-            name=str(self.author),
-            icon_url=self.author.display_avatar.url
-        )
+        embed.set_author(name=str(self.author), icon_url=self.author.display_avatar.url)
 
-        # Footer mit Datum, Autor & Gilden-Icon (falls vorhanden)
         today = datetime.now().strftime("%Y-%m-%d")
         guild = interaction.guild
         embed.set_footer(
@@ -173,7 +151,6 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-        # ✅ Alles in einem Post: Mention oben, Bild als Attachment, Embed darunter
         msg = await interaction.channel.send(
             content=f"{self.author.mention}\n",
             embed=embed,
@@ -191,7 +168,7 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
-    # Aspect Ratio Buttons
+    # ---------------- Aspect Ratio Buttons ----------------
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024)
@@ -203,6 +180,14 @@ class AspectRatioView(discord.ui.View):
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 576, 1024)
+
+    @discord.ui.button(label="🖼️4:5", style=discord.ButtonStyle.blurple)
+    async def ratio_4_5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 819, 1024)
+
+    @discord.ui.button(label="🎬21:9", style=discord.ButtonStyle.blurple)
+    async def ratio_21_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 1024, 439)
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
