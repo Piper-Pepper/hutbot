@@ -105,7 +105,7 @@ class AspectRatioView(discord.ui.View):
         cfg = self.variant["cfg_scale"]
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
         for i in range(1, 11):
-            await asyncio.sleep(0.4 + steps * 0.02 + cfg * 0.03)
+            await asyncio.sleep(0.5 + steps * 0.02 + cfg * 0.03)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -144,7 +144,7 @@ class AspectRatioView(discord.ui.View):
             f"{self.variant['model']} | "
             f"CFG: {self.variant['cfg_scale']} | "
             f"Steps: {self.variant['steps']} | "
-            f"🎞️: {aspect_ratio}"
+            f"AR: {aspect_ratio}"
         )
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
