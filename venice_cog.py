@@ -143,7 +143,7 @@ class AspectRatioView(discord.ui.View):
         technical_info = (
             f"{self.variant['model']} | "
             f"CFG: {self.variant['cfg_scale']} | "
-            f"Steps: {self.variant['steps']} | "
+            f"Steps: {self.variant['steps']}"
         )
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
