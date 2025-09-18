@@ -39,12 +39,12 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
         {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 30},
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
+        {"label": "Anime", "model": "wai-Illustrious", "cfg_scale": 4.0, "steps": 30},
     ],
     SFW_CATEGORY_ID: [
         {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
-        {"label": "Anime", "model": "wai-Illustrious", "cfg_scale": 4.0, "steps": 30},
     ]
 }
 
@@ -139,7 +139,12 @@ class AspectRatioView(discord.ui.View):
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
-        technical_info = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
+        technical_info = (
+            f"{self.variant['model']} | "
+            f"CFG: {self.variant['cfg_scale']} | "
+            f"Steps: {self.variant['steps']} | "
+            f"AR: {self.variant['aspect_ratio']}"
+        )
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
         embed.set_author(name=str(self.author), icon_url=self.author.display_avatar.url)
