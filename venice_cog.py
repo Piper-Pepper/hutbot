@@ -24,7 +24,6 @@ DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, wa
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
-# CFG_REFERENCE dient nur noch als schnelle Lookup-Tabelle für Modal/Generation
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 4.5, "steps": 30},
     "pony-realism": {"cfg_scale": 5.0, "steps": 30},
@@ -32,10 +31,7 @@ CFG_REFERENCE = {
     "stable-diffusion-3.5": {"cfg_scale": 4.0, "steps": 30},
     "flux-dev": {"cfg_scale": 5.0, "steps": 30},
     "hidream": {"cfg_scale": 4.0, "steps": 30},
-    # neue Modelle
-    "venice-uncensored": {"cfg_scale": 5.5, "steps": 35},
-    "llama-4-maverick": {"cfg_scale": 4.5, "steps": 30},
-    "realistic-vision-v5": {"cfg_scale": 7.0, "steps": 30},
+    "anime-wai": {"cfg_scale": 4.0, "steps": 30},  # neu
 }
 
 VARIANT_MAP = {
@@ -43,17 +39,14 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
         {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 30},
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
-        {"label": "Venice Uncensored", "model": "venice-uncensored", "cfg_scale": 5.5, "steps": 35},
     ],
     SFW_CATEGORY_ID: [
         {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
-        {"label": "Llama 4 Maverick", "model": "llama-4-maverick", "cfg_scale": 4.5, "steps": 30},
-        {"label": "Realistic Vision", "model": "realistic-vision-v5", "cfg_scale": 7.0, "steps": 30},
+        {"label": "Anime", "model": "anime-wai", "cfg_scale": 4.0, "steps": 30},  # neu
     ]
 }
-
 
 CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
