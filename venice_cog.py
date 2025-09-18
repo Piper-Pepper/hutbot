@@ -144,12 +144,19 @@ class AspectRatioView(discord.ui.View):
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
 
         today = datetime.now().strftime("%Y-%m-%d")
-        embed.add_field(name="\u200b", value=f"© {today} by {self.author}", inline=False)
+
+        # Right after the prompt field
+        technical_info = f"📊 {self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
+        embed.add_field(name="🔮 Prompt:", value=f"{truncated_prompt}\n{technical_info}", inline=False)
+
+        # Footer now holds the copyright and guild icon
+        today = datetime.now().strftime("%Y-%m-%d")
         guild = interaction.guild
         embed.set_footer(
-            text=f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}",
+            text=f"© {today} by {self.author}",
             icon_url=guild.icon.url if guild and guild.icon else None
         )
+
 
         # ✅ Alles in einem Post: Mention oben, Bild als Attachment, Embed darunter
         msg = await interaction.channel.send(
