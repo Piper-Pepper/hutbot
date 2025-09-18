@@ -181,13 +181,6 @@ class AspectRatioView(discord.ui.View):
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 576, 1024)
 
-    @discord.ui.button(label="🖼️4:5", style=discord.ButtonStyle.blurple)
-    async def ratio_4_5(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 819, 1024)
-
-    @discord.ui.button(label="🎬21:9", style=discord.ButtonStyle.blurple)
-    async def ratio_21_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 1024, 439)
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
