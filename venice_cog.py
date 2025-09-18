@@ -144,7 +144,7 @@ class AspectRatioView(discord.ui.View):
             f"{self.variant['model']} | "
             f"CFG: {self.variant['cfg_scale']} | "
             f"Steps: {self.variant['steps']} | "
-            f"🎞️ AR: {aspect_ratio}"
+            f"🎞️: {aspect_ratio}"
         )
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
@@ -219,7 +219,7 @@ class VeniceModal(discord.ui.Modal):
         self.cfg_value = discord.ui.TextInput(
             label="CFG (Higher=stricter AI adherence)",
             style=discord.TextStyle.short,
-            placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})",
+            placeholder=f"{variant['cfg_scale']} (Normal: {str(normal_cfg)})",
             required=False,
             max_length=5
         )
