@@ -24,14 +24,17 @@ DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, wa
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
+# CFG_REFERENCE dient nur noch als schnelle Lookup-Tabelle für Modal/Generation
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 4.5, "steps": 30},
     "pony-realism": {"cfg_scale": 5.0, "steps": 30},
     "flux-dev-uncensored": {"cfg_scale": 4.5, "steps": 30},
-    "goddessofrealism-pony-beta": {"cfg_scale": 6.5, "steps": 30},  # <- neu hinzufügen
     "stable-diffusion-3.5": {"cfg_scale": 4.0, "steps": 30},
     "flux-dev": {"cfg_scale": 5.0, "steps": 30},
     "hidream": {"cfg_scale": 4.0, "steps": 30},
+    # neue Modelle
+    "venice-uncensored": {"cfg_scale": 5.5, "steps": 35},
+    "llama-4-maverick": {"cfg_scale": 4.5, "steps": 30},
     "realistic-vision-v5": {"cfg_scale": 7.0, "steps": 30},
 }
 
@@ -40,15 +43,18 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
         {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 30},
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
-        {"label": "GoR Pony", "model": "goddessofrealism-pony-beta", "cfg_scale": 6.5, "steps": 30},
+        {"label": "Venice Uncensored", "model": "venice-uncensored", "cfg_scale": 5.5, "steps": 35},
     ],
     SFW_CATEGORY_ID: [
         {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
-        {"label": "R. Vision", "model": "realistic-vision-v5", "cfg_scale": 7.0, "steps": 30}
+        {"label": "Llama 4 Maverick", "model": "llama-4-maverick", "cfg_scale": 4.5, "steps": 30},
+        {"label": "Realistic Vision", "model": "realistic-vision-v5", "cfg_scale": 7.0, "steps": 30},
     ]
 }
+
+
 CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
     "<:01smile_piper:1387083454575022213>",
