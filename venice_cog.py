@@ -198,7 +198,8 @@ class VeniceModal(discord.ui.Modal):
         self.variant = variant
         self.hidden_suffix = hidden_suffix
 
-        normal_cfg = CFG_REFERENCE[variant['model']]
+        # Nur der cfg_scale-Wert, keine geschweiften Klammern
+        normal_cfg = CFG_REFERENCE[variant['model']]['cfg_scale']
 
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
@@ -219,7 +220,7 @@ class VeniceModal(discord.ui.Modal):
         self.cfg_value = discord.ui.TextInput(
             label="CFG (Higher=stricter AI adherence)",
             style=discord.TextStyle.short,
-            placeholder=f"{variant['cfg_scale']} (Normal: {str(normal_cfg)})",
+            placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})",
             required=False,
             max_length=5
         )
@@ -242,7 +243,13 @@ class VeniceModal(discord.ui.Modal):
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, {**variant, "aspect_ratio": "N/A"}, self.prompt.value, self.hidden_suffix, interaction.user),
+            view=AspectRatioView(
+                self.session,
+                {**variant, "aspect_ratio": "N/A"},
+                self.prompt.value,
+                self.hidden_suffix,
+                interaction.user
+            ),
             ephemeral=True
         )
 
