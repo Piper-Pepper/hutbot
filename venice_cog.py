@@ -204,7 +204,7 @@ class VeniceModal(discord.ui.Modal):
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
-            max_length=500,
+            max_length=600,
             placeholder=f"Additional hidden prompt added: {hidden_suffix}"
         )
 
@@ -212,7 +212,7 @@ class VeniceModal(discord.ui.Modal):
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
-            max_length=300,
+            max_length=200,
             placeholder=f"Default: {DEFAULT_NEGATIVE_PROMPT}"
         )
 
