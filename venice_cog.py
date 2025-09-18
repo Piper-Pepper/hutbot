@@ -39,14 +39,15 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
         {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 30},
         {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
+        {"label": "GoR Pony", "model": "goddessofrealism-pony-beta", "cfg_scale": 6.5, "steps": 30},
     ],
     SFW_CATEGORY_ID: [
         {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
+        {"label": "R. Vision", "model": "realistic-vision-v5", "cfg_scale": 7.0, "steps": 30}
     ]
 }
-
 CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
     "<:01smile_piper:1387083454575022213>",
