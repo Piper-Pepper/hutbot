@@ -204,7 +204,7 @@ class VeniceModal(discord.ui.Modal):
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
-            max_length=600,
+            max_length=700,
             placeholder=f"Additional hidden prompt added: {hidden_suffix}"
         )
 
