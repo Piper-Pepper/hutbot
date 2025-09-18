@@ -31,7 +31,7 @@ CFG_REFERENCE = {
     "stable-diffusion-3.5": {"cfg_scale": 4.0, "steps": 30},
     "flux-dev": {"cfg_scale": 5.0, "steps": 30},
     "hidream": {"cfg_scale": 4.0, "steps": 30},
-    "anime": {"cfg_scale": 4.0, "steps": 30},  # ✅ richtiger Name
+    "wai-Illustrious": {"cfg_scale": 4.0, "steps": 30},
 }
 
 VARIANT_MAP = {
@@ -44,7 +44,7 @@ VARIANT_MAP = {
         {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
         {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
         {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
-        {"label": "Anime", "model": "anime", "cfg_scale": 4.0, "steps": 30},  # ✅ fixed
+        {"label": "Anime", "model": "wai-Illustrious", "cfg_scale": 4.0, "steps": 30},
     ]
 }
 
