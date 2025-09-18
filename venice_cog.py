@@ -158,11 +158,13 @@ class AspectRatioView(discord.ui.View):
             inline=False
         )
 
-        # Bild NICHT im Embed, erscheint als Attachment
-        if hasattr(self.author, "avatar") and self.author.avatar:
-            embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
+        # Immer Avatar + Name setzen
+        embed.set_author(
+            name=str(self.author),
+            icon_url=self.author.display_avatar.url
+        )
 
-        # Footer mit Datum, Autor & Gilden-Icon
+        # Footer mit Datum, Autor & Gilden-Icon (falls vorhanden)
         today = datetime.now().strftime("%Y-%m-%d")
         guild = interaction.guild
         embed.set_footer(
@@ -170,11 +172,9 @@ class AspectRatioView(discord.ui.View):
             icon_url=guild.icon.url if guild and guild.icon else None
         )
 
-
-
         # ✅ Alles in einem Post: Mention oben, Bild als Attachment, Embed darunter
         msg = await interaction.channel.send(
-            content=self.author.mention,
+            content=f"{self.author.mention}\n",
             embed=embed,
             files=[discord_file]
         )
