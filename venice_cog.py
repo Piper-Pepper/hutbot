@@ -129,8 +129,8 @@ class AspectRatioView(discord.ui.View):
         discord_file = discord.File(fp, filename=filename)
 
         truncated_prompt = self.prompt_text.replace("\n\n", "\n")
-        if len(truncated_prompt) > 300:
-            truncated_prompt = truncated_prompt[:300] + "..."
+        if len(truncated_prompt) > 500:
+            truncated_prompt = truncated_prompt[:500] + "..."
 
         embed = discord.Embed(color=discord.Color.blurple())
         embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
@@ -204,7 +204,7 @@ class VeniceModal(discord.ui.Modal):
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
-            max_length=800,
+            max_length=1000,
             placeholder=f"Additional hidden prompt added: {hidden_suffix}"
         )
 
@@ -212,7 +212,7 @@ class VeniceModal(discord.ui.Modal):
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
-            max_length=200,
+            max_length=300,
             placeholder=f"Default: {DEFAULT_NEGATIVE_PROMPT}"
         )
 
