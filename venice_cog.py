@@ -133,29 +133,43 @@ class AspectRatioView(discord.ui.View):
             truncated_prompt = truncated_prompt[:300] + "..."
 
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.add_field(name="🔮Prompt:", value=truncated_prompt, inline=False)
 
+        # Prompt
+        embed.add_field(
+            name="🔮 Prompt:",
+            value=truncated_prompt,
+            inline=False
+        )
+
+        # Negative Prompt (falls vorhanden)
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.add_field(name="🚫Negative Prompt:", value=neg_prompt, inline=False)
+            embed.add_field(
+                name="🚫 Negative Prompt:",
+                value=neg_prompt,
+                inline=False
+            )
+
+        # Technical Info
+        technical_info = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
+        embed.add_field(
+            name="📊 Technical Info:",
+            value=technical_info,
+            inline=False
+        )
 
         # Bild NICHT im Embed, erscheint als Attachment
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
 
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # Right after the prompt field
-        technical_info = f"📊 {self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
-        embed.add_field(name="🔮 Prompt:", value=f"{truncated_prompt}\n{technical_info}", inline=False)
-
-        # Footer now holds the copyright and guild icon
+        # Footer mit Datum, Autor & Gilden-Icon
         today = datetime.now().strftime("%Y-%m-%d")
         guild = interaction.guild
         embed.set_footer(
             text=f"© {today} by {self.author}",
             icon_url=guild.icon.url if guild and guild.icon else None
         )
+
 
 
         # ✅ Alles in einem Post: Mention oben, Bild als Attachment, Embed darunter
