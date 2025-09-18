@@ -139,11 +139,12 @@ class AspectRatioView(discord.ui.View):
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
+        aspect_ratio = self.variant.get('aspect_ratio', 'N/A')  # <-- Absicherung
         technical_info = (
             f"{self.variant['model']} | "
             f"CFG: {self.variant['cfg_scale']} | "
             f"Steps: {self.variant['steps']} | "
-            f"AR: {self.variant['aspect_ratio']}"
+            f"🎞️ AR: {aspect_ratio}"
         )
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
@@ -176,16 +177,18 @@ class AspectRatioView(discord.ui.View):
     # ---------------- Aspect Ratio Buttons ----------------
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.variant['aspect_ratio'] = "1:1"
         await self.generate_image(interaction, 1024, 1024)
 
     @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.variant['aspect_ratio'] = "16:9"
         await self.generate_image(interaction, 1024, 576)
 
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.variant['aspect_ratio'] = "9:16"
         await self.generate_image(interaction, 576, 1024)
-
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
@@ -239,7 +242,7 @@ class VeniceModal(discord.ui.Modal):
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, variant, self.prompt.value, self.hidden_suffix, interaction.user),
+            view=AspectRatioView(self.session, {**variant, "aspect_ratio": "N/A"}, self.prompt.value, self.hidden_suffix, interaction.user),
             ephemeral=True
         )
 
