@@ -142,6 +142,10 @@ class AspectRatioView(discord.ui.View):
         if hasattr(self.author, "avatar") and self.author.avatar:
             embed.set_author(name=str(self.author), icon_url=self.author.avatar.url)
 
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        embed.add_field(name="\u200b", value=f"© {today} by {self.author}", inline=False)
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
         guild = interaction.guild
         embed.set_footer(
             text=f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}",
