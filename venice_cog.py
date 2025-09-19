@@ -260,17 +260,19 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
-        @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
-        async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.generate_image(interaction, 1024, 1024, "1:1")
+    # --- Buttons als richtige Member ---
+    @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
+    async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 1024, 1024, "1:1")
 
-        @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
-        async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.generate_image(interaction, 1360, 768, "16:9")
+    @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
+    async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 1360, 768, "16:9")
 
-        @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
-        async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.generate_image(interaction, 768, 1360, "9:16")
+    @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
+    async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 768, 1360, "9:16")
+
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
