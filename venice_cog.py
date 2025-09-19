@@ -25,26 +25,26 @@ NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 4.5, "steps": 30},
-    "pony-realism": {"cfg_scale": 5.0, "steps": 30},
-    "flux-dev-uncensored": {"cfg_scale": 4.5, "steps": 30},
-    "stable-diffusion-3.5": {"cfg_scale": 4.0, "steps": 30},
-    "flux-dev": {"cfg_scale": 5.0, "steps": 30},
-    "hidream": {"cfg_scale": 4.0, "steps": 30},
-    "wai-Illustrious": {"cfg_scale": 4.0, "steps": 30},
+    "lustify-sdxl": {"cfg_scale": 5.5, "steps": 30},
+    "pony-realism": {"cfg_scale": 6.0, "steps": 30},
+    "flux-dev-uncensored": {"cfg_scale": 5.5, "steps": 30},
+    "stable-diffusion-3.5": {"cfg_scale": 5.0, "steps": 30},
+    "flux-dev": {"cfg_scale": 6.0, "steps": 30},
+    "hidream": {"cfg_scale": 5.0, "steps": 30},
+    "wai-Illustrious": {"cfg_scale": 6.0, "steps": 30},
 }
 
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
-        {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 4.5, "steps": 30},
-        {"label": "Pony", "model": "pony-realism", "cfg_scale": 5.0, "steps": 30},
-        {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 4.5, "steps": 30},
-        {"label": "Anime", "model": "wai-Illustrious", "cfg_scale": 4.0, "steps": 30},
+        {"label": "Lustify", "model": "lustify-sdxl", "cfg_scale": 5.5, "steps": 30},
+        {"label": "Pony", "model": "pony-realism", "cfg_scale": 6.0, "steps": 30},
+        {"label": "FluxUnc", "model": "flux-dev-uncensored", "cfg_scale": 5.5, "steps": 30},
+        {"label": "Anime", "model": "wai-Illustrious", "cfg_scale": 6.0, "steps": 30},
     ],
     SFW_CATEGORY_ID: [
-        {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 4.0, "steps": 30},
-        {"label": "Flux", "model": "flux-dev", "cfg_scale": 5.0, "steps": 30},
-        {"label": "HiDream", "model": "hidream", "cfg_scale": 4.0, "steps": 30},
+        {"label": "SD3.5", "model": "stable-diffusion-3.5", "cfg_scale": 5.0, "steps": 30},
+        {"label": "Flux", "model": "flux-dev", "cfg_scale": 6.0, "steps": 30},
+        {"label": "HiDream", "model": "hidream", "cfg_scale": 5.0, "steps": 30},
     ]
 }
 
