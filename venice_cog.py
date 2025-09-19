@@ -274,10 +274,6 @@ class PostGenerationView(discord.ui.View):
         self.author = author
         self.message = message
 
-        self.add_item(discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.gray, custom_id=f"reuse_{uuid.uuid4().hex}"))
-        self.add_item(discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red, custom_id=f"delete_{uuid.uuid4().hex}"))
-        self.add_item(discord.ui.Button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red, custom_id=f"delete_reuse_{uuid.uuid4().hex}"))
-
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         # Nur der Author darf klicken
         return interaction.user.id == self.author.id
