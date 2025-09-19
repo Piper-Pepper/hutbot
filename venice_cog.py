@@ -19,7 +19,8 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
-VIP_ROLE_ID = 1377051179615526
+VIP_ROLE_ID = 1377051179615522926  # wieder die echte VIP-Rolle
+
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
