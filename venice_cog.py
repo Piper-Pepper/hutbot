@@ -279,29 +279,41 @@ class PostGenerationView(discord.ui.View):
         self.add_item(discord.ui.Button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red, custom_id=f"delete_reuse_{uuid.uuid4().hex}"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Nur der Author darf klicken
         return interaction.user.id == self.author.id
 
-    @discord.ui.button(label="dummy", style=discord.ButtonStyle.secondary, disabled=True, custom_id="dummy")  # placeholder to prevent empty components
-    async def dummy(self, interaction): pass
+    @discord.ui.button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.gray)
+    async def reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VeniceModal(
+            self.session, 
+            self.variant, 
+            self.hidden_suffix, 
+            is_vip=True, 
+            previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
+        ))
 
-    async def on_button_click(self, interaction: discord.Interaction, action):
-        if action == "delete":
-            try:
-                await self.message.delete()
-            except: pass
-            await interaction.response.send_message("Deleted.", ephemeral=True)
-        elif action == "reuse":
+    @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
+    async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
             await self.message.delete()
-            await interaction.response.send_modal(VeniceModal(self.session, self.variant, self.hidden_suffix, True,
-                                                              previous_inputs={"prompt": self.prompt_text,
-                                                                               "negative_prompt": self.variant.get("negative_prompt", "")}))
-        elif action == "delete_reuse":
-            try:
-                await self.message.delete()
-            except: pass
-            await interaction.response.send_modal(VeniceModal(self.session, self.variant, self.hidden_suffix, True,
-                                                              previous_inputs={"prompt": self.prompt_text,
-                                                                               "negative_prompt": self.variant.get("negative_prompt", "")}))
+        except:
+            pass
+        await interaction.response.send_message("Deleted.", ephemeral=True)
+
+    @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
+    async def delete_reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await self.message.delete()
+        except:
+            pass
+        await interaction.response.send_modal(VeniceModal(
+            self.session, 
+            self.variant, 
+            self.hidden_suffix, 
+            is_vip=True, 
+            previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
+        ))
+
 
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
