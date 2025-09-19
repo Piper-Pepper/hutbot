@@ -24,6 +24,8 @@ DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, wa
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
+REQUIRED_ROLE_ID = 1377051179615522926  # Role für volle Freiheit
+
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 5.5, "steps": 30},
     "pony-realism": {"cfg_scale": 6.0, "steps": 30},
@@ -90,13 +92,14 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, has_role: bool):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
+        self.has_role = has_role
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
@@ -139,16 +142,10 @@ class AspectRatioView(discord.ui.View):
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
-        aspect_ratio = self.variant.get('aspect_ratio', 'N/A')  # <-- Absicherung
-        technical_info = (
-            f"{self.variant['model']} | "
-            f"CFG: {self.variant['cfg_scale']} | "
-            f"Steps: {self.variant['steps']}"
-        )
+        technical_info = f"{self.variant['model']} | CFG: {self.variant['cfg_scale']} | Steps: {self.variant['steps']}"
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
 
         embed.set_author(name=str(self.author), icon_url=self.author.display_avatar.url)
-
         today = datetime.now().strftime("%Y-%m-%d")
         guild = interaction.guild
         embed.set_footer(
@@ -181,23 +178,29 @@ class AspectRatioView(discord.ui.View):
 
     @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.has_role:
+            await interaction.response.send_message("⚠️ Only aspect ratio 1:1 allowed without required role.", ephemeral=True)
+            return
         self.variant['aspect_ratio'] = "16:9"
         await self.generate_image(interaction, 1024, 576)
 
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.has_role:
+            await interaction.response.send_message("⚠️ Only aspect ratio 1:1 allowed without required role.", ephemeral=True)
+            return
         self.variant['aspect_ratio'] = "9:16"
         await self.generate_image(interaction, 576, 1024)
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict, hidden_suffix: str):
+    def __init__(self, session: aiohttp.ClientSession, variant: dict, hidden_suffix: str, has_role: bool):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
         self.hidden_suffix = hidden_suffix
+        self.has_role = has_role
 
-        # Nur der cfg_scale-Wert, keine geschweiften Klammern
         normal_cfg = CFG_REFERENCE[variant['model']]['cfg_scale']
 
         self.prompt = discord.ui.TextInput(
@@ -247,29 +250,43 @@ class VeniceModal(discord.ui.Modal):
                 {**variant, "aspect_ratio": "N/A"},
                 self.prompt.value,
                 self.hidden_suffix,
-                interaction.user
+                interaction.user,
+                self.has_role
             ),
             ephemeral=True
         )
 
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
-    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
+    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel, member_roles=None):
         super().__init__(timeout=None)
         self.session = session
         self.category_id = channel.category.id if channel.category else None
         variants = VARIANT_MAP.get(self.category_id, [])
+        member_roles = member_roles or []
+
+        has_role = REQUIRED_ROLE_ID in member_roles
+
+        filtered_variants = []
+        if has_role:
+            filtered_variants = variants
+        else:
+            # Ohne Rolle nur Lustify & SD3.5
+            for v in variants:
+                if v["model"] in ["lustify-sdxl", "stable-diffusion-3.5"]:
+                    filtered_variants.append(v)
+
         style = discord.ButtonStyle.red if self.category_id == NSFW_CATEGORY_ID else discord.ButtonStyle.blurple
-        for variant in variants:
+        for variant in filtered_variants:
             btn = discord.ui.Button(label=variant['label'], style=style)
-            btn.callback = self.make_callback(variant)
+            btn.callback = self.make_callback(variant, has_role)
             self.add_item(btn)
 
-    def make_callback(self, variant):
+    def make_callback(self, variant, has_role):
         async def callback(interaction: discord.Interaction):
             category_id = interaction.channel.category.id if interaction.channel.category else None
             hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
-            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix))
+            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, has_role))
         return callback
 
 # ---------------- Cog ----------------
@@ -282,24 +299,26 @@ class VeniceCog(commands.Cog):
         asyncio.create_task(self.session.close())
 
     async def ensure_button_message(self, channel: discord.TextChannel):
+        member_roles = []
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
                 except:
                     pass
-        view = VeniceView(self.session, channel)
+        view = VeniceView(self.session, channel, member_roles)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
+        member_roles = []
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
                 except:
                     pass
-        view = VeniceView(session, channel)
+        view = VeniceView(session, channel, member_roles)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
     @commands.Cog.listener()
