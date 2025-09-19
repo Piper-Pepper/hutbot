@@ -193,12 +193,14 @@ class AspectRatioView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
-        steps = self.variant["cfg_scale"] if "steps" not in self.variant else self.variant["steps"]
         cfg = self.variant["cfg_scale"]
+        steps = self.variant.get("steps", int(cfg))  # Sicherstellen, dass steps immer int ist
 
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
+
+        prompt_factor = len(self.prompt_text) / 1000  # 10 Zeichen ~0.01, 1000 Zeichen ~1
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.12)
+            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.12 + prompt_factor * 0.5)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -250,10 +252,11 @@ class AspectRatioView(discord.ui.View):
                 pass
 
         await interaction.followup.send(
-            "Post Generation Actions:",
+            content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
             ephemeral=True
         )
+
 
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
@@ -402,7 +405,7 @@ class VeniceCog(commands.Cog):
                 except:
                     pass
         view = VeniceView(self.session, channel)
-        await channel.send("💡 Click a button to start generating images!", view=view)
+        await channel.send("💡 Click a button to start generating a new image!", view=view)
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
@@ -413,7 +416,7 @@ class VeniceCog(commands.Cog):
                 except:
                     pass
         view = VeniceView(session, channel)
-        await channel.send("💡 Click a button to start generating images!", view=view)
+        await channel.send("💡 Click a button to start generating a new image!", view=view)
 
     @commands.Cog.listener()
     async def on_ready(self):
