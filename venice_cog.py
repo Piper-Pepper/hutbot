@@ -212,9 +212,30 @@ class PostGenerationView(discord.ui.View):
         self.user_has_role = user_has_role
         self.message = message
 
-        self.add_item(discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.gray, emoji="♻️", custom_id="reuse"))
-        self.add_item(discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red, emoji="🗑️", custom_id="delete"))
-        self.add_item(discord.ui.Button(label="🗑️♻️ Delete & Re-use", style=discord.ButtonStyle.red, emoji="🗑️♻️", custom_id="delete_reuse"))
+        # ♻️ Re-use Prompt (grau)
+        self.add_item(discord.ui.Button(
+            label="Re-use Prompt",
+            style=discord.ButtonStyle.gray,
+            emoji="♻️",
+            custom_id="reuse"
+        ))
+
+        # 🗑️ Delete (rot)
+        self.add_item(discord.ui.Button(
+            label="Delete",
+            style=discord.ButtonStyle.red,
+            emoji="🗑️",
+            custom_id="delete"
+        ))
+
+        # 🧹 Delete & Re-use (rot)
+        self.add_item(discord.ui.Button(
+            label="Delete & Re-use",
+            style=discord.ButtonStyle.red,
+            emoji="🧹",
+            custom_id="delete_reuse"
+        ))
+
 
     @discord.ui.button(label="dummy", style=discord.ButtonStyle.gray, disabled=True)
     async def dummy(self, interaction: discord.Interaction, button: discord.ui.Button):
