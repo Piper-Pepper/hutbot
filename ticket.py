@@ -1,6 +1,6 @@
 import asyncio
 import discord
-from discord.ext import commands, tasks  # tasks hier importieren
+from discord.ext import commands, tasks
 from discord.ui import View, Button, Modal, TextInput
 from datetime import datetime
 import requests
@@ -12,6 +12,7 @@ load_dotenv()
 BUTTON_CHANNEL_ID = 1382079493711200549
 TICKET_CHANNEL_ID = 1390430555124007145
 TICKET_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1385054753754714162/ticket_small.jpg"
+REQUIRED_ROLE_ID = 1377051179615522926  # Role für PMVJ & Pepper Police
 
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 BIN_ID = os.getenv("TICKET_BIN")
@@ -40,8 +41,7 @@ def load_buttons_data():
         print(f"❌ Error loading data: {response.status_code} {response.text}")
         return {}
 
-# ... alles oben bleibt gleich ...
-
+# ---------------- Modal ----------------
 class TicketModal(Modal, title="🛖Contact Staff🚨"):
     def __init__(self, bot: commands.Bot, title_prefix: str = "", image_url: str = TICKET_IMAGE_URL):
         super().__init__()
@@ -73,7 +73,7 @@ class TicketModal(Modal, title="🛖Contact Staff🚨"):
         await channel.send(content=f"{interaction.user.mention} submitted a ticket:", embed=embed)
         await interaction.response.send_message("✅ Your request was sent!", ephemeral=True)
 
-
+# ---------------- Buttons ----------------
 class TicketButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
         super().__init__(label="🎫Open Ticket", style=discord.ButtonStyle.red, custom_id="ticket_open_button")
@@ -81,7 +81,7 @@ class TicketButton(Button):
         self.channel_id = channel_id
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(TicketModal(self.bot))  # Kein Prefix
+        await interaction.response.send_modal(TicketModal(self.bot))
 
 class ApplyPMVJButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
@@ -91,13 +91,17 @@ class ApplyPMVJButton(Button):
         self.pmvj_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1383839288235397292/goon_tv_party.gif"
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            TicketModal(
-                bot=self.bot,
-                title_prefix="Apply for PMVJ",
-                image_url=self.pmvj_image
+        member_roles = [role.id for role in interaction.user.roles]
+        if REQUIRED_ROLE_ID not in member_roles:
+            role = interaction.guild.get_role(REQUIRED_ROLE_ID)
+            role_name = role.name if role else "Required Role"
+            await interaction.response.send_message(
+                f"⚠️ You have to be at least Level 5 and inhabit the role **{role_name}** to do this.",
+                ephemeral=True
             )
-        )
+            return
+        await interaction.response.send_modal(TicketModal(bot=self.bot, title_prefix="Apply for PMVJ", image_url=self.pmvj_image))
+
 class ApplyHutRiddlerButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
         super().__init__(label="⁉️Apply for Hut Riddler", style=discord.ButtonStyle.green, custom_id="apply_riddler_button")
@@ -106,14 +110,7 @@ class ApplyHutRiddlerButton(Button):
         self.riddler_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            TicketModal(
-                bot=self.bot,
-                title_prefix="Apply for Hut Riddler",
-                image_url=self.riddler_image
-            )
-        )
-
+        await interaction.response.send_modal(TicketModal(bot=self.bot, title_prefix="Apply for Hut Riddler", image_url=self.riddler_image))
 
 class ApplyPepperPoliceButton(Button):
     def __init__(self, bot: commands.Bot, channel_id: int):
@@ -123,15 +120,18 @@ class ApplyPepperPoliceButton(Button):
         self.police_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1395870940054814831/police_join.gif"
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            TicketModal(
-                bot=self.bot,
-                title_prefix="Apply for Pepper Police",
-                image_url=self.police_image
+        member_roles = [role.id for role in interaction.user.roles]
+        if REQUIRED_ROLE_ID not in member_roles:
+            role = interaction.guild.get_role(REQUIRED_ROLE_ID)
+            role_name = role.name if role else "Required Role"
+            await interaction.response.send_message(
+                f"⚠️ You have to be at least Level 5 and inhabit the role **{role_name}** to do this.",
+                ephemeral=True
             )
-        )
+            return
+        await interaction.response.send_modal(TicketModal(bot=self.bot, title_prefix="Apply for Pepper Police", image_url=self.police_image))
 
-
+# ---------------- Ticket View ----------------
 class TicketView(View):
     def __init__(self, bot: commands.Bot, channel_id: int):
         super().__init__(timeout=None)
@@ -141,7 +141,7 @@ class TicketView(View):
         self.add_item(ApplyHutRiddlerButton(bot, channel_id))
         self.add_item(ApplyPepperPoliceButton(bot, channel_id))
 
-
+# ---------------- Cog ----------------
 class TicketCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -159,25 +159,22 @@ class TicketCog(commands.Cog):
             return
 
         data = load_buttons_data()
-
         message_id = data.get(str(BUTTON_CHANNEL_ID))
 
         if message_id is None:
-            print(f"[INFO] No saved message ID for channel {BUTTON_CHANNEL_ID}, sending new button...")
+            print(f"[INFO] No saved message ID, sending new button...")
             view = TicketView(self.bot, BUTTON_CHANNEL_ID)
             msg = await channel.send("... so...🫦 what do you want, darlin'?♥️", view=view)
-            # WICHTIG: ID als STRING speichern
             data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
             save_buttons_data(data)
             print(f"➕ New ticket button message posted: {msg.id}")
         else:
             try:
-                # INT konvertieren vor fetch_message
                 message = await channel.fetch_message(int(message_id))
                 await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))
                 print(f"♻️ Loaded button message and attached view: {message_id}")
             except discord.NotFound:
-                print(f"❌ Stored message {message_id} not found! Posting new button and updating JSON...")
+                print(f"❌ Stored message {message_id} not found! Posting new one...")
                 view = TicketView(self.bot, BUTTON_CHANNEL_ID)
                 msg = await channel.send("... so...🫦 what do you want, darlin'?♥️", view=view)
                 data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
@@ -199,8 +196,7 @@ class TicketCog(commands.Cog):
         if message_id:
             try:
                 message = await channel.fetch_message(int(message_id))
-                # Verwende .add_view korrekt
-                await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))  # View hinzufügen
+                await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))
                 print(f"🔄 View attached to message {message_id} on on_ready")
             except discord.NotFound:
                 print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
