@@ -19,7 +19,7 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
-ROLE_REQUIRED_ID = 1377051179615522926
+ROLE_REQUIRED_ID = 1377051179615522926  # Role für exklusive Modelle/Aspect Ratios
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
@@ -91,17 +91,25 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, user_has_role: bool):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
-        self.user_has_role = user_has_role
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
+
+        # Rollen-Check für Aspect Ratios
+        member = interaction.user
+        has_role = any(r.id == ROLE_REQUIRED_ID for r in member.roles)
+        if self.variant.get('aspect_ratio') in ["16:9", "9:16"] and not has_role:
+            await interaction.followup.send(
+                f"❌ You need the role to use {self.variant['aspect_ratio']} or this model.", ephemeral=True
+            )
+            return
 
         steps = self.variant["steps"]
         cfg = self.variant["cfg_scale"]
@@ -120,6 +128,8 @@ class AspectRatioView(discord.ui.View):
         img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height)
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
             self.stop()
             return
 
@@ -134,7 +144,6 @@ class AspectRatioView(discord.ui.View):
 
         embed = discord.Embed(color=discord.Color.blurple())
         embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
-
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
@@ -145,8 +154,8 @@ class AspectRatioView(discord.ui.View):
             f"Steps: {self.variant['steps']}"
         )
         embed.add_field(name="📊 Technical Info:", value=technical_info, inline=False)
-
         embed.set_author(name=str(self.author), icon_url=self.author.display_avatar.url)
+
         today = datetime.now().strftime("%Y-%m-%d")
         guild = interaction.guild
         embed.set_footer(
@@ -166,12 +175,16 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
-        # Post-generation buttons nur für Autor
-        await msg.edit(view=PostGenerationView(self.session, self.variant, self.prompt_text,
-                                               neg_prompt, self.hidden_suffix, self.author, self.user_has_role, msg))
+        # Post-Generation Buttons für den Ersteller
+        await msg.edit(view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg))
+
+        # Alte Modell-Buttons für alle wieder posten
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+
         self.stop()
 
-    # Aspect Ratio Buttons mit Rollencheck
+    # ---------------- Aspect Ratio Buttons ----------------
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.variant['aspect_ratio'] = "1:1"
@@ -179,111 +192,63 @@ class AspectRatioView(discord.ui.View):
 
     @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.user_has_role:
-            await interaction.response.send_message(
-                f"You have to be at least Level 4 and inhabit the role <@&{ROLE_REQUIRED_ID}> to do this.",
-                ephemeral=True
-            )
-            return
         self.variant['aspect_ratio'] = "16:9"
         await self.generate_image(interaction, 1024, 576)
 
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.user_has_role:
-            await interaction.response.send_message(
-                f"You have to be at least Level 4 and inhabit the role <@&{ROLE_REQUIRED_ID}> to do this.",
-                ephemeral=True
-            )
-            return
         self.variant['aspect_ratio'] = "9:16"
         await self.generate_image(interaction, 576, 1024)
 
 # ---------------- Post-Generation Buttons ----------------
 class PostGenerationView(discord.ui.View):
-    def __init__(self, session, variant, prompt, neg_prompt, hidden_suffix, author, user_has_role, message: discord.Message):
+    def __init__(self, session, variant, prompt, hidden_suffix, author, message):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt = prompt
-        self.neg_prompt = neg_prompt
         self.hidden_suffix = hidden_suffix
         self.author = author
-        self.user_has_role = user_has_role
         self.message = message
 
-        # ♻️ Re-use Prompt (grau)
-        self.add_item(discord.ui.Button(
-            label="Re-use Prompt",
-            style=discord.ButtonStyle.gray,
-            emoji="♻️",
-            custom_id="reuse"
-        ))
-
-        # 🗑️ Delete (rot)
-        self.add_item(discord.ui.Button(
-            label="Delete",
-            style=discord.ButtonStyle.red,
-            emoji="🗑️",
-            custom_id="delete"
-        ))
-
-        # 🧹 Delete & Re-use (rot)
-        self.add_item(discord.ui.Button(
-            label="Delete & Re-use",
-            style=discord.ButtonStyle.red,
-            emoji="🧹",
-            custom_id="delete_reuse"
-        ))
-
-
-    @discord.ui.button(label="dummy", style=discord.ButtonStyle.gray, disabled=True)
-    async def dummy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass  # placeholder, wird nicht verwendet
+        # Buttons nur für Ersteller
+        self.add_item(discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.gray, custom_id="reuse"))
+        self.add_item(discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red, custom_id="delete"))
+        self.add_item(discord.ui.Button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red, custom_id="delete_reuse"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
 
-    async def on_timeout(self):
-        self.clear_items()
+    @discord.ui.button(custom_id="reuse")
+    async def reuse(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = VeniceModal(self.session, self.variant, self.hidden_suffix, prefill_prompt=self.prompt, prefill_negative=self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT))
+        await interaction.response.send_modal(modal)
 
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
-        print(f"Error in PostGenerationView: {error}")
+    @discord.ui.button(custom_id="delete")
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.message.delete()
+        await interaction.response.send_message("✅ Message deleted.", ephemeral=True)
 
-    async def on_button_click(self, interaction: discord.Interaction):
-        pass  # placeholder
-
-    async def button_callback(self, interaction: discord.Interaction):
-        cid = interaction.data["custom_id"]
-        if cid == "delete":
-            await self.message.delete()
-            await interaction.response.send_message("Deleted.", ephemeral=True)
-        elif cid == "reuse":
-            # Modal wieder öffnen mit ausgefüllten Werten
-            modal = VeniceModal(self.session, self.variant, self.hidden_suffix, self.prompt, self.neg_prompt, self.user_has_role)
-            await interaction.response.send_modal(modal)
-        elif cid == "delete_reuse":
-            await self.message.delete()
-            modal = VeniceModal(self.session, self.variant, self.hidden_suffix, self.prompt, self.neg_prompt, self.user_has_role)
-            await interaction.response.send_modal(modal)
+    @discord.ui.button(custom_id="delete_reuse")
+    async def delete_reuse(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.message.delete()
+        modal = VeniceModal(self.session, self.variant, self.hidden_suffix, prefill_prompt=self.prompt, prefill_negative=self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT))
+        await interaction.response.send_modal(modal)
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict, hidden_suffix: str, prompt_prefill="", neg_prefill="", user_has_role=True):
+    def __init__(self, session: aiohttp.ClientSession, variant: dict, hidden_suffix: str, prefill_prompt="", prefill_negative=""):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
         self.hidden_suffix = hidden_suffix
-        self.user_has_role = user_has_role
-
-        normal_cfg = CFG_REFERENCE[variant['model']]['cfg_scale']
 
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=1000,
-            default=prompt_prefill
+            default=prefill_prompt or "",
         )
 
         self.negative_prompt = discord.ui.TextInput(
@@ -291,13 +256,13 @@ class VeniceModal(discord.ui.Modal):
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=300,
-            default=neg_prefill
+            default=prefill_negative or DEFAULT_NEGATIVE_PROMPT,
         )
 
         self.cfg_value = discord.ui.TextInput(
             label="CFG (Higher=stricter AI adherence)",
             style=discord.TextStyle.short,
-            placeholder=f"{variant['cfg_scale']} (Normal: {normal_cfg})",
+            placeholder=str(variant['cfg_scale']),
             required=False,
             max_length=5
         )
@@ -312,12 +277,21 @@ class VeniceModal(discord.ui.Modal):
         except:
             cfg_value = self.variant['cfg_scale']
 
-        variant = {**self.variant, "cfg_scale": cfg_value, "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT}
-        user_has_role = any(r.id == ROLE_REQUIRED_ID for r in interaction.user.roles)
+        variant = {
+            **self.variant,
+            "cfg_scale": cfg_value,
+            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
+        }
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, {**variant, "aspect_ratio":"N/A"}, self.prompt.value, self.hidden_suffix, interaction.user, user_has_role),
+            view=AspectRatioView(
+                self.session,
+                {**variant, "aspect_ratio": "N/A"},
+                self.prompt.value,
+                self.hidden_suffix,
+                interaction.user
+            ),
             ephemeral=True
         )
 
@@ -336,11 +310,15 @@ class VeniceView(discord.ui.View):
 
     def make_callback(self, variant):
         async def callback(interaction: discord.Interaction):
-            category_id = interaction.channel.category.id if interaction.channel.category else None
-            hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
-            user_has_role = any(r.id == ROLE_REQUIRED_ID for r in interaction.user.roles)
-
-            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, user_has_role=user_has_role))
+            member = interaction.user
+            has_role = any(r.id == ROLE_REQUIRED_ID for r in member.roles)
+            if variant['label'] not in ["Lustify", "SD3.5"] and not has_role:
+                await interaction.response.send_message(
+                    f"❌ You need the role to use this model.", ephemeral=True
+                )
+                return
+            hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix))
         return callback
 
 # ---------------- Cog ----------------
@@ -360,6 +338,17 @@ class VeniceCog(commands.Cog):
                 except:
                     pass
         view = VeniceView(self.session, channel)
+        await channel.send("💡 Click a button to start generating images!", view=view)
+
+    @staticmethod
+    async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                try:
+                    await msg.delete()
+                except:
+                    pass
+        view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating images!", view=view)
 
     @commands.Cog.listener()
