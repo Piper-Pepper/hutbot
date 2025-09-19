@@ -19,7 +19,7 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
-VIP_ROLE_ID = 1377051179615522926  # wieder die echte VIP-Rolle
+VIP_ROLE_ID = 1377051179615522926  
 
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
@@ -198,7 +198,7 @@ class AspectRatioView(discord.ui.View):
 
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
         for i in range(1, 11):
-            await asyncio.sleep(0.5 + steps * 0.02 + cfg * 0.04)
+            await asyncio.sleep(0.7 + steps * 0.02 + cfg * 0.04)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -348,7 +348,7 @@ class PostGenerationView(discord.ui.View):
                 return callback
 
         await interaction.response.send_message(
-            f"{interaction.user.mention}, which model do you want to use this time?",
+            f"{interaction.user.mention}, which model do you want to use with your re-used prompt?",
             view=ReuseModelView(self.session, interaction.user, self.prompt_text, self.hidden_suffix, self.variant),
             ephemeral=True
         )
