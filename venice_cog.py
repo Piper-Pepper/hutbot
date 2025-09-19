@@ -107,34 +107,24 @@ class VeniceModal(discord.ui.Modal):
             required=True,
             max_length=1000,
             default=prompt_value,
-            placeholder="Describe your image" if not prompt_value else None
+            placeholder="Describe your image. Be creative for best results!" if not prompt_value else None
         )
 
-        # Negative Prompt
-        prev_neg = previous_inputs.get("negative_prompt", None)
-        if prev_neg is None:
-            # Erstmaliger Aufruf
-            self.negative_prompt = discord.ui.TextInput(
-                label="Negative Prompt (optional)",
-                style=discord.TextStyle.paragraph,
-                required=False,
-                max_length=300,
-                default="",
-                placeholder=DEFAULT_NEGATIVE_PROMPT
-            )
-        else:
-            # Re-Use
-            combined_neg = DEFAULT_NEGATIVE_PROMPT
-            if prev_neg.strip() and prev_neg.strip() != DEFAULT_NEGATIVE_PROMPT:
-                combined_neg += ", " + prev_neg.strip()
-            self.negative_prompt = discord.ui.TextInput(
-                label="Negative Prompt (optional)",
-                style=discord.TextStyle.paragraph,
-                required=False,
-                max_length=300,
-                default=combined_neg,
-                placeholder=None
-            )
+        # Negative Prompt Handling
+        neg_value = previous_inputs.get("negative_prompt", "")
+        if neg_value:
+            # Verhindere Dopplung von DEFAULT_NEGATIVE_PROMPT
+            if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
+                neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
+        # Erstes Öffnen: Placeholder mit DEFAULT_NEGATIVE_PROMPT, Wert leer
+        self.negative_prompt = discord.ui.TextInput(
+            label="Negative Prompt (optional)",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=300,
+            default=neg_value if neg_value else "",
+            placeholder=None if neg_value else DEFAULT_NEGATIVE_PROMPT
+        )
 
         # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
@@ -155,10 +145,18 @@ class VeniceModal(discord.ui.Modal):
         except:
             cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
+        negative_prompt = self.negative_prompt.value.strip()
+        if negative_prompt:
+            # Sicherstellen, dass DEFAULT_NEGATIVE_PROMPT vorne steht, aber nicht doppelt
+            if not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
+                negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
+        else:
+            negative_prompt = DEFAULT_NEGATIVE_PROMPT
+
         variant = {
             **self.variant,
             "cfg_scale": cfg_val,
-            "negative_prompt": self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
+            "negative_prompt": negative_prompt
         }
 
         await interaction.response.send_message(
