@@ -275,18 +275,11 @@ class PostGenerationView(discord.ui.View):
         self.message = message
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Nur der Author darf klicken
-        return interaction.user.id == self.author.id
+        return interaction.user.id == self.author.id  # nur Author darf klicken
 
     @discord.ui.button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.gray)
     async def reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VeniceModal(
-            self.session, 
-            self.variant, 
-            self.hidden_suffix, 
-            is_vip=True, 
-            previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
-        ))
+        await self.show_reuse_models(interaction)
 
     @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
     async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -302,14 +295,59 @@ class PostGenerationView(discord.ui.View):
             await self.message.delete()
         except:
             pass
-        await interaction.response.send_modal(VeniceModal(
-            self.session, 
-            self.variant, 
-            self.hidden_suffix, 
-            is_vip=True, 
-            previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
-        ))
+        await self.show_reuse_models(interaction)
 
+    async def show_reuse_models(self, interaction: discord.Interaction):
+        """
+        Zeigt nur für den Nutzer ephemeral Modell-Buttons für Reuse an.
+        Optisch unterscheidbar von den Hauptbuttons (z.B. grün).
+        """
+        # Userrollencheck
+        member = interaction.user
+        is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
+
+        # Mini ephemeral View für Reuse
+        class ReuseModelView(discord.ui.View):
+            def __init__(self, session, author):
+                super().__init__(timeout=None)
+                self.session = session
+                self.author = author
+
+                category_id = interaction.channel.category.id if interaction.channel.category else None
+                variants = VARIANT_MAP.get(category_id, [])
+
+                for v in variants:
+                    # Farbe unterscheidbar (grün) und ephemeral
+                    btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.success)
+                    btn.callback = self.make_model_callback(v)
+                    self.add_item(btn)
+
+            def make_model_callback(self, variant):
+                async def callback(inner_interaction: discord.Interaction):
+                    # Rollencheck
+                    if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
+                        await inner_interaction.response.send_message(
+                            f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True
+                        )
+                        return
+                    # Modal mit vorherigen Eingaben öffnen
+                    await inner_interaction.response.send_modal(VeniceModal(
+                        self.session,
+                        variant,
+                        hidden_suffix=self.variant_hidden_suffix(),
+                        is_vip=is_vip,
+                        previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
+                    ))
+                return callback
+
+            def variant_hidden_suffix(self):
+                return NSFW_PROMPT_SUFFIX if interaction.channel.category.id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+
+        await interaction.response.send_message(
+            f"{interaction.user.mention}, which model do you want to use this time?",
+            view=ReuseModelView(self.session, interaction.user),
+            ephemeral=True
+        )
 
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
