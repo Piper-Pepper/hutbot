@@ -19,7 +19,7 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
-VIP_ROLE_ID = 1377051179615522926
+VIP_ROLE_ID = 1377051179615526
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
@@ -98,6 +98,7 @@ class VeniceModal(discord.ui.Modal):
         self.is_vip = is_vip
         previous_inputs = previous_inputs or {}
 
+        # Prompt
         prompt_value = previous_inputs.get("prompt", "")
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
@@ -105,20 +106,36 @@ class VeniceModal(discord.ui.Modal):
             required=True,
             max_length=1000,
             default=prompt_value,
-            placeholder="Describe your image creatively for best results" if not prompt_value else None
+            placeholder="Describe your image" if not prompt_value else None
         )
 
-        neg_value = previous_inputs.get("negative_prompt", "")
-        combined_neg = DEFAULT_NEGATIVE_PROMPT + (", " + neg_value if neg_value else "")
-        self.negative_prompt = discord.ui.TextInput(
-            label="Negative Prompt (optional)",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=300,
-            default=combined_neg,
-            placeholder=combined_neg if not neg_value else None
-        )
+        # Negative Prompt
+        prev_neg = previous_inputs.get("negative_prompt", None)
+        if prev_neg is None:
+            # Erstmaliger Aufruf
+            self.negative_prompt = discord.ui.TextInput(
+                label="Negative Prompt (optional)",
+                style=discord.TextStyle.paragraph,
+                required=False,
+                max_length=300,
+                default="",
+                placeholder=DEFAULT_NEGATIVE_PROMPT
+            )
+        else:
+            # Re-Use
+            combined_neg = DEFAULT_NEGATIVE_PROMPT
+            if prev_neg.strip() and prev_neg.strip() != DEFAULT_NEGATIVE_PROMPT:
+                combined_neg += ", " + prev_neg.strip()
+            self.negative_prompt = discord.ui.TextInput(
+                label="Negative Prompt (optional)",
+                style=discord.TextStyle.paragraph,
+                required=False,
+                max_length=300,
+                default=combined_neg,
+                placeholder=None
+            )
 
+        # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG (Higher=stricter AI adherence)",
@@ -177,8 +194,8 @@ class AspectRatioView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
+        steps = self.variant["cfg_scale"] if "steps" not in self.variant else self.variant["steps"]
         cfg = self.variant["cfg_scale"]
-        steps = self.variant.get("steps", 30)
 
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
         for i in range(1, 11):
@@ -189,17 +206,12 @@ class AspectRatioView(discord.ui.View):
                 pass
 
         full_prompt = self.prompt_text + self.hidden_suffix
-        img_bytes = await venice_generate(
-            self.session,
-            full_prompt,
-            self.variant,
-            width,
-            height,
-            steps=steps,
-            cfg_scale=cfg,
-            negative_prompt=self.variant.get("negative_prompt")
-        )
+        if full_prompt and not full_prompt[0].isalnum():
+            full_prompt = " " + full_prompt
 
+        img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height,
+                                          steps=self.variant.get("steps"), cfg_scale=cfg,
+                                          negative_prompt=self.variant.get("negative_prompt"))
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             if isinstance(interaction.channel, discord.TextChannel):
@@ -224,7 +236,7 @@ class AspectRatioView(discord.ui.View):
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
         embed.add_field(name="📊 Technical Info:",
-                        value=f"{self.variant['model']} | CFG: {cfg} | Steps: {steps}",
+                        value=f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}",
                         inline=False)
         embed.set_author(name=str(self.author), icon_url=self.author.display_avatar.url)
         today = datetime.now().strftime("%Y-%m-%d")
@@ -246,6 +258,7 @@ class AspectRatioView(discord.ui.View):
 
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+
         self.stop()
 
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
@@ -330,10 +343,7 @@ class PostGenerationView(discord.ui.View):
                         variant,
                         self.hidden_suffix,
                         is_vip=is_vip,
-                        previous_inputs={
-                            "prompt": self.prompt_text,
-                            "negative_prompt": self.variant.get("negative_prompt", "")
-                        }
+                        previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
                     ))
 
                 return callback
