@@ -263,18 +263,15 @@ class AspectRatioView(discord.ui.View):
     # --- Buttons als richtige Member ---
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Max 1024x1024 für 1:1
         await self.generate_image(interaction, 1024, 1024, "1:1")
 
     @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Maximal 1280 Breite -> Höhe = 1280 * 9 / 16
-        await self.generate_image(interaction, 1280, 720, "16:9")
+        await self.generate_image(interaction, 1280, 816, "16:9")
 
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Maximal 1280 Höhe -> Breite = 1280 * 9 / 16
-        await self.generate_image(interaction, 720, 1280, "9:16")
+        await self.generate_image(interaction, 816, 1280, "9:16")
 
 
 # ---------------- Post Generation View ----------------
