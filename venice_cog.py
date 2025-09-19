@@ -105,7 +105,7 @@ class AspectRatioView(discord.ui.View):
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
         if not self.is_vip and ratio_name in ["16:9", "9:16"]:
             await interaction.response.send_message(
-                f"❌ You have to be at least Level 4 and inhabit the role <@&{VIP_ROLE_ID}> to use this aspect ratio!",
+                f"❌ You have to be at least Level 4 and inhabit the role <@&{VIP_ROLE_ID}> to use this aspect ratio! (1:1 is for all)",
                 ephemeral=True
             )
             return
@@ -264,7 +264,7 @@ class VeniceView(discord.ui.View):
 
             if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
                 await interaction.response.send_message(
-                    f"❌ You have to be at least Level 4 and inhabit the role <@&{VIP_ROLE_ID}> to use this model!",
+                    f"❌ You have to be at least Level 4 and inhabit the role <@&{VIP_ROLE_ID}> to use this model! (No 1 is for all)",
                     ephemeral=True
                 )
                 return
