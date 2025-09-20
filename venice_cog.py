@@ -337,6 +337,42 @@ class PostGenerationView(discord.ui.View):
             pass
         await self.show_reuse_models(interaction)
 
+    @discord.ui.button(label="🖼️ Post in Gallery", style=discord.ButtonStyle.primary)
+    async def post_gallery_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Löscht NUR die Button-Nachricht selbst
+            await interaction.message.delete()
+        except:
+            pass
+
+        # Channel + Role IDs
+        gallery_channel_id = 1419023980383436830
+        mention_role_id = 1419024270201454684
+
+        gallery_channel = interaction.client.get_channel(gallery_channel_id)
+        if gallery_channel is None:
+            await interaction.response.send_message("❌ Gallery channel not found.", ephemeral=True)
+            return
+
+        # Mention-Text bauen
+        mention_text = f"<@&{mention_role_id}> {self.author.display_name} has created a new masterpiece"
+
+        # Originalinhalt + Attachments replizieren
+        content = self.message.content or ""
+        files = []
+        for a in self.message.attachments:
+            fp = await a.to_file()
+            files.append(fp)
+
+        try:
+            await gallery_channel.send(content=mention_text)
+            await gallery_channel.send(content=content, files=files)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to post in gallery: {e}", ephemeral=True)
+            return
+
+        await interaction.response.send_message("✅ Posted in gallery.", ephemeral=True)
+
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
         is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
