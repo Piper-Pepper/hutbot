@@ -298,18 +298,17 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
-    # --- Buttons als richtige Member ---
-    @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
-    async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 1024, 1024, "1:1")
+        @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.success)
+        async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_image(interaction, 1024, 1024, "1:1")
 
-    @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
-    async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 1280, 816, "16:9")
+        @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.success)
+        async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_image(interaction, 1280, 816, "16:9")
 
-    @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
-    async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 816, 1280, "9:16")
+        @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.success)
+        async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_image(interaction, 816, 1280, "9:16")
 
 
 # ---------------- Post Generation View ----------------
@@ -326,7 +325,7 @@ class PostGenerationView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
 
-    @discord.ui.button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.blurple)
     async def reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.show_reuse_models(interaction)
 
