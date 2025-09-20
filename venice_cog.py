@@ -172,9 +172,9 @@ class AspectRatioView(discord.ui.View):
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
         embed.add_field(name="📊 Technical Info:", value=f"{self.variant['model']} | CFG: {cfg} | Steps: {steps}", inline=False)
-        embed.add_field(name="📄 Full Info", value=f"[Click here](attachment://{txt_filename})", inline=False)
+        embed.add_field(name="📄 Full Info", value=f"Attached TXT file below ⬇️", inline=False)  # Kein expandierender Textblock
 
-        # Nachricht senden: Embed über Bild, alles in einem Post
+        # Nachricht senden: Embed über Bild + TXT-Datei als Download
         msg = await interaction.channel.send(
             content=f"{self.author.mention}\n",
             embed=embed,
@@ -211,6 +211,10 @@ class AspectRatioView(discord.ui.View):
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 816, 1280, "9:16")
+
+# ---------------- Modal ----------------
+# ... (VeniceModal, PostGenerationView, VeniceView, VeniceCog bleiben unverändert)
+# Der einzige Unterschied im Code liegt bei generate_image -> Embed-Feld "Full Info"
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
