@@ -346,11 +346,6 @@ class PostGenerationView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await interaction.message.delete()
 
-    @discord.ui.button(label="❤️ OK", style=discord.ButtonStyle.secondary, row=1)
-    async def ok_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await interaction.message.delete()
-
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
         is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
