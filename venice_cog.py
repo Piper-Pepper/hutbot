@@ -227,22 +227,28 @@ class AspectRatioView(discord.ui.View):
 
         truncated_prompt = self.prompt_text.replace("\n\n", "\n")
         if len(truncated_prompt) > 500:
-            truncated_prompt = truncated_prompt[:500] + "..."
+            truncated_prompt = truncated_prompt[:500] + " [...]"
 
+        today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
+
+        embed.set_author(
+            name=f"© {today} by {self.author}", 
+            icon_url=self.author.display_avatar.url
+        )
+
         embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
 
-        embed.add_field(name="📊 Technical Info:",
-                        value=f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}",
-                        inline=False)
-        embed.set_author(name=str(self.author), icon_url=self.author.display_avatar.url)
-        today = datetime.now().strftime("%Y-%m-%d")
-        guild = interaction.guild
-        embed.set_footer(text=f"© {today} by {self.author}", icon_url=guild.icon.url if guild and guild.icon else None)
+        embed.add_field(
+            name="📊 Technical Info:",
+            value=f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}",
+            inline=False
+        )
+
 
         msg = await interaction.channel.send(content=f"{self.author.mention}\n", embed=embed, files=[discord_file])
         for emoji in CUSTOM_REACTIONS:
