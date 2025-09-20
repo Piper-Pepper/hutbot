@@ -309,7 +309,7 @@ class PostGenerationView(discord.ui.View):
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
-        self.message = message
+        self.message = message  # das ist der Bildpost
 
         # "Re-use Prompt" Button grün
         reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
@@ -325,14 +325,16 @@ class PostGenerationView(discord.ui.View):
     @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
     async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # löscht den Bildpost
             await self.message.delete()
         except:
             pass
-        await interaction.response.send_message("Deleted.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
 
     @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
     async def delete_reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # löscht den Bildpost
             await self.message.delete()
         except:
             pass
@@ -341,6 +343,7 @@ class PostGenerationView(discord.ui.View):
     @discord.ui.button(label="🖼️ Post in Gallery", style=discord.ButtonStyle.secondary, row=1)
     async def post_gallery_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # löscht NUR die Button-Nachricht
             await interaction.message.delete()
         except:
             pass
@@ -370,10 +373,10 @@ class PostGenerationView(discord.ui.View):
     @discord.ui.button(label="❤️ OK", style=discord.ButtonStyle.secondary, row=1)
     async def ok_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # löscht NUR die Button-Nachricht
             await interaction.message.delete()
         except:
             pass
-        # unsichtbares Ack, damit kein "interaction failed" kommt
         try:
             await interaction.response.defer()
         except:
