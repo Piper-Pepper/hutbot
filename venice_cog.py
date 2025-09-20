@@ -300,7 +300,6 @@ class AspectRatioView(discord.ui.View):
         self.stop()
 
 # ---------------- Post Generation View ----------------
-# ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, message):
         super().__init__(timeout=None)
@@ -343,7 +342,9 @@ class PostGenerationView(discord.ui.View):
     @discord.ui.button(label="🖼️ Post in Gallery", style=discord.ButtonStyle.secondary, row=1)
     async def post_gallery_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # löscht NUR die Button-Nachricht
+            # löscht den Bildpost
+            await self.message.delete()
+            # löscht die Button-Nachricht selbst
             await interaction.message.delete()
         except:
             pass
@@ -373,10 +374,13 @@ class PostGenerationView(discord.ui.View):
     @discord.ui.button(label="❤️ OK", style=discord.ButtonStyle.secondary, row=1)
     async def ok_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # löscht NUR die Button-Nachricht
+            # löscht den Bildpost
+            await self.message.delete()
+            # löscht die Button-Nachricht selbst
             await interaction.message.delete()
         except:
             pass
+
         try:
             await interaction.response.defer()
         except:
