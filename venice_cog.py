@@ -57,6 +57,13 @@ CUSTOM_REACTIONS = [
     "<:011:1346549711817146400>"
 ]
 
+# Channels mit speziellen Reactions
+CHANNEL_REACTIONS = {
+    1418956422086922320: ["1️⃣", "2️⃣", "3️⃣"],
+    1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]  # Beispiel für zweiten Channel
+}
+
+
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
@@ -270,13 +277,16 @@ class AspectRatioView(discord.ui.View):
             file=discord_file
         )
 
-        # Reactions
-        for emoji in CUSTOM_REACTIONS:
+        # Reactions: abhängig vom Channel
+        reactions = CHANNEL_REACTIONS.get(interaction.channel.id, CUSTOM_REACTIONS)
+
+        for emoji in reactions:
             try:
                 await msg.add_reaction(emoji)
             except:
-                pass
+                pass  # Fehler ignorieren
 
+        # Followup
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
