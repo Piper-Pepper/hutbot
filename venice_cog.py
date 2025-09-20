@@ -234,10 +234,14 @@ class AspectRatioView(discord.ui.View):
 
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # Embed Aufbau nach deiner Vorgabe
+        # Embed nach Vorgabe
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.title = f"{self.author.display_name} ({today})"
-        embed.set_author(name="", icon_url=self.author.display_avatar.url)
+
+        # Author-Feld: Server-Nickname + Datum, mit User-Avatar als Icon
+        embed.set_author(
+            name=f"{self.author.display_name} ({today})",
+            icon_url=self.author.display_avatar.url
+        )
 
         # Prompt
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
