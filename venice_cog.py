@@ -21,6 +21,7 @@ NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926  
 
+
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
@@ -56,31 +57,12 @@ CUSTOM_REACTIONS = [
     "<:011:1346549711817146400>"
 ]
 
+# Channels mit speziellen Reactions
 CHANNEL_REACTIONS = {
     1418956422086922320: ["1️⃣", "2️⃣", "3️⃣"],
-    1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]
+    1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]  # Beispiel für zweiten Channel
 }
 
-# ---------------- Ephemeral Registry (nur für Re-use) ----------------
-user_ephemeral_registry: dict[int, list[discord.Message]] = {}
-
-async def send_ephemeral(interaction: discord.Interaction, content: str, view=None):
-    """Sendet eine ephemeral Nachricht und löscht vorherige für denselben Nutzer+Channel."""
-    user_id = interaction.user.id
-    # nur löschen, wenn es Re-use ist (diese Funktion wird nur dafür aufgerufen)
-    if user_id in user_ephemeral_registry:
-        for msg in user_ephemeral_registry[user_id]:
-            try:
-                await msg.delete()
-            except:
-                pass
-        user_ephemeral_registry[user_id].clear()
-    # neue senden
-    await interaction.response.send_message(content=content, view=view, ephemeral=True)
-    # speichern
-    msg = await interaction.original_response()
-    user_ephemeral_registry.setdefault(user_id, []).append(msg)
-    return msg
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
@@ -135,14 +117,17 @@ class VeniceModal(discord.ui.Modal):
             placeholder="Describe your image. Be creative for best results!" if not prompt_value else None
         )
 
-        # Negative Prompt
+        # Negative Prompt Handling
         neg_value = previous_inputs.get("negative_prompt", "")
         if neg_value:
+            # Verhindere Dopplung von DEFAULT_NEGATIVE_PROMPT
             if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
                 neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
         else:
+            # Kein vorheriger Wert -> Feld direkt mit DEFAULT_NEGATIVE_PROMPT vorbefüllen
             neg_value = DEFAULT_NEGATIVE_PROMPT
 
+        # Modal-Feld: Default ist jetzt der DEFAULT_NEGATIVE_PROMPT (sichtbar), kein Placeholder nötig
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -152,6 +137,7 @@ class VeniceModal(discord.ui.Modal):
             placeholder=None
         )
 
+        # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG (> stricter AI adherence)",
@@ -172,6 +158,7 @@ class VeniceModal(discord.ui.Modal):
 
         negative_prompt = self.negative_prompt.value.strip()
         if negative_prompt:
+            # Sicherstellen, dass DEFAULT_NEGATIVE_PROMPT vorne steht, aber nicht doppelt
             if not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
                 negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
         else:
@@ -183,8 +170,7 @@ class VeniceModal(discord.ui.Modal):
             "negative_prompt": negative_prompt
         }
 
-        await send_ephemeral(
-            interaction,
+        await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
             view=AspectRatioView(
                 self.session,
@@ -193,7 +179,8 @@ class VeniceModal(discord.ui.Modal):
                 self.hidden_suffix,
                 interaction.user,
                 self.is_vip
-            )
+            ),
+            ephemeral=True
         )
 
 # ---------------- Aspect Ratio View ----------------
@@ -209,9 +196,9 @@ class AspectRatioView(discord.ui.View):
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
         if not self.is_vip and ratio_name in ["16:9", "9:16"]:
-            await send_ephemeral(
-                interaction,
-                f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all."
+            await interaction.response.send_message(
+                f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
+                ephemeral=True
             )
             return
 
@@ -220,14 +207,11 @@ class AspectRatioView(discord.ui.View):
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", int(cfg))
 
-        # --- Generating progress ephemeral, aber NICHT über Registry ---
-        progress_msg = await interaction.followup.send(
-            f"⏳ Generating image... 0%", ephemeral=True
-        )
+        progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.22 + prompt_factor * 0.6)
+            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.22 + prompt_factor * 0.7)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -261,32 +245,52 @@ class AspectRatioView(discord.ui.View):
 
         today = datetime.now().strftime("%Y-%m-%d")
 
+        # Embed nach Vorgabe
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
+
+        # Author-Feld: Server-Nickname + Datum, mit User-Avatar als Icon
+        embed.set_author(
+            name=f"{self.author.display_name} ({today})",
+            icon_url=self.author.display_avatar.url
+        )
+
+        # Prompt
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
+        # Optional: Negative Prompt
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
+        # Bild
         embed.set_image(url=f"attachment://{filename}")
+
+        # Footer: Guild Icon + Technical Info
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
         tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
-        msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
+        # Nachricht: Mention + Embed
+        msg = await interaction.channel.send(
+            content=f"{self.author.mention}",
+            embed=embed,
+            file=discord_file
+        )
+
+        # Reactions: abhängig vom Channel
         reactions = CHANNEL_REACTIONS.get(interaction.channel.id, CUSTOM_REACTIONS)
+
         for emoji in reactions:
             try:
                 await msg.add_reaction(emoji)
             except:
-                pass
+                pass  # Fehler ignorieren
 
-        # --- Re-use Buttons ephemeral, über Registry ---
-        await send_ephemeral(
-            interaction,
-            f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
-            view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg)
+        # Followup
+        await interaction.followup.send(
+            content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
+            view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
+            ephemeral=True
         )
 
         if isinstance(interaction.channel, discord.TextChannel):
@@ -294,17 +298,19 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
+    # --- Buttons als richtige Member ---
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024, "1:1")
 
-    @discord.ui.button(label="🖥️16:9⭐", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1280, 816, "16:9")
 
-    @discord.ui.button(label="📱9:16⭐", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 816, 1280, "9:16")
+
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
@@ -330,7 +336,7 @@ class PostGenerationView(discord.ui.View):
             await self.message.delete()
         except:
             pass
-        await send_ephemeral(interaction, "Deleted.")
+        await interaction.response.send_message("Deleted.", ephemeral=True)
 
     @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
     async def delete_reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -366,9 +372,8 @@ class PostGenerationView(discord.ui.View):
                     member = inner_interaction.user
                     is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
                     if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
-                        await send_ephemeral(
-                            inner_interaction,
-                            f"❌ You need <@&{VIP_ROLE_ID}> to use this model!"
+                        await inner_interaction.response.send_message(
+                            f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True
                         )
                         return
 
@@ -382,10 +387,10 @@ class PostGenerationView(discord.ui.View):
 
                 return callback
 
-        await send_ephemeral(
-            interaction,
+        await interaction.response.send_message(
             f"{interaction.user.mention}, which model do you want to use with your re-used prompt?",
-            view=ReuseModelView(self.session, interaction.user, self.prompt_text, self.hidden_suffix, self.variant)
+            view=ReuseModelView(self.session, interaction.user, self.prompt_text, self.hidden_suffix, self.variant),
+            ephemeral=True
         )
 
 # ---------------- Buttons View ----------------
@@ -409,9 +414,9 @@ class VeniceView(discord.ui.View):
             hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
 
             if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
-                await send_ephemeral(
-                    interaction,
-                    f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic models are for all)"
+                await interaction.response.send_message(
+                    f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic models are for all)",
+                    ephemeral=True
                 )
                 return
 
