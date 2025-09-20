@@ -21,7 +21,6 @@ NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926  
 
-
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
@@ -60,9 +59,8 @@ CUSTOM_REACTIONS = [
 # Channels mit speziellen Reactions
 CHANNEL_REACTIONS = {
     1418956422086922320: ["1️⃣", "2️⃣", "3️⃣"],
-    1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]  # Beispiel für zweiten Channel
+    1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]
 }
-
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
@@ -117,17 +115,14 @@ class VeniceModal(discord.ui.Modal):
             placeholder="Describe your image. Be creative for best results!" if not prompt_value else None
         )
 
-        # Negative Prompt Handling
+        # Negative Prompt
         neg_value = previous_inputs.get("negative_prompt", "")
         if neg_value:
-            # Verhindere Dopplung von DEFAULT_NEGATIVE_PROMPT
             if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
                 neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
         else:
-            # Kein vorheriger Wert -> Feld direkt mit DEFAULT_NEGATIVE_PROMPT vorbefüllen
             neg_value = DEFAULT_NEGATIVE_PROMPT
 
-        # Modal-Feld: Default ist jetzt der DEFAULT_NEGATIVE_PROMPT (sichtbar), kein Placeholder nötig
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -158,7 +153,6 @@ class VeniceModal(discord.ui.Modal):
 
         negative_prompt = self.negative_prompt.value.strip()
         if negative_prompt:
-            # Sicherstellen, dass DEFAULT_NEGATIVE_PROMPT vorne steht, aber nicht doppelt
             if not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
                 negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
         else:
@@ -194,6 +188,24 @@ class AspectRatioView(discord.ui.View):
         self.author = author
         self.is_vip = is_vip
 
+        # Buttons manuell hinzufügen (grün)
+        btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
+        btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
+        btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
+
+        btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
+        btn_16_9.callback = self.make_callback(1280, 816, "16:9")
+        btn_9_16.callback = self.make_callback(816, 1280, "9:16")
+
+        self.add_item(btn_1_1)
+        self.add_item(btn_16_9)
+        self.add_item(btn_9_16)
+
+    def make_callback(self, width, height, ratio_name):
+        async def callback(interaction: discord.Interaction):
+            await self.generate_image(interaction, width, height, ratio_name)
+        return callback
+
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
         if not self.is_vip and ratio_name in ["16:9", "9:16"]:
             await interaction.response.send_message(
@@ -211,7 +223,7 @@ class AspectRatioView(discord.ui.View):
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.25 + prompt_factor * 0.9)
+            await asyncio.sleep(0.9 + steps * 0.03 + cfg * 0.25 + prompt_factor * 0.9)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -245,48 +257,37 @@ class AspectRatioView(discord.ui.View):
 
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # Embed nach Vorgabe
         embed = discord.Embed(color=discord.Color.blurple())
-
-        # Author-Feld: Server-Nickname + Datum, mit User-Avatar als Icon
         embed.set_author(
             name=f"{self.author.display_name} ({today})",
             icon_url=self.author.display_avatar.url
         )
-
-        # Prompt
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
-        # Optional: Negative Prompt
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        # Bild
         embed.set_image(url=f"attachment://{filename}")
 
-        # Footer: Guild Icon + Technical Info
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
         tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
-        # Nachricht: Mention + Embed
         msg = await interaction.channel.send(
             content=f"{self.author.mention}",
             embed=embed,
             file=discord_file
         )
 
-        # Reactions: abhängig vom Channel
         reactions = CHANNEL_REACTIONS.get(interaction.channel.id, CUSTOM_REACTIONS)
-
         for emoji in reactions:
             try:
                 await msg.add_reaction(emoji)
             except:
-                pass  # Fehler ignorieren
+                pass
 
-        # Followup
+        # Post-generation view, "Re-use Prompt" grün
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
@@ -297,19 +298,6 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
-
-        @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.success)
-        async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.generate_image(interaction, 1024, 1024, "1:1")
-
-        @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.success)
-        async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.generate_image(interaction, 1280, 816, "16:9")
-
-        @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.success)
-        async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await self.generate_image(interaction, 816, 1280, "9:16")
-
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
@@ -322,11 +310,15 @@ class PostGenerationView(discord.ui.View):
         self.author = author
         self.message = message
 
+        # "Re-use Prompt" Button grün
+        reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
+        reuse_btn.callback = self.reuse_callback
+        self.add_item(reuse_btn)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
 
-    @discord.ui.button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.blurple)
-    async def reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def reuse_callback(self, interaction: discord.Interaction):
         await self.show_reuse_models(interaction)
 
     @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
@@ -383,7 +375,6 @@ class PostGenerationView(discord.ui.View):
                         is_vip=is_vip,
                         previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
                     ))
-
                 return callback
 
         await interaction.response.send_message(
