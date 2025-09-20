@@ -21,7 +21,6 @@ NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926  
 
-
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
@@ -110,13 +109,10 @@ class VeniceModal(discord.ui.Modal):
             placeholder="Describe your image. Be creative for best results!" if not prompt_value else None
         )
 
-        # Negative Prompt Handling
+        # Negative Prompt
         neg_value = previous_inputs.get("negative_prompt", "")
-        if neg_value:
-            # Verhindere Dopplung von DEFAULT_NEGATIVE_PROMPT
-            if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
-                neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
-        # Erstes Öffnen: Placeholder mit DEFAULT_NEGATIVE_PROMPT, Wert leer
+        if neg_value and not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
+            neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -146,11 +142,9 @@ class VeniceModal(discord.ui.Modal):
             cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
         negative_prompt = self.negative_prompt.value.strip()
-        if negative_prompt:
-            # Sicherstellen, dass DEFAULT_NEGATIVE_PROMPT vorne steht, aber nicht doppelt
-            if not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
-                negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
-        else:
+        if negative_prompt and not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
+            negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
+        elif not negative_prompt:
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
         variant = {
@@ -194,11 +188,11 @@ class AspectRatioView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         cfg = self.variant["cfg_scale"]
-        steps = self.variant.get("steps", int(cfg))  # Sicherstellen, dass steps immer int ist
+        steps = self.variant.get("steps", int(cfg))
 
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
 
-        prompt_factor = len(self.prompt_text) / 1000  # 10 Zeichen ~0.01, 1000 Zeichen ~1
+        prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
             await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.12 + prompt_factor * 0.5)
             try:
@@ -225,32 +219,21 @@ class AspectRatioView(discord.ui.View):
         fp.seek(0)
         discord_file = discord.File(fp, filename=filename)
 
-        truncated_prompt = self.prompt_text.replace("\n\n", "\n")
-        if len(truncated_prompt) > 500:
-            truncated_prompt = truncated_prompt[:500] + " [...]"
-
         today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
+        embed.set_author(name=f"© {today} by {self.author}", icon_url=self.author.display_avatar.url)
 
-        embed.set_author(
-            name=f"© {today} by {self.author}", 
-            icon_url=self.author.display_avatar.url
-        )
+        # Prompt und technische Info inline ohne Feldnamen
+        info_text = self.prompt_text
+        if len(info_text) > 500:
+            info_text = info_text[:500] + " [...]"
+        tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {steps}"
+        embed.add_field(name="\u200b", value=f"🔮 {info_text}\n📊 {tech_info}", inline=False)
 
-        embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
+        # Nachricht senden: Mention → Embed → Bild
+        msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
 
-        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-        if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
-
-        embed.add_field(
-            name="📊 Technical Info:",
-            value=f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}",
-            inline=False
-        )
-
-
-        msg = await interaction.channel.send(content=f"{self.author.mention}\n", embed=embed, files=[discord_file])
+        # Reactions hinzufügen
         for emoji in CUSTOM_REACTIONS:
             try:
                 await msg.add_reaction(emoji)
@@ -263,13 +246,11 @@ class AspectRatioView(discord.ui.View):
             ephemeral=True
         )
 
-
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
 
-    # --- Buttons als richtige Member ---
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 1024, 1024, "1:1")
@@ -281,7 +262,6 @@ class AspectRatioView(discord.ui.View):
     @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.generate_image(interaction, 816, 1280, "9:16")
-
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
