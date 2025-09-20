@@ -223,7 +223,7 @@ class AspectRatioView(discord.ui.View):
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.03 + cfg * 0.25 + prompt_factor * 0.9)
+            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.25 + prompt_factor * 0.9)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -441,7 +441,7 @@ class VeniceCog(commands.Cog):
                 except:
                     pass
         view = VeniceView(session, channel)
-        await channel.send("💡 Click a button to start generating a new image!", view=view)
+        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
     @commands.Cog.listener()
     async def on_ready(self):
