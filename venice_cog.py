@@ -312,7 +312,7 @@ class PostGenerationView(discord.ui.View):
         self.message = message
 
         # "Re-use Prompt" Button grün
-        reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success, row=0)
+        reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
 
@@ -322,7 +322,7 @@ class PostGenerationView(discord.ui.View):
     async def reuse_callback(self, interaction: discord.Interaction):
         await self.show_reuse_models(interaction)
 
-    @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red, row=0)
+    @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
     async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await self.message.delete()
@@ -330,7 +330,7 @@ class PostGenerationView(discord.ui.View):
             pass
         await interaction.response.send_message("Deleted.", ephemeral=True)
 
-    @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red, row=0)
+    @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
     async def delete_reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await self.message.delete()
@@ -345,33 +345,27 @@ class PostGenerationView(discord.ui.View):
         except:
             pass
 
-        gallery_channel_id = 1419023980383436830
-        mention_role_id = 1419024270201454684
+        channel_id = 1419023980383436830
+        role_id = 1419024270201454684
+        channel = interaction.guild.get_channel(channel_id)
+        if channel:
+            mention_text = f"<@&{role_id}> {self.author.display_name} has created a new masterpiece"
+            await channel.send(mention_text)
 
-        gallery_channel = interaction.client.get_channel(gallery_channel_id)
-        if gallery_channel is None:
-            await interaction.response.send_message("❌ Gallery channel not found.", ephemeral=True)
-            return
+            files = []
+            for attachment in self.message.attachments:
+                fp = io.BytesIO()
+                await attachment.save(fp)
+                fp.seek(0)
+                files.append(discord.File(fp, filename=attachment.filename))
 
-        mention_text = f"<@&{mention_role_id}> {self.author.display_name} has created a new masterpiece"
-
-        files = []
-        for a in self.message.attachments:
-            fp = await a.to_file()
-            files.append(fp)
+            embed = self.message.embeds[0] if self.message.embeds else None
+            await channel.send(embed=embed, files=files)
 
         try:
-            await gallery_channel.send(content=mention_text)
-            await gallery_channel.send(
-                content=self.message.content or None,
-                embeds=self.message.embeds,
-                files=files if files else None
-            )
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to post in gallery: {e}", ephemeral=True)
-            return
-
-        await interaction.response.send_message("✅ Posted in gallery.", ephemeral=True)
+            await interaction.response.defer()
+        except:
+            pass
 
     @discord.ui.button(label="❤️ OK", style=discord.ButtonStyle.secondary, row=1)
     async def ok_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -379,7 +373,11 @@ class PostGenerationView(discord.ui.View):
             await interaction.message.delete()
         except:
             pass
-        # KEINE Antwort, KEIN Ack
+        # unsichtbares Ack, damit kein "interaction failed" kommt
+        try:
+            await interaction.response.defer()
+        except:
+            pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -417,10 +415,7 @@ class PostGenerationView(discord.ui.View):
                         variant,
                         self.hidden_suffix,
                         is_vip=is_vip,
-                        previous_inputs={
-                            "prompt": self.prompt_text,
-                            "negative_prompt": self.variant.get("negative_prompt", "")
-                        }
+                        previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
                     ))
                 return callback
 
