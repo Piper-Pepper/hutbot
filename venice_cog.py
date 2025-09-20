@@ -318,33 +318,30 @@ class PostGenerationView(discord.ui.View):
         channel_id = 1419023980383436830
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
-        if channel:
-            mention_text = f"<@&{role_id}> {self.author.display_name} has created a new masterpiece"
-            await channel.send(mention_text)
+        if not channel:
+            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
+            return
 
-            files = []
-            for attachment in self.message.attachments:
-                fp = io.BytesIO()
-                await attachment.save(fp)
-                fp.seek(0)
-                files.append(discord.File(fp, filename=attachment.filename))
+        # Mention und Hinweis
+        mention_text = f"<@&{role_id}> {self.author.display_name} has created a new masterpiece"
+        await channel.send(mention_text)
 
-            today = datetime.now().strftime("%Y-%m-%d")
-            embed = discord.Embed(color=discord.Color.blurple())
-            embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
-            embed.description = f"🔮 Prompt:\n{self.prompt_text}"
-            neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
-            tech_info = f"{self.variant['model']} | CFG: {self.variant.get('cfg_scale')} | Steps: {self.variant.get('steps', 30)}"
-            guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-            embed.set_footer(text=tech_info, icon_url=guild_icon)
-            embed.set_image(url=f"attachment://{files[0].filename}" if files else None)
+        # Attachments kopieren
+        files = []
+        for attachment in self.message.attachments:
+            fp = io.BytesIO()
+            await attachment.save(fp)
+            fp.seek(0)
+            files.append(discord.File(fp, filename=attachment.filename))
 
-            await channel.send(embed=embed, files=files)
+        # Embed kopieren
+        embed = discord.Embed.from_dict(self.message.embeds[0].to_dict()) if self.message.embeds else None
 
-        await interaction.response.defer(ephemeral=True)
-        await interaction.message.delete()
+        await channel.send(embed=embed, files=files)
+
+        # Button nach Benutzung deaktivieren
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
