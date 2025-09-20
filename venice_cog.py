@@ -440,7 +440,7 @@ class VeniceCog(commands.Cog):
                 except:
                     pass
         view = VeniceView(self.session, channel)
-        await channel.send("💡 Click a button to start generating a new image!", view=view)
+        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
