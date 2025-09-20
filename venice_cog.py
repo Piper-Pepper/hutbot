@@ -379,8 +379,7 @@ class PostGenerationView(discord.ui.View):
             await interaction.message.delete()
         except:
             pass
-        # keine weitere Aktion, keine Kopie
-        await interaction.response.send_message("👌 Acknowledged.", ephemeral=True)
+        # KEINE Antwort, KEIN Ack
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
