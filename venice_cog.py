@@ -211,7 +211,7 @@ class AspectRatioView(discord.ui.View):
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.22 + prompt_factor * 0.7)
+            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.25 + prompt_factor * 0.9)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
