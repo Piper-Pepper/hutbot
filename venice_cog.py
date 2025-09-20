@@ -214,31 +214,54 @@ class AspectRatioView(discord.ui.View):
             self.stop()
             return
 
+        # --- Nach erfolgreicher Bildgenerierung ---
         filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
         fp.seek(0)
         discord_file = discord.File(fp, filename=filename)
 
+        # Truncated prompt
+        truncated_prompt = self.prompt_text.replace("\n\n", "\n")
+        if len(truncated_prompt) > 500:
+            truncated_prompt = truncated_prompt[:500] + " [...]"
+
         today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.set_author(name=f"© {today} by {self.author}", icon_url=self.author.display_avatar.url)
 
-        # Prompt und technische Info inline ohne Feldnamen
-        info_text = self.prompt_text
-        if len(info_text) > 500:
-            info_text = info_text[:500] + " [...]"
-        tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {steps}"
-        embed.add_field(name="\u200b", value=f"🔮 {info_text}\n📊 {tech_info}", inline=False)
+        # Avatar oben rechts, kein extra Abstand durch set_author
+        embed.set_thumbnail(url=self.author.display_avatar.url)
 
-        # Nachricht senden: Mention → Embed → Bild
-        msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
+        # Kompakter Header als Feld
+        embed.add_field(name=f"© {today} by {self.author}", value="\u200b", inline=False)
 
-        # Reactions hinzufügen
+        # Prompt und ggf. Negative Prompt direkt
+        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+        if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+            embed.add_field(name="\u200b", value=f"🔮 {truncated_prompt}\n🚫 {neg_prompt}", inline=False)
+        else:
+            embed.add_field(name="\u200b", value=f"🔮 {truncated_prompt}", inline=False)
+
+        # Technical Info als Inline Feld rechts neben Icons
+        embed.add_field(
+            name="\u200b",
+            value=f"📊 {self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps',30)}",
+            inline=False
+        )
+
+        # Nachricht senden: Mention + Bild + Embed in einem Post
+        msg = await interaction.channel.send(
+            content=f"{self.author.mention}",
+            embed=embed,
+            files=[discord_file]
+        )
+
+        # Reactions
         for emoji in CUSTOM_REACTIONS:
             try:
                 await msg.add_reaction(emoji)
             except:
                 pass
+
 
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
