@@ -298,6 +298,16 @@ class PostGenerationView(discord.ui.View):
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
 
+        # Nur in SFW Kategorie den Submit-Button anzeigen
+        if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
+            submit_btn = discord.ui.Button(
+                label="🏆🖼️ Submit for competition",
+                style=discord.ButtonStyle.secondary,
+                row=1
+            )
+            submit_btn.callback = self.post_gallery_callback
+            self.add_item(submit_btn)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
 
@@ -313,9 +323,8 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
         await interaction.response.defer(ephemeral=True)
 
-    @discord.ui.button(label="🖼️ Post in Gallery", style=discord.ButtonStyle.secondary, row=1)
-    async def post_gallery_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        channel_id = 1419023980383436830
+    async def post_gallery_callback(self, interaction: discord.Interaction):
+        channel_id = 1418956422086922320
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
@@ -339,8 +348,6 @@ class PostGenerationView(discord.ui.View):
 
         await channel.send(embed=embed, files=files)
 
-        # Button nach Benutzung deaktivieren
-        button.disabled = True
         await interaction.response.edit_message(view=self)
 
     async def show_reuse_models(self, interaction: discord.Interaction):
