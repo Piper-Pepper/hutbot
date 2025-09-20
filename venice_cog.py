@@ -116,14 +116,18 @@ class VeniceModal(discord.ui.Modal):
             # Verhindere Dopplung von DEFAULT_NEGATIVE_PROMPT
             if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
                 neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
-        # Erstes Öffnen: Placeholder mit DEFAULT_NEGATIVE_PROMPT, Wert leer
+        else:
+            # Kein vorheriger Wert -> Feld direkt mit DEFAULT_NEGATIVE_PROMPT vorbefüllen
+            neg_value = DEFAULT_NEGATIVE_PROMPT
+
+        # Modal-Feld: Default ist jetzt der DEFAULT_NEGATIVE_PROMPT (sichtbar), kein Placeholder nötig
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=300,
-            default=neg_value if neg_value else "",
-            placeholder=None if neg_value else DEFAULT_NEGATIVE_PROMPT
+            default=neg_value,
+            placeholder=None
         )
 
         # CFG
