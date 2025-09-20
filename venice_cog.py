@@ -56,7 +56,6 @@ CUSTOM_REACTIONS = [
     "<:011:1346549711817146400>"
 ]
 
-# Channels mit speziellen Reactions
 CHANNEL_REACTIONS = {
     1418956422086922320: ["1️⃣", "2️⃣", "3️⃣"],
     1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]
@@ -104,7 +103,6 @@ class VeniceModal(discord.ui.Modal):
         self.is_vip = is_vip
         previous_inputs = previous_inputs or {}
 
-        # Prompt
         prompt_value = previous_inputs.get("prompt", "")
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
@@ -115,7 +113,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder="Describe your image. Be creative for best results!" if not prompt_value else None
         )
 
-        # Negative Prompt
         neg_value = previous_inputs.get("negative_prompt", "")
         if neg_value:
             if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
@@ -132,7 +129,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=None
         )
 
-        # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG (> stricter AI adherence)",
@@ -188,7 +184,6 @@ class AspectRatioView(discord.ui.View):
         self.author = author
         self.is_vip = is_vip
 
-        # Buttons manuell hinzufügen (grün)
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
         btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
@@ -251,17 +246,12 @@ class AspectRatioView(discord.ui.View):
         fp.seek(0)
         discord_file = discord.File(fp, filename=filename)
 
+        today = datetime.now().strftime("%Y-%m-%d")
+        embed = discord.Embed(color=discord.Color.blurple())
+        embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
         truncated_prompt = self.prompt_text.replace("\n\n", "\n")
         if len(truncated_prompt) > 500:
             truncated_prompt = truncated_prompt[:500] + " [...]"
-
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        embed = discord.Embed(color=discord.Color.blurple())
-        embed.set_author(
-            name=f"{self.author.display_name} ({today})",
-            icon_url=self.author.display_avatar.url
-        )
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
@@ -269,16 +259,11 @@ class AspectRatioView(discord.ui.View):
             embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
         embed.set_image(url=f"attachment://{filename}")
-
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
         tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
-        msg = await interaction.channel.send(
-            content=f"{self.author.mention}",
-            embed=embed,
-            file=discord_file
-        )
+        msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
 
         reactions = CHANNEL_REACTIONS.get(interaction.channel.id, CUSTOM_REACTIONS)
         for emoji in reactions:
@@ -287,7 +272,6 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
-        # Post-generation view, "Re-use Prompt" grün
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
@@ -308,9 +292,8 @@ class PostGenerationView(discord.ui.View):
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
         self.author = author
-        self.message = message  # das ist der Bildpost
+        self.message = message
 
-        # "Re-use Prompt" Button grün
         reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
@@ -323,32 +306,15 @@ class PostGenerationView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
     async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # löscht den Bildpost
-            await self.message.delete()
-        except:
-            pass
         await interaction.response.defer(ephemeral=True)
 
     @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
     async def delete_reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # löscht den Bildpost
-            await self.message.delete()
-        except:
-            pass
         await self.show_reuse_models(interaction)
+        await interaction.response.defer(ephemeral=True)
 
     @discord.ui.button(label="🖼️ Post in Gallery", style=discord.ButtonStyle.secondary, row=1)
     async def post_gallery_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # löscht den Bildpost
-            await self.message.delete()
-            # löscht die Button-Nachricht selbst
-            await interaction.message.delete()
-        except:
-            pass
-
         channel_id = 1419023980383436830
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
@@ -363,28 +329,27 @@ class PostGenerationView(discord.ui.View):
                 fp.seek(0)
                 files.append(discord.File(fp, filename=attachment.filename))
 
-            embed = self.message.embeds[0] if self.message.embeds else None
+            today = datetime.now().strftime("%Y-%m-%d")
+            embed = discord.Embed(color=discord.Color.blurple())
+            embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
+            embed.description = f"🔮 Prompt:\n{self.prompt_text}"
+            neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
+            tech_info = f"{self.variant['model']} | CFG: {self.variant.get('cfg_scale')} | Steps: {self.variant.get('steps', 30)}"
+            guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+            embed.set_footer(text=tech_info, icon_url=guild_icon)
+            embed.set_image(url=f"attachment://{files[0].filename}" if files else None)
+
             await channel.send(embed=embed, files=files)
 
-        try:
-            await interaction.response.defer()
-        except:
-            pass
+        await interaction.response.defer(ephemeral=True)
+        await interaction.message.delete()
 
     @discord.ui.button(label="❤️ OK", style=discord.ButtonStyle.secondary, row=1)
     async def ok_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # löscht den Bildpost
-            await self.message.delete()
-            # löscht die Button-Nachricht selbst
-            await interaction.message.delete()
-        except:
-            pass
-
-        try:
-            await interaction.response.defer()
-        except:
-            pass
+        await interaction.response.defer(ephemeral=True)
+        await interaction.message.delete()
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
