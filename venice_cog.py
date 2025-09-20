@@ -21,7 +21,6 @@ NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926  
 
-
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
@@ -89,6 +88,130 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         print(f"Exception calling Venice API: {e}")
         return None
 
+# ---------------- Aspect Ratio View ----------------
+class AspectRatioView(discord.ui.View):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip):
+        super().__init__(timeout=None)
+        self.session = session
+        self.variant = variant
+        self.prompt_text = prompt_text
+        self.hidden_suffix = hidden_suffix
+        self.author = author
+        self.is_vip = is_vip
+
+    async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
+        if not self.is_vip and ratio_name in ["16:9", "9:16"]:
+            await interaction.response.send_message(
+                f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        cfg = self.variant["cfg_scale"]
+        steps = self.variant.get("steps", int(cfg))
+
+        progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
+
+        prompt_factor = len(self.prompt_text) / 1000
+        for i in range(1, 11):
+            await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.12 + prompt_factor * 0.5)
+            try:
+                await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
+            except:
+                pass
+
+        full_prompt = self.prompt_text + self.hidden_suffix
+        if full_prompt and not full_prompt[0].isalnum():
+            full_prompt = " " + full_prompt
+
+        img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height,
+                                          steps=self.variant.get("steps"), cfg_scale=cfg,
+                                          negative_prompt=self.variant.get("negative_prompt"))
+        if not img_bytes:
+            await interaction.followup.send("❌ Generation failed!", ephemeral=True)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+            self.stop()
+            return
+
+        filename = make_safe_filename(self.prompt_text)
+        fp = io.BytesIO(img_bytes)
+        fp.seek(0)
+        discord_file = discord.File(fp, filename=filename)
+
+        # TXT-Datei erstellen
+        txt_content = (
+            f"User: {self.author}\n"
+            f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Model: {self.variant['model']}\n"
+            f"CFG: {cfg}\n"
+            f"Steps: {steps}\n"
+            f"Negative Prompt: {self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}\n"
+            f"Guild: {interaction.guild.name if interaction.guild else 'DM'}\n"
+            f"Aspect Ratio: {ratio_name}\n"
+            f"Resolution: {width}x{height}\n"
+            f"Full Prompt: {full_prompt}\n"
+        )
+        txt_file = io.BytesIO(txt_content.encode('utf-8'))
+        txt_filename = f"{filename.rsplit('.', 1)[0]}.txt"
+
+        # Embed vorbereiten
+        truncated_prompt = self.prompt_text.replace("\n\n", "\n")
+        if len(truncated_prompt) > 500:
+            truncated_prompt = truncated_prompt[:500] + " [...]"
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        embed = discord.Embed(color=discord.Color.blurple())
+        embed.set_author(name=f"© {today} by {self.author}", icon_url=self.author.display_avatar.url)
+        embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
+
+        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+        if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+            embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
+
+        embed.add_field(name="📊 Technical Info:", value=f"{self.variant['model']} | CFG: {cfg} | Steps: {steps}", inline=False)
+        embed.add_field(name="📄 Full Info", value=f"[Click here](attachment://{txt_filename})", inline=False)
+
+        # Nachricht senden: Embed über Bild, alles in einem Post
+        msg = await interaction.channel.send(
+            content=f"{self.author.mention}\n",
+            embed=embed,
+            files=[discord_file, discord.File(txt_file, filename=txt_filename)]
+        )
+
+        # Reactions unter dem Bild
+        for emoji in CUSTOM_REACTIONS:
+            try:
+                await msg.add_reaction(emoji)
+            except:
+                pass
+
+        await interaction.followup.send(
+            content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
+            view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
+            ephemeral=True
+        )
+
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+
+        self.stop()
+
+    # --- Buttons ---
+    @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
+    async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 1024, 1024, "1:1")
+
+    @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
+    async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 1280, 816, "16:9")
+
+    @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
+    async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.generate_image(interaction, 816, 1280, "9:16")
+
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session, variant, hidden_suffix, is_vip, previous_inputs=None):
@@ -112,11 +235,8 @@ class VeniceModal(discord.ui.Modal):
 
         # Negative Prompt Handling
         neg_value = previous_inputs.get("negative_prompt", "")
-        if neg_value:
-            # Verhindere Dopplung von DEFAULT_NEGATIVE_PROMPT
-            if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
-                neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
-        # Erstes Öffnen: Placeholder mit DEFAULT_NEGATIVE_PROMPT, Wert leer
+        if neg_value and not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
+            neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -146,18 +266,12 @@ class VeniceModal(discord.ui.Modal):
             cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
         negative_prompt = self.negative_prompt.value.strip()
-        if negative_prompt:
-            # Sicherstellen, dass DEFAULT_NEGATIVE_PROMPT vorne steht, aber nicht doppelt
-            if not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
-                negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
-        else:
+        if negative_prompt and not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
+            negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
+        elif not negative_prompt:
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
-        variant = {
-            **self.variant,
-            "cfg_scale": cfg_val,
-            "negative_prompt": negative_prompt
-        }
+        variant = {**self.variant, "cfg_scale": cfg_val, "negative_prompt": negative_prompt}
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
@@ -171,122 +285,6 @@ class VeniceModal(discord.ui.Modal):
             ),
             ephemeral=True
         )
-
-# ---------------- Aspect Ratio View ----------------
-async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
-    if not self.is_vip and ratio_name in ["16:9", "9:16"]:
-        await interaction.response.send_message(
-            f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    cfg = self.variant["cfg_scale"]
-    steps = self.variant.get("steps", int(cfg))
-
-    progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
-
-    prompt_factor = len(self.prompt_text) / 1000
-    for i in range(1, 11):
-        await asyncio.sleep(0.9 + steps * 0.02 + cfg * 0.12 + prompt_factor * 0.5)
-        try:
-            await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
-        except:
-            pass
-
-    full_prompt = self.prompt_text + self.hidden_suffix
-    if full_prompt and not full_prompt[0].isalnum():
-        full_prompt = " " + full_prompt
-
-    img_bytes = await venice_generate(self.session, full_prompt, self.variant, width, height,
-                                      steps=self.variant.get("steps"), cfg_scale=cfg,
-                                      negative_prompt=self.variant.get("negative_prompt"))
-    if not img_bytes:
-        await interaction.followup.send("❌ Generation failed!", ephemeral=True)
-        if isinstance(interaction.channel, discord.TextChannel):
-            await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
-        self.stop()
-        return
-
-    filename = make_safe_filename(self.prompt_text)
-    fp = io.BytesIO(img_bytes)
-    fp.seek(0)
-    discord_file = discord.File(fp, filename=filename)
-
-    # TXT-Datei erstellen
-    txt_content = (
-        f"User: {self.author}\n"
-        f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"Model: {self.variant['model']}\n"
-        f"CFG: {cfg}\n"
-        f"Steps: {steps}\n"
-        f"Negative Prompt: {self.variant.get('negative_prompt', DEFAULT_NEGATIVE_PROMPT)}\n"
-        f"Guild: {interaction.guild.name if interaction.guild else 'DM'}\n"
-        f"Aspect Ratio: {ratio_name}\n"
-        f"Resolution: {width}x{height}\n"
-        f"Full Prompt: {full_prompt}\n"
-    )
-    txt_file = io.BytesIO(txt_content.encode('utf-8'))
-    txt_filename = f"{filename.rsplit('.', 1)[0]}.txt"
-
-    # Embed vorbereiten
-    truncated_prompt = self.prompt_text.replace("\n\n", "\n")
-    if len(truncated_prompt) > 500:
-        truncated_prompt = truncated_prompt[:500] + " [...]"
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    embed = discord.Embed(color=discord.Color.blurple())
-    embed.set_author(name=f"© {today} by {self.author}", icon_url=self.author.display_avatar.url)
-    embed.add_field(name="🔮 Prompt:", value=truncated_prompt, inline=False)
-
-    neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-    if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-        embed.add_field(name="🚫 Negative Prompt:", value=neg_prompt, inline=False)
-
-    embed.add_field(name="📊 Technical Info:", value=f"{self.variant['model']} | CFG: {cfg} | Steps: {steps}", inline=False)
-
-    # TXT-Link (Emoji als klickbarer Text)
-    embed.add_field(name="📄 Full Info", value=f"[Click here](attachment://{txt_filename})", inline=False)
-
-    # Nachricht senden: Content = Mention, Embed = oben, File = Bild + TXT
-    msg = await interaction.channel.send(
-        content=f"{self.author.mention}\n",
-        embed=embed,
-        files=[discord_file, discord.File(txt_file, filename=txt_filename)]
-    )
-
-    # Reactions unter dem Bild
-    for emoji in CUSTOM_REACTIONS:
-        try:
-            await msg.add_reaction(emoji)
-        except:
-            pass
-
-    await interaction.followup.send(
-        content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
-        view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
-        ephemeral=True
-    )
-
-    if isinstance(interaction.channel, discord.TextChannel):
-        await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
-
-    self.stop()
-
-    # --- Buttons als richtige Member ---
-    @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
-    async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 1024, 1024, "1:1")
-
-    @discord.ui.button(label="🖥️16:9", style=discord.ButtonStyle.blurple)
-    async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 1280, 816, "16:9")
-
-    @discord.ui.button(label="📱9:16", style=discord.ButtonStyle.blurple)
-    async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.generate_image(interaction, 816, 1280, "9:16")
 
 
 # ---------------- Post Generation View ----------------
