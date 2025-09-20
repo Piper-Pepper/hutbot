@@ -61,13 +61,13 @@ CHANNEL_REACTIONS = {
     1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]
 }
 
-# ---------------- Ephemeral Registry ----------------
+# ---------------- Ephemeral Registry (nur für Re-use) ----------------
 user_ephemeral_registry: dict[int, list[discord.Message]] = {}
 
 async def send_ephemeral(interaction: discord.Interaction, content: str, view=None):
     """Sendet eine ephemeral Nachricht und löscht vorherige für denselben Nutzer+Channel."""
     user_id = interaction.user.id
-    # alte ephemeral Nachrichten löschen
+    # nur löschen, wenn es Re-use ist (diese Funktion wird nur dafür aufgerufen)
     if user_id in user_ephemeral_registry:
         for msg in user_ephemeral_registry[user_id]:
             try:
@@ -220,7 +220,10 @@ class AspectRatioView(discord.ui.View):
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", int(cfg))
 
-        progress_msg = await send_ephemeral(interaction, f"⏳ Generating image... 0%")
+        # --- Generating progress ephemeral, aber NICHT über Registry ---
+        progress_msg = await interaction.followup.send(
+            f"⏳ Generating image... 0%", ephemeral=True
+        )
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
@@ -241,7 +244,7 @@ class AspectRatioView(discord.ui.View):
         )
 
         if not img_bytes:
-            await send_ephemeral(interaction, "❌ Generation failed!")
+            await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             if isinstance(interaction.channel, discord.TextChannel):
                 await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
             self.stop()
@@ -279,6 +282,7 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
+        # --- Re-use Buttons ephemeral, über Registry ---
         await send_ephemeral(
             interaction,
             f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
