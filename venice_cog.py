@@ -19,7 +19,7 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
-VIP_ROLE_ID = 1377051179615522926  
+VIP_ROLE_ID = 1377051179615522926
 
 DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
@@ -65,7 +65,7 @@ CHANNEL_REACTIONS = {
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
-    if not base[0].isalnum():
+    if not base or not base[0].isalnum():
         base = "img_" + base
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
@@ -298,13 +298,18 @@ class PostGenerationView(discord.ui.View):
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
 
-        # Nur in SFW Kategorie den Submit-Button anzeigen
+        # Delete Buttons (work reliably)
+        del_btn = discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red)
+        del_btn.callback = self.delete_callback
+        self.add_item(del_btn)
+
+        del_reuse_btn = discord.ui.Button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
+        del_reuse_btn.callback = self.delete_reuse_callback
+        self.add_item(del_reuse_btn)
+
+        # Submit Button only in SFW category
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
-            submit_btn = discord.ui.Button(
-                label="🏆🖼️ Submit for competition",
-                style=discord.ButtonStyle.secondary,
-                row=1
-            )
+            submit_btn = discord.ui.Button(label="🏆🖼️ Submit for competition", style=discord.ButtonStyle.secondary, row=1)
             submit_btn.callback = self.post_gallery_callback
             self.add_item(submit_btn)
 
@@ -314,28 +319,35 @@ class PostGenerationView(discord.ui.View):
     async def reuse_callback(self, interaction: discord.Interaction):
         await self.show_reuse_models(interaction)
 
-    @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.red)
-    async def delete_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+    async def delete_callback(self, interaction: discord.Interaction):
+        # Delete the original posted image message
+        try:
+            await self.message.delete()
+        except Exception:
+            pass
+        await interaction.response.send_message("✅ Post deleted", ephemeral=True)
 
-    @discord.ui.button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
-    async def delete_reuse_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def delete_reuse_callback(self, interaction: discord.Interaction):
+        # Delete the original posted image message, then open reuse modal flow
+        try:
+            await self.message.delete()
+        except Exception:
+            pass
+        # show_reuse_models will use interaction.response.send_message, so call it and return
         await self.show_reuse_models(interaction)
-        await interaction.response.defer(ephemeral=True)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320
+        channel_id = 1418956422086922320  # Contest channel (destination)
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Mention und Hinweis
-        mention_text = f"<@&{role_id}> {self.author.display_name} has created a new masterpiece"
+        mention_text = f"<@&{role_id}> {self.author.display_name} has submitted an image to the contest!"
         await channel.send(mention_text)
 
-        # Attachments kopieren
+        # Copy attachments
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -343,12 +355,30 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
-        # Embed kopieren
         embed = discord.Embed.from_dict(self.message.embeds[0].to_dict()) if self.message.embeds else None
 
-        await channel.send(embed=embed, files=files)
+        contest_msg = await channel.send(embed=embed, files=files)
 
-        await interaction.response.edit_message(view=self)
+        # Add contest reactions (1,2,3)
+        for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
+            try:
+                await contest_msg.add_reaction(emoji)
+            except Exception:
+                pass
+
+        # disable submit to avoid double submits (optional)
+        # find submit button and disable it
+        for child in self.children:
+            if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
+                child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            # fallback if edit_message fails (ephemeral race)
+            try:
+                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except Exception:
+                pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -381,6 +411,7 @@ class PostGenerationView(discord.ui.View):
                         )
                         return
 
+                    # open modal with previous inputs (reuse prompt)
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
@@ -440,7 +471,7 @@ class VeniceCog(commands.Cog):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
-                except:
+                except Exception:
                     pass
         view = VeniceView(self.session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
@@ -451,7 +482,7 @@ class VeniceCog(commands.Cog):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
-                except:
+                except Exception:
                     pass
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
