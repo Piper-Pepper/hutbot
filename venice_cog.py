@@ -233,28 +233,29 @@ class AspectRatioView(discord.ui.View):
             truncated_prompt = truncated_prompt[:500] + " [...]"
 
         today = datetime.now().strftime("%Y-%m-%d")
-        embed = discord.Embed(color=discord.Color.blurple(), description=f"🔮 {truncated_prompt}")
+
+        # Embed Aufbau nach deiner Vorgabe
+        embed = discord.Embed(color=discord.Color.blurple())
+        embed.title = f"{self.author.display_name} ({today})"
+        embed.set_author(name="", icon_url=self.author.display_avatar.url)
+
+        # Prompt
+        embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
         # Optional: Negative Prompt
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-        if neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.description += f"\n🚫 {neg_prompt}"
+        if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+            embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        # Technical Info inline
-        embed.description += f"\n📊 {self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps',30)}"
-
-        # Thumbnail: user avatar oben rechts
-        embed.set_thumbnail(url=self.author.display_avatar.url)
-
-        # Image im Embed
+        # Bild
         embed.set_image(url=f"attachment://{filename}")
 
-        # Footer: Guild icon + Copyright
+        # Footer: Guild Icon + Technical Info
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        footer_text = f"© {today} by {self.author}"
-        embed.set_footer(text=footer_text, icon_url=guild_icon)
+        tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}"
+        embed.set_footer(text=tech_info, icon_url=guild_icon)
 
-        # Nachricht: Mention + Embed + Bild
+        # Nachricht: Mention + Embed
         msg = await interaction.channel.send(
             content=f"{self.author.mention}",
             embed=embed,
@@ -278,7 +279,6 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
-
 
     # --- Buttons als richtige Member ---
     @discord.ui.button(label="⏹️1:1", style=discord.ButtonStyle.blurple)
