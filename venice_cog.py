@@ -26,12 +26,12 @@ NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 5.5, "steps": 30},
-    "pony-realism": {"cfg_scale": 8.0, "steps": 30},
-    "flux-dev-uncensored": {"cfg_scale": 5.5, "steps": 30},
-    "stable-diffusion-3.5": {"cfg_scale": 5.0, "steps": 30},
-    "flux-dev": {"cfg_scale": 6.0, "steps": 30},
-    "hidream": {"cfg_scale": 5.0, "steps": 30},
+    "lustify-sdxl": {"cfg_scale": 6.0, "steps": 30},
+    "pony-realism": {"cfg_scale": 8.5, "steps": 30},
+    "flux-dev-uncensored": {"cfg_scale": 6.0, "steps": 30},
+    "stable-diffusion-3.5": {"cfg_scale": 6.0, "steps": 30},
+    "flux-dev": {"cfg_scale": 6.5, "steps": 30},
+    "hidream": {"cfg_scale": 6.5, "steps": 30},
     "wai-Illustrious": {"cfg_scale": 8.0, "steps": 30},
 }
 
@@ -338,17 +338,14 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320  # Contest channel (destination)
+        channel_id = 1418956422086922320  # Contest channel
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        mention_text = f"<@&{role_id}> {self.author.display_name} has submitted an image to the contest!"
-        await channel.send(mention_text)
-
-        # Copy attachments
+        # Copy attachments (images)
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -356,9 +353,21 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
-        embed = discord.Embed.from_dict(self.message.embeds[0].to_dict()) if self.message.embeds else None
+        # Take embed and ensure prompt is FULL
+        embed = None
+        if self.message.embeds:
+            original_embed = self.message.embeds[0]
+            embed = discord.Embed.from_dict(original_embed.to_dict())
+            # overwrite description with full prompt text
+            full_prompt = self.prompt_text.replace("\n\n", "\n")
+            embed.description = f"🔮 Prompt:\n{full_prompt}"
+            neg_prompt = self.variant.get("negative_prompt")
+            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        contest_msg = await channel.send(embed=embed, files=files)
+        # Single post: content + embed + files
+        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
+        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
         # Add contest reactions (1,2,3)
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
@@ -367,15 +376,13 @@ class PostGenerationView(discord.ui.View):
             except Exception:
                 pass
 
-        # disable submit to avoid double submits (optional)
-        # find submit button and disable it
+        # Disable submit button (prevent duplicate submits)
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except Exception:
-            # fallback if edit_message fails (ephemeral race)
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
             except Exception:
