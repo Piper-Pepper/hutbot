@@ -178,9 +178,9 @@ class AspectRatioView(discord.ui.View):
 
     def make_callback(self, button, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
-            # deactivate other buttons
+            # Deactivate other buttons
             for btn in self.buttons:
-                btn.disabled = (btn == button)
+                btn.disabled = (btn != button)
             await interaction.response.edit_message(view=self)
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
@@ -219,9 +219,6 @@ class AspectRatioView(discord.ui.View):
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             self.stop()
             return
-
-    # ... restlicher Code wie vorher für Datei, Embed, Reactions etc.
-
 
         filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
@@ -414,17 +411,6 @@ class VeniceCog(commands.Cog):
                 except Exception:
                     pass
         view = VeniceView(self.session, channel)
-        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
-
-    @staticmethod
-    async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
-        async for msg in channel.history(limit=10):
-            if msg.components and not msg.embeds and not msg.attachments:
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
-        view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
     @commands.Cog.listener()
