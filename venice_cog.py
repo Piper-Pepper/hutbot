@@ -196,13 +196,17 @@ class AspectRatioView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", 30)
+
+        # --- Fake progress bar ---
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
+        prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.4 + steps*0.02 + cfg*0.1)
+            await asyncio.sleep(0.4 + steps*0.02 + cfg*0.1 + prompt_factor*0.2)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
                 pass
+        # -------------------------
 
         full_prompt = self.prompt_text + self.hidden_suffix
         img_bytes = await venice_generate(
@@ -215,6 +219,9 @@ class AspectRatioView(discord.ui.View):
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
             self.stop()
             return
+
+    # ... restlicher Code wie vorher für Datei, Embed, Reactions etc.
+
 
         filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
