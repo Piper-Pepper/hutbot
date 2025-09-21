@@ -40,7 +40,7 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl"},
         {"label": "Pony", "model": "pony-realism"},
         {"label": "FluxUnc", "model": "flux-dev-uncensored"},
-        {"label": "Anime", "model": "wai-Illustrious"},
+        {"label": "Wai (Anime)", "model": "wai-Illustrious"},
     ],
     SFW_CATEGORY_ID: [
         {"label": "SD3.5", "model": "stable-diffusion-3.5"},
