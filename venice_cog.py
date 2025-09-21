@@ -27,12 +27,12 @@ SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 5.5, "steps": 30},
-    "pony-realism": {"cfg_scale": 6.0, "steps": 30},
+    "pony-realism": {"cfg_scale": 8.0, "steps": 30},
     "flux-dev-uncensored": {"cfg_scale": 5.5, "steps": 30},
     "stable-diffusion-3.5": {"cfg_scale": 5.0, "steps": 30},
     "flux-dev": {"cfg_scale": 6.0, "steps": 30},
     "hidream": {"cfg_scale": 5.0, "steps": 30},
-    "wai-Illustrious": {"cfg_scale": 6.0, "steps": 30},
+    "wai-Illustrious": {"cfg_scale": 8.0, "steps": 30},
 }
 
 VARIANT_MAP = {
@@ -53,7 +53,8 @@ CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
     "<:01smile_piper:1387083454575022213>",
     "<:02No:1347536448831754383>",
-    "<:011:1346549711817146400>"
+    "<:011:1346549711817146400>", 
+    "<:011pump:1346549688836296787>", 
 ]
 
 CHANNEL_REACTIONS = {
