@@ -299,6 +299,7 @@ class PostGenerationView(discord.ui.View):
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
 
+        # Delete Buttons (work reliably)
         del_btn = discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red)
         del_btn.callback = self.delete_callback
         self.add_item(del_btn)
@@ -307,6 +308,7 @@ class PostGenerationView(discord.ui.View):
         del_reuse_btn.callback = self.delete_reuse_callback
         self.add_item(del_reuse_btn)
 
+        # Submit Button only in SFW category
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
             submit_btn = discord.ui.Button(label="🏆🖼️ Submit for competition", style=discord.ButtonStyle.secondary, row=1)
             submit_btn.callback = self.post_gallery_callback
@@ -316,23 +318,23 @@ class PostGenerationView(discord.ui.View):
         return interaction.user.id == self.author.id
 
     async def reuse_callback(self, interaction: discord.Interaction):
-        await self.disable_ephemeral_buttons(interaction)
         await self.show_reuse_models(interaction)
 
     async def delete_callback(self, interaction: discord.Interaction):
+        # Delete the original posted image message
         try:
             await self.message.delete()
         except Exception:
             pass
-        await self.disable_ephemeral_buttons(interaction)
-        await interaction.followup.send("✅ Post deleted", ephemeral=True)
+        await interaction.response.send_message("✅ Post deleted", ephemeral=True)
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
+        # Delete the original posted image message, then open reuse modal flow
         try:
             await self.message.delete()
         except Exception:
             pass
-        await self.disable_ephemeral_buttons(interaction)
+        # show_reuse_models will use interaction.response.send_message, so call it and return
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
@@ -343,6 +345,7 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
+        # Copy attachments (images)
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -350,26 +353,40 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
+        # Take embed and ensure prompt is FULL
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
+            # overwrite description with full prompt text
             full_prompt = self.prompt_text.replace("\n\n", "\n")
             embed.description = f"🔮 Prompt:\n{full_prompt}"
             neg_prompt = self.variant.get("negative_prompt")
             if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
                 embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
+        # Single post: content + embed + files
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
+        # Add contest reactions (1,2,3)
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
             except Exception:
                 pass
 
-        await self.disable_ephemeral_buttons(interaction)
+        # Disable submit button (prevent duplicate submits)
+        for child in self.children:
+            if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
+                child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            try:
+                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except Exception:
+                pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -402,6 +419,7 @@ class PostGenerationView(discord.ui.View):
                         )
                         return
 
+                    # open modal with previous inputs (reuse prompt)
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
@@ -409,38 +427,13 @@ class PostGenerationView(discord.ui.View):
                         is_vip=is_vip,
                         previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
                     ))
-                    await self.disable_buttons(inner_interaction)
                 return callback
-
-            async def disable_buttons(self, interaction: discord.Interaction):
-                for child in self.children:
-                    if isinstance(child, discord.ui.Button):
-                        child.disabled = True
-                try:
-                    await interaction.response.edit_message(view=self)
-                except:
-                    try:
-                        await interaction.followup.edit_message(interaction.message.id, view=self)
-                    except:
-                        pass
 
         await interaction.response.send_message(
             f"{interaction.user.mention}, which model do you want to use with your re-used prompt?",
             view=ReuseModelView(self.session, interaction.user, self.prompt_text, self.hidden_suffix, self.variant),
             ephemeral=True
         )
-
-    async def disable_ephemeral_buttons(self, interaction: discord.Interaction):
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        try:
-            await interaction.response.edit_message(view=self)
-        except:
-            try:
-                await interaction.followup.edit_message(interaction.message.id, view=self)
-            except:
-                pass
 
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
