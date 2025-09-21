@@ -339,13 +339,16 @@ class PostGenerationView(discord.ui.View):
         
     async def post_gallery_callback(self, interaction: discord.Interaction):
         channel_id = 1419442005196668938  # Target channel
-        role_id = 1419024270201454684    # Role ID that should be pinged
+        role_id = 1419024270201454684     # Role to ping
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
             await interaction.response.send_message("❌ Target channel not found!", ephemeral=True)
             return
 
-        # Save all attachments
+        if not self.message.attachments:
+            await interaction.response.send_message("❌ No attachments found to submit!", ephemeral=True)
+            return
+
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -353,21 +356,19 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
-        # 🆕 Build the message text
         today = datetime.now().strftime("%Y-%m-%d %H:%M")
         mention_text = f"<@&{role_id}> {interaction.user.mention} has submitted\n🕒 {today}"
 
-        # Send message with mentions + image as attachment
+        # send the copied image(s) to the contest channel
         contest_msg = await channel.send(content=mention_text, files=files)
 
-        # Add reactions
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
             except Exception:
                 pass
 
-        # Disable the button so it cannot be submitted multiple times
+        # disable submit button
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
@@ -375,6 +376,7 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.edit_message(view=self)
         except Exception:
             await interaction.followup.send("✅ Successfully submitted!", ephemeral=True)
+
 
 
     async def show_reuse_models(self, interaction: discord.Interaction):
