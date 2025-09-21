@@ -345,7 +345,7 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Copy attachments (images)
+        # Kopiere Attachments
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -353,40 +353,42 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
-        # Take embed and ensure prompt is FULL
+        # Original-Embed übernehmen
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
-            # overwrite description with full prompt text
+
+            # Description mit vollem Prompt überschreiben
             full_prompt = self.prompt_text.replace("\n\n", "\n")
             embed.description = f"🔮 Prompt:\n{full_prompt}"
             neg_prompt = self.variant.get("negative_prompt")
             if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
                 embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        # Single post: content + embed + files
+            # Zeitstempel hinzufügen
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            embed.add_field(name="🕒 Submitted", value=f"{now}", inline=False)
+
+        # EIN EINZIGER POST mit Mention, Embed und Dateien
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
-        # Add contest reactions (1,2,3)
+        # Reaktionen hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
             except Exception:
                 pass
 
-        # Disable submit button (prevent duplicate submits)
+        # Button deaktivieren, damit nicht doppelt gesendet wird
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except Exception:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except Exception:
-                pass
+            await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
