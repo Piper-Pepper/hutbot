@@ -26,13 +26,13 @@ NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 6.0, "steps": 30},
-    "pony-realism": {"cfg_scale": 8.5, "steps": 30},
+    "lustify-sdxl": {"cfg_scale": 5.5, "steps": 30},
+    "pony-realism": {"cfg_scale": 7.5, "steps": 30},
     "flux-dev-uncensored": {"cfg_scale": 6.0, "steps": 30},
     "stable-diffusion-3.5": {"cfg_scale": 6.0, "steps": 30},
-    "flux-dev": {"cfg_scale": 6.5, "steps": 30},
+    "flux-dev": {"cfg_scale": 6.0, "steps": 30},
     "hidream": {"cfg_scale": 6.5, "steps": 30},
-    "wai-Illustrious": {"cfg_scale": 8.0, "steps": 30},
+    "wai-Illustrious": {"cfg_scale": 7.0, "steps": 30},
 }
 
 VARIANT_MAP = {
