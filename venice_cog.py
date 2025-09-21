@@ -341,64 +341,51 @@ class PostGenerationView(discord.ui.View):
         channel_id = 1418956422086922320  # Contest channel
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
-
         if not channel:
-            await interaction.response.send_message("❌ Contest channel not found!", ephemeral=True)
+            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
+        # Copy attachments (images)
         files = []
         for attachment in self.message.attachments:
-            try:
-                fp = io.BytesIO()
-                await attachment.save(fp)
-                fp.seek(0)
-                files.append(discord.File(fp, filename=attachment.filename))
-            except Exception as e:
-                print(f"[Contest] Error saving attachment: {e}")
+            fp = io.BytesIO()
+            await attachment.save(fp)
+            fp.seek(0)
+            files.append(discord.File(fp, filename=attachment.filename))
 
-        if not files:
-            await interaction.response.send_message("❌ No attachments found to submit.", ephemeral=True)
-            return
-
-        # Build embed with full prompt
+        # Take embed and ensure prompt is FULL
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
+            # overwrite description with full prompt text
             full_prompt = self.prompt_text.replace("\n\n", "\n")
             embed.description = f"🔮 Prompt:\n{full_prompt}"
             neg_prompt = self.variant.get("negative_prompt")
             if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
                 embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
+        # Single post: content + embed + files
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        try:
-            contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to submit to contest channel: {e}", ephemeral=True)
-            return
+        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
+        # Add contest reactions (1,2,3)
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
-            except Exception as e:
-                print(f"[Contest] Couldn't add reaction: {e}")
+            except Exception:
+                pass
 
-        # Disable button after submission
+        # Disable submit button (prevent duplicate submits)
         for child in self.children:
-            if getattr(child, "label", "").startswith("🖼️ Submit"):
+            if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
-
         try:
             await interaction.response.edit_message(view=self)
-        except discord.InteractionResponded:
-            # Fallback: send a fresh ephemeral message if we can't edit the original one
-            await interaction.followup.send("✅ Submitted to contest!", ephemeral=True)
-        except Exception as e:
-            print(f"[Contest] Could not edit ephemeral message: {e}")
+        except Exception:
             try:
-                await interaction.followup.send("✅ Submitted to contest!", ephemeral=True)
-            except:
+                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except Exception:
                 pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
