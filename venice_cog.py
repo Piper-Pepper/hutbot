@@ -21,7 +21,7 @@ NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926
 
-DEFAULT_NEGATIVE_PROMPT = "blurry, bad anatomy, missing fingers, extra limbs, watermark"
+DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
@@ -53,8 +53,8 @@ CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
     "<:01smile_piper:1387083454575022213>",
     "<:02No:1347536448831754383>",
-    "<:011:1346549711817146400>", 
-    "<:011pump:1346549688836296787>", 
+    "<:011:1346549711817146400>",
+    "<:011pump:1346549688836296787>",
 ]
 
 CHANNEL_REACTIONS = {
@@ -185,36 +185,50 @@ class AspectRatioView(discord.ui.View):
         self.author = author
         self.is_vip = is_vip
 
+        # Create buttons and attach callbacks that capture each button (so we can disable it when clicked)
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
         btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
 
-        btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
-        btn_16_9.callback = self.make_callback(1280, 816, "16:9")
-        btn_9_16.callback = self.make_callback(816, 1280, "9:16")
+        # assign callbacks (capture button)
+        btn_1_1.callback = self.make_callback(btn_1_1, 1024, 1024, "1:1")
+        btn_16_9.callback = self.make_callback(btn_16_9, 1280, 816, "16:9")
+        btn_9_16.callback = self.make_callback(btn_9_16, 816, 1280, "9:16")
 
         self.add_item(btn_1_1)
         self.add_item(btn_16_9)
         self.add_item(btn_9_16)
 
-    def make_callback(self, width, height, ratio_name):
+    def make_callback(self, button: discord.ui.Button, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
+            # Disable the clicked button and edit ephemeral message to show it as pressed
+            button.disabled = True
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                # If edit_message fails, try followup as fallback (rare)
+                try:
+                    await interaction.followup.send("⚠️ Could not update buttons UI.", ephemeral=True)
+                except Exception:
+                    pass
+
+            # Call generator (uses followup for progress/status)
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
+        # Note: We no longer call interaction.response.defer() here because we've already responded
         if not self.is_vip and ratio_name in ["16:9", "9:16"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
                 ephemeral=True
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
-
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", int(cfg))
 
+        # Use followup for progress so it appears ephemeral to user
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
 
         prompt_factor = len(self.prompt_text) / 1000
@@ -273,6 +287,7 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
+        # Offer the post-generation ephemeral view — that view's buttons will also show pressed state when clicked
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
@@ -317,18 +332,49 @@ class PostGenerationView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
 
+    # Helper to disable the clicked button and update ephemeral message
+    async def _disable_clicked_and_update(self, interaction: discord.Interaction, clicked_button: discord.ui.Button):
+        clicked_button.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            # fallback: try followup notice
+            try:
+                await interaction.followup.send("⚠️ Could not update the UI to show pressed button.", ephemeral=True)
+            except:
+                pass
+
     async def reuse_callback(self, interaction: discord.Interaction):
+        # find the reuse button object in self.children to disable it visually
+        btn = next((c for c in self.children if getattr(c, "label", "") == "♻️ Re-use Prompt"), None)
+        if btn:
+            await self._disable_clicked_and_update(interaction, btn)
+        else:
+            # if we can't edit, still reply
+            await interaction.response.send_message("♻️ Re-use Prompt clicked.", ephemeral=True)
         await self.show_reuse_models(interaction)
 
     async def delete_callback(self, interaction: discord.Interaction):
+        btn = next((c for c in self.children if getattr(c, "label", "") == "🗑️ Delete"), None)
+        if btn:
+            await self._disable_clicked_and_update(interaction, btn)
+        else:
+            await interaction.response.send_message("🗑️ Deleting...", ephemeral=True)
+
         # Delete the original posted image message
         try:
             await self.message.delete()
+            await interaction.followup.send("✅ Post deleted", ephemeral=True)
         except Exception:
-            pass
-        await interaction.response.send_message("✅ Post deleted", ephemeral=True)
+            await interaction.followup.send("⚠️ Could not delete the original message.", ephemeral=True)
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
+        btn = next((c for c in self.children if getattr(c, "label", "") == "🧹 Delete & Re-use"), None)
+        if btn:
+            await self._disable_clicked_and_update(interaction, btn)
+        else:
+            await interaction.response.send_message("🧹 Delete & Re-Use clicked.", ephemeral=True)
+
         # Delete the original posted image message, then open reuse modal flow
         try:
             await self.message.delete()
@@ -338,11 +384,18 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
+        # Disable the submit button immediately so the user sees it was pressed
+        btn = next((c for c in self.children if getattr(c, "label", "") and 'Submit' in getattr(c, 'label', '')), None)
+        if btn:
+            await self._disable_clicked_and_update(interaction, btn)
+        else:
+            await interaction.response.send_message("Submitting...", ephemeral=True)
+
         channel_id = 1418956422086922320  # Contest channel
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
-            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
+            await interaction.followup.send("❌ Gallery channel not found!", ephemeral=True)
             return
 
         # Copy attachments (images)
@@ -358,7 +411,7 @@ class PostGenerationView(discord.ui.View):
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
-            # overwrite description with full prompt text
+            # overwrite description with full prompt text (not truncated)
             full_prompt = self.prompt_text.replace("\n\n", "\n")
             embed.description = f"🔮 Prompt:\n{full_prompt}"
             neg_prompt = self.variant.get("negative_prompt")
@@ -376,17 +429,11 @@ class PostGenerationView(discord.ui.View):
             except Exception:
                 pass
 
-        # Disable submit button (prevent duplicate submits)
-        for child in self.children:
-            if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
-                child.disabled = True
+        # Let user know
         try:
-            await interaction.response.edit_message(view=self)
+            await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
         except Exception:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except Exception:
-                pass
+            pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -406,20 +453,32 @@ class PostGenerationView(discord.ui.View):
 
                 for v in variants:
                     btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.success)
-                    btn.callback = self.make_model_callback(v)
+                    # capture btn in callback so we can disable it visually in the ephemeral view
+                    btn.callback = self.make_model_callback(v, btn)
                     self.add_item(btn)
 
-            def make_model_callback(self, variant):
+            def make_model_callback(self, variant, btn):
                 async def callback(inner_interaction: discord.Interaction):
+                    # disable clicked model button in this ephemeral view
+                    btn.disabled = True
+                    try:
+                        await inner_interaction.response.edit_message(view=self)
+                    except Exception:
+                        try:
+                            await inner_interaction.followup.send("⚠️ Could not update UI.", ephemeral=True)
+                        except:
+                            pass
+
                     member = inner_interaction.user
                     is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
                     if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
-                        await inner_interaction.response.send_message(
+                        await inner_interaction.followup.send(
                             f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True
                         )
                         return
 
                     # open modal with previous inputs (reuse prompt)
+                    await inner_interaction.followup.send("Opening modal...", ephemeral=True)
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
