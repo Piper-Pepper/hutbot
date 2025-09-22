@@ -273,11 +273,9 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
-        file_bytes = fp.getvalue()
-
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
-            view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg, file_bytes, filename),
+            view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
             ephemeral=True
         )
 
@@ -288,7 +286,7 @@ class AspectRatioView(discord.ui.View):
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, message, file_bytes=None, filename=None):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, message):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
@@ -296,13 +294,12 @@ class PostGenerationView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
         self.author = author
         self.message = message
-        self.file_bytes = file_bytes
-        self.filename = filename
 
         reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
 
+        # Delete Buttons (work reliably)
         del_btn = discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red)
         del_btn.callback = self.delete_callback
         self.add_item(del_btn)
@@ -311,6 +308,7 @@ class PostGenerationView(discord.ui.View):
         del_reuse_btn.callback = self.delete_reuse_callback
         self.add_item(del_reuse_btn)
 
+        # Submit Button only in SFW category
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
             submit_btn = discord.ui.Button(label="🏆🖼️ Submit for competition", style=discord.ButtonStyle.secondary, row=1)
             submit_btn.callback = self.post_gallery_callback
@@ -323,6 +321,7 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def delete_callback(self, interaction: discord.Interaction):
+        # Delete the original posted image message
         try:
             await self.message.delete()
         except Exception:
@@ -330,49 +329,64 @@ class PostGenerationView(discord.ui.View):
         await interaction.response.send_message("✅ Post deleted", ephemeral=True)
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
+        # Delete the original posted image message, then open reuse modal flow
         try:
             await self.message.delete()
         except Exception:
             pass
+        # show_reuse_models will use interaction.response.send_message, so call it and return
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1419442005196668938  # Target channel
-        role_id = 1419024270201454684    # Role to ping
+        channel_id = 1418956422086922320  # Contest channel
+        role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
-            await interaction.response.send_message("❌ Target channel not found!", ephemeral=True)
+            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
+        # Copy attachments (images)
         files = []
-        if self.file_bytes:
-            fp = io.BytesIO(self.file_bytes)
-            files.append(discord.File(fp, filename=self.filename or "submission.png"))
-        elif self.message.attachments:
-            for attachment in self.message.attachments:
-                fp = io.BytesIO()
-                await attachment.save(fp)
-                fp.seek(0)
-                files.append(discord.File(fp, filename=attachment.filename))
+        for attachment in self.message.attachments:
+            fp = io.BytesIO()
+            await attachment.save(fp)
+            fp.seek(0)
+            files.append(discord.File(fp, filename=attachment.filename))
 
-        today = datetime.now().strftime("%Y-%m-%d %H:%M")
-        mention_text = f"<@&{role_id}> {interaction.user.mention} has submitted\n🕒 {today}"
+        # Take embed and ensure prompt is FULL
+        embed = None
+        if self.message.embeds:
+            original_embed = self.message.embeds[0]
+            embed = discord.Embed.from_dict(original_embed.to_dict())
+            # overwrite description with full prompt text
+            full_prompt = self.prompt_text.replace("\n\n", "\n")
+            embed.description = f"🔮 Prompt:\n{full_prompt}"
+            neg_prompt = self.variant.get("negative_prompt")
+            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        contest_msg = await channel.send(content=mention_text, files=files)
+        # Single post: content + embed + files
+        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
+        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
+        # Add contest reactions (1,2,3)
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
             except Exception:
                 pass
 
+        # Disable submit button (prevent duplicate submits)
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except Exception:
-            await interaction.followup.send("✅ Successfully submitted!", ephemeral=True)
+            try:
+                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except Exception:
+                pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -405,6 +419,7 @@ class PostGenerationView(discord.ui.View):
                         )
                         return
 
+                    # open modal with previous inputs (reuse prompt)
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
@@ -439,12 +454,15 @@ class VeniceView(discord.ui.View):
             is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
             category_id = interaction.channel.category.id if interaction.channel.category else None
             hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+
             if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
                 await interaction.response.send_message(
-                    f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True
+                    f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic models are for all)",
+                    ephemeral=True
                 )
                 return
-            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip=is_vip))
+
+            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip))
         return callback
 
 # ---------------- Cog ----------------
@@ -453,25 +471,37 @@ class VeniceCog(commands.Cog):
         self.bot = bot
         self.session = aiohttp.ClientSession()
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        print(f"✅ VeniceCog loaded. Logged in as {self.bot.user}")
-        for guild in self.bot.guilds:
-            for channel in guild.text_channels:
-                if channel.category and channel.category.id in VARIANT_MAP:
-                    await self.ensure_button_message_static(channel, self.session)
+    def cog_unload(self):
+        asyncio.create_task(self.session.close())
+
+    async def ensure_button_message(self, channel: discord.TextChannel):
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+        view = VeniceView(self.session, channel)
+        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
-        async for message in channel.history(limit=10):
-            if message.author.bot and message.content.startswith("🎨 Choose your model:"):
-                return
-
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
         view = VeniceView(session, channel)
-        try:
-            await channel.send("🎨 Choose your model:", view=view)
-        except discord.Forbidden:
-            print(f"⚠️ No permission to send to {channel.name}")
+        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
-async def setup(bot):
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                if channel.category and channel.category.id in VARIANT_MAP:
+                    await self.ensure_button_message(channel)
+
+# ---------------- Setup ----------------
+async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
