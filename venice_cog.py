@@ -338,14 +338,14 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320  # Contest channel
-        role_id = 1419024270201454684
+        channel_id = 1419442005196668938  # Target channel
+        role_id = 1419024270201454684    # Role ID that should be pinged
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
-            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
+            await interaction.response.send_message("❌ Target channel not found!", ephemeral=True)
             return
 
-        # Copy attachments (images)
+        # Save all attachments
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -353,40 +353,29 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
-        # Take embed and ensure prompt is FULL
-        embed = None
-        if self.message.embeds:
-            original_embed = self.message.embeds[0]
-            embed = discord.Embed.from_dict(original_embed.to_dict())
-            # overwrite description with full prompt text
-            full_prompt = self.prompt_text.replace("\n\n", "\n")
-            embed.description = f"🔮 Prompt:\n{full_prompt}"
-            neg_prompt = self.variant.get("negative_prompt")
-            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
+        # 🆕 Build the message text
+        today = datetime.now().strftime("%Y-%m-%d %H:%M")
+        mention_text = f"<@&{role_id}> {interaction.user.mention} has submitted\n🕒 {today}"
 
-        # Single post: content + embed + files
-        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
+        # Send message with mentions + image as attachment
+        contest_msg = await channel.send(content=mention_text, files=files)
 
-        # Add contest reactions (1,2,3)
+        # Add reactions
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
             except Exception:
                 pass
 
-        # Disable submit button (prevent duplicate submits)
+        # Disable the button so it cannot be submitted multiple times
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except Exception:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except Exception:
-                pass
+            await interaction.followup.send("✅ Successfully submitted!", ephemeral=True)
+
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
