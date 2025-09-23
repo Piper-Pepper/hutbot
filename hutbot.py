@@ -50,10 +50,12 @@ async def main():
             "hut_dm",
             "hut_dm_app",
             # "hutkick",
-            "venice_cog",
+            "venice_generation",
+            "venice_control",
             "gather",
             "reset",
             "riddle",
+            "gather_contest",
             "riddle_post"
         ]
 
