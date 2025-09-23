@@ -137,15 +137,37 @@ class VeniceModal(discord.ui.Modal):
             placeholder=cfg_default
         )
 
+        # -------- Steps input ----------
+        max_steps = 50 if variant["model"] in ["lustify-sdxl", "hidream"] else 30
+        self.steps_value = discord.ui.TextInput(
+            label=f"Steps (1-{max_steps})",
+            style=discord.TextStyle.short,
+            required=False,
+            placeholder="25",
+            default="25"
+        )
+
+        self.max_steps = max_steps
+
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
+        self.add_item(self.steps_value)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             cfg_val = float(self.cfg_value.value)
         except:
             cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
+
+        try:
+            steps_val = int(self.steps_value.value)
+            if steps_val < 1:
+                steps_val = 1
+            elif steps_val > self.max_steps:
+                steps_val = self.max_steps
+        except:
+            steps_val = 25
 
         negative_prompt = self.negative_prompt.value.strip()
         if negative_prompt:
@@ -157,7 +179,8 @@ class VeniceModal(discord.ui.Modal):
         variant = {
             **self.variant,
             "cfg_scale": cfg_val,
-            "negative_prompt": negative_prompt
+            "negative_prompt": negative_prompt,
+            "steps": steps_val
         }
 
         await interaction.response.send_message(
@@ -282,6 +305,9 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
+
+# ---------------- Post Generation View ----------------
+# ... der Rest bleibt unverändert, wie in deinem Originalcode, nur der VeniceModal wurde angepasst.
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
