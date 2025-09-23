@@ -367,34 +367,28 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Bilder als Attachment kopieren
-        files = []
-        for attachment in self.message.attachments:
-            fp = io.BytesIO()
-            await attachment.save(fp)
-            fp.seek(0)
-            files.append(discord.File(fp, filename=attachment.filename))
+        # Nur die URL des ersten Attachments verwenden
+        image_url = self.message.attachments[0].url if self.message.attachments else None
 
-        # Minimal-Embed erstellen: nur Autor + Avatar + Datum
-        today = datetime.now().strftime("%Y-%m-%d")
+        # Embed erstellen: Autor + Avatar + Datum + Bild-URL
         embed = discord.Embed(color=discord.Color.blurple())
+        today = datetime.now().strftime("%Y-%m-%d")
         embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
-        # Link zur Originalnachricht über dem Bild
+        if image_url:
+            embed.set_image(url=image_url)
+
+        # Link zur Originalnachricht in die Description
         original_link = self.message.jump_url
         embed.description = f"[View original post]({original_link})"
 
-        # Mentions
-        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-
         # Nachricht senden
-        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
+        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
+        contest_msg = await channel.send(content=mention_text, embed=embed)
 
         # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
-            try:
-                await contest_msg.add_reaction(emoji)
-            except:
-                pass
+            try: await contest_msg.add_reaction(emoji)
+            except: pass
 
         # Submit-Button deaktivieren
         for child in self.children:
@@ -405,8 +399,7 @@ class PostGenerationView(discord.ui.View):
         except:
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except:
-                pass
+            except: pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
