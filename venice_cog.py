@@ -367,20 +367,18 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Nur die URL des ersten Attachments verwenden
-        image_url = self.message.attachments[0].url if self.message.attachments else None
-
-        # Embed für Contest-Channel: Kopie vom Original, aber ohne Prompt
+        # ---------------- Contest-Channel Embed ----------------
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
 
-            # Prompt und NegPrompt entfernen
+            # Prompt/NegPrompt entfernen, nur Link zur Originalnachricht
             embed.description = f"[View original post]({self.message.jump_url})"
 
-            # Footer bleibt wie im Original (nicht ändern!)
-            # Das Footer-Update kommt separat für den Original-Post
+            # Footer unverändert lassen (so wie im Original)
+            if original_embed.footer:
+                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
 
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed)
@@ -390,12 +388,13 @@ class PostGenerationView(discord.ui.View):
             try: await contest_msg.add_reaction(emoji)
             except: pass
 
-        # Original-Post Footer ergänzen um 🏅 In Contest
+        # ---------------- Original-Post aktualisieren ----------------
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            original_footer = original_embed.footer.text if original_embed.footer else ""
-            new_footer = f"{original_footer} 🏅 In Contest" if original_footer else "🏅 In Contest"
-            original_embed.set_footer(text=new_footer, icon_url=original_embed.footer.icon_url if original_embed.footer else None)
+            new_description = original_embed.description or ""
+            # Neue Zeile über dem Bild
+            new_description = "🏅 In Contest\n" + new_description
+            original_embed.description = new_description
             try:
                 await self.message.edit(embed=original_embed)
             except:
@@ -411,7 +410,6 @@ class PostGenerationView(discord.ui.View):
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
             except: pass
-
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
