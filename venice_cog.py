@@ -237,14 +237,19 @@ class AspectRatioView(discord.ui.View):
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
 
-        progress_msg = await interaction.followup.send("⏳ Generating image... 0%", ephemeral=True)
+        progress_text = (
+            f"<:01pepper_icon:1377636862847619213> Generating image for **{self.author.display_name}** "
+            f"with **{self.variant['label']}** "
+            f"(Aspect ratio: {ratio_name} | CFG: {cfg} | Steps: {steps})... 0%"
+        )
+        progress_msg = await interaction.followup.send(progress_text, ephemeral=True)
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
             await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.25 + prompt_factor * 0.9)
             try:
                 progress_text = (
-                    f"⏳ Generating image for **{self.author.display_name}** "
+                    f"<:01pepper_icon:1377636862847619213> Generating image for **{self.author.display_name}** "
                     f"with **{self.variant['label']}** "
                     f"(Aspect ratio: {ratio_name} | CFG: {cfg} | Steps: {steps})... {i*10}%"
                 )
