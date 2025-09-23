@@ -367,38 +367,40 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        files = []
-        for attachment in self.message.attachments:
-            fp = io.BytesIO()
-            await attachment.save(fp)
-            fp.seek(0)
-            files.append(discord.File(fp, filename=attachment.filename))
-
+        # Kopieren des Original-Embeds
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
-            full_prompt = self.prompt_text.replace("\n\n", "\n")
-            embed.description = f"🔮 Prompt:\n{full_prompt}"
-            neg_prompt = self.variant.get("negative_prompt")
-            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
+            # Description ersetzen: nur Link zum Original
+            embed.description = f"[View original post]({self.message.jump_url})"
+
+        # Nachricht im Contest-Channel senden
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
+        contest_msg = await channel.send(content=mention_text, embed=embed)
 
+        # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
-            try: await contest_msg.add_reaction(emoji)
-            except: pass
+            try:
+                await contest_msg.add_reaction(emoji)
+            except:
+                pass
 
+        # Submit-Button deaktivieren
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
+
+        # Originalnachricht aktualisieren
         try:
             await interaction.response.edit_message(view=self)
         except:
-            try: await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except: pass
+            try:
+                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except:
+                pass
+
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
