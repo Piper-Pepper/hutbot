@@ -25,13 +25,14 @@ DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, wat
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
+# ---------------- Model Config ----------------
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 6.0, "steps": 30},
-    "flux-dev-uncensored": {"cfg_scale": 6.0, "steps": 30},
-    "venice-sd35": {"cfg_scale": 6.0, "steps": 30},  # früher stable-diffusion-3.5
-    "flux-dev": {"cfg_scale": 6.5, "steps": 30},
-    "hidream": {"cfg_scale": 6.5, "steps": 30},
-    "wai-Illustrious": {"cfg_scale": 8.0, "steps": 30},
+    "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
+    "flux-dev-uncensored": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 30},
+    "venice-sd35": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 30},
+    "flux-dev": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 30},
+    "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
+    "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 25, "max_steps": 30},
 }
 
 VARIANT_MAP = {
@@ -39,12 +40,12 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl"},
         {"label": "FluxUnc", "model": "flux-dev-uncensored"},
         {"label": "Wai (Anime)", "model": "wai-Illustrious"},
-        {"label": "HiDream", "model": "hidream"},  # jetzt auch NSFW
+        {"label": "HiDream", "model": "hidream"},
     ],
     SFW_CATEGORY_ID: [
         {"label": "Venice SD35", "model": "venice-sd35"},
         {"label": "Flux", "model": "flux-dev"},
-        {"label": "HiDream", "model": "hidream"},  # bleibt auch hier
+        {"label": "HiDream", "model": "hidream"},
     ]
 }
 
@@ -76,7 +77,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         "prompt": prompt,
         "width": width,
         "height": height,
-        "steps": steps or CFG_REFERENCE[variant["model"]]["steps"],
+        "steps": steps or CFG_REFERENCE[variant["model"]]["default_steps"],
         "cfg_scale": cfg_scale or CFG_REFERENCE[variant["model"]]["cfg_scale"],
         "negative_prompt": negative_prompt or DEFAULT_NEGATIVE_PROMPT,
         "safe_mode": False,
@@ -109,14 +110,12 @@ class VeniceModal(discord.ui.Modal):
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=1000,
-            default=prompt_value,
-            placeholder="Describe your image. Be creative for best results!" if not prompt_value else None
+            default=prompt_value
         )
 
         neg_value = previous_inputs.get("negative_prompt", "")
-        if neg_value:
-            if not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
-                neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
+        if neg_value and not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
+            neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
         else:
             neg_value = DEFAULT_NEGATIVE_PROMPT
 
@@ -125,8 +124,7 @@ class VeniceModal(discord.ui.Modal):
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=300,
-            default=neg_value,
-            placeholder=None
+            default=neg_value
         )
 
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
@@ -137,17 +135,15 @@ class VeniceModal(discord.ui.Modal):
             placeholder=cfg_default
         )
 
-        # -------- Steps input ----------
-        max_steps = 50 if variant["model"] in ["lustify-sdxl", "hidream"] else 30
+        # Steps mit max aus Config
+        self.max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
         self.steps_value = discord.ui.TextInput(
-            label=f"Steps (1-{max_steps})",
+            label=f"Steps (1-{self.max_steps})",
             style=discord.TextStyle.short,
             required=False,
-            placeholder="25",
-            default="25"
+            placeholder=f"{CFG_REFERENCE[variant['model']]['default_steps']} (this model allows max {self.max_steps} steps; more steps = longer render)",
+            default=str(CFG_REFERENCE[variant['model']]['default_steps'])
         )
-
-        self.max_steps = max_steps
 
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
@@ -162,18 +158,14 @@ class VeniceModal(discord.ui.Modal):
 
         try:
             steps_val = int(self.steps_value.value)
-            if steps_val < 1:
-                steps_val = 1
-            elif steps_val > self.max_steps:
-                steps_val = self.max_steps
+            steps_val = max(1, min(steps_val, self.max_steps))
         except:
-            steps_val = 25
+            steps_val = CFG_REFERENCE[self.variant['model']]['default_steps']
 
         negative_prompt = self.negative_prompt.value.strip()
-        if negative_prompt:
-            if not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
-                negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
-        else:
+        if negative_prompt and not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
+            negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
+        elif not negative_prompt:
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
         variant = {
@@ -185,16 +177,13 @@ class VeniceModal(discord.ui.Modal):
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(
-                self.session,
-                variant,
-                self.prompt.value,
-                self.hidden_suffix,
-                interaction.user,
-                self.is_vip
-            ),
+            view=AspectRatioView(self.session, variant, self.prompt.value, self.hidden_suffix, interaction.user, self.is_vip),
             ephemeral=True
         )
+
+# ---------------- AspectRatioView & PostGenerationView ----------------
+# ... hier bleibt der Code so wie er ist, nur die Steps-Logik im Modal nutzt nun default/max aus CFG_REFERENCE
+# Submit-Button-Feature in PostGenerationView bleibt erhalten
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
