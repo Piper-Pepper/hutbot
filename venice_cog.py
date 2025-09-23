@@ -20,7 +20,7 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926
-SPECIAL_ROLE_ID = 1375147276413964408  # nur diese Rolle darf den neuen Button benutzen
+SPECIAL_ROLE_ID = 1375147276413964408  # für High-Res Button
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
@@ -54,8 +54,8 @@ CUSTOM_REACTIONS = [
     "<:01sthumb:1387086056498921614>",
     "<:01smile_piper:1387083454575022213>",
     "<:02No:1347536448831754383>",
-    "<:011:1346549711817146400>", 
-    "<:011pump:1346549688836296787>", 
+    "<:011:1346549711817146400>",
+    "<:011pump:1346549688836296787>",
 ]
 
 CHANNEL_REACTIONS = {
@@ -105,17 +105,14 @@ class VeniceModal(discord.ui.Modal):
         self.is_vip = is_vip
         previous_inputs = previous_inputs or {}
 
-        # Prompt
-        prompt_value = previous_inputs.get("prompt", "")
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=1000,
-            default=prompt_value
+            default=previous_inputs.get("prompt", "")
         )
 
-        # Negative Prompt
         neg_value = previous_inputs.get("negative_prompt", "")
         if neg_value and not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
             neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
@@ -130,7 +127,6 @@ class VeniceModal(discord.ui.Modal):
             default=neg_value
         )
 
-        # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG (> stricter AI adherence)",
@@ -139,7 +135,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=cfg_default
         )
 
-        # Steps
         self.max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
         previous_steps = previous_inputs.get("steps")
         self.steps_value = discord.ui.TextInput(
@@ -150,7 +145,6 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None else ""
         )
 
-        # Items hinzufügen
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
@@ -181,7 +175,6 @@ class VeniceModal(discord.ui.Modal):
             "steps": steps_val
         }
 
-        # Speichern für eventuelles Re-use
         self.previous_inputs = {
             "prompt": self.prompt.value,
             "negative_prompt": negative_prompt,
@@ -195,7 +188,6 @@ class VeniceModal(discord.ui.Modal):
         )
 
 # ---------------- Aspect Ratio View ----------------
-
 class AspectRatioView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip):
         super().__init__(timeout=None)
@@ -206,57 +198,51 @@ class AspectRatioView(discord.ui.View):
         self.author = author
         self.is_vip = is_vip
 
-        # Standard Buttons
+        # Buttons
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
         btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
-        # Neuer spezieller Button
-        btn_1_1_hi = discord.ui.Button(label="⏹️1:1 (hi)", style=discord.ButtonStyle.success)
+        btn_hi = discord.ui.Button(label="🟥1:1 (⚡Hi)", style=discord.ButtonStyle.primary)
 
         # Callbacks
         btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
         btn_16_9.callback = self.make_callback(1280, 816, "16:9")
         btn_9_16.callback = self.make_callback(816, 1280, "9:16")
-        btn_1_1_hi.callback = self.make_special_callback(1280, 1280, "1:1 (hi)", SPECIAL_ROLE_ID)
+        btn_hi.callback = self.make_special_callback(1280, 1280, "1:1 Hi-Res", SPECIAL_ROLE_ID)
 
-        # Buttons hinzufügen
-        for btn in [btn_1_1, btn_16_9, btn_9_16, btn_1_1_hi]:
-            self.add_item(btn)
+        for b in [btn_1_1, btn_16_9, btn_9_16, btn_hi]:
+            self.add_item(b)
 
     def make_callback(self, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
-            await self.generate_image(interaction, width, height, ratio_name)
-        return callback
-
-    def make_special_callback(self, width, height, ratio_name, required_role_id):
-        async def callback(interaction: discord.Interaction):
-            member = interaction.user
-            if not any(role.id == required_role_id for role in member.roles):
+            if not self.is_vip and ratio_name in ["16:9", "9:16"]:
                 await interaction.response.send_message(
-                    f"❌ You need <@&{required_role_id}> to use this aspect ratio!", ephemeral=True
+                    f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
+                    ephemeral=True
                 )
                 return
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
 
-    async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
-        if not self.is_vip and ratio_name in ["16:9", "9:16"]:
-            await interaction.response.send_message(
-                f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
-                ephemeral=True
-            )
-            return
+    def make_special_callback(self, width, height, ratio_name, role_id):
+        async def callback(interaction: discord.Interaction):
+            if not any(r.id == role_id for r in interaction.user.roles):
+                await interaction.response.send_message(f"❌ You need <@&{role_id}> to use this high-res option!", ephemeral=True)
+                return
+            await self.generate_image(interaction, width, height, ratio_name)
+        return callback
 
+    async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
         await interaction.response.defer(ephemeral=True)
 
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
 
-        progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
+        progress_msg = await interaction.followup.send("⏳ Generating image... 0%", ephemeral=True)
 
-        prompt_factor = len(self.prompt_text) / 1000
+        prompt_factor = len(self.prompt_text)/1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.25 + prompt_factor * 0.9)
+            await asyncio.sleep(0.9 + steps*0.04 + cfg*0.25 + prompt_factor*0.9)
             try:
                 await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
             except:
@@ -279,10 +265,9 @@ class AspectRatioView(discord.ui.View):
             self.stop()
             return
 
-        filename = make_safe_filename(self.prompt_text)
         fp = io.BytesIO(img_bytes)
         fp.seek(0)
-        discord_file = discord.File(fp, filename=filename)
+        discord_file = discord.File(fp, filename=make_safe_filename(self.prompt_text))
 
         today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
@@ -296,19 +281,16 @@ class AspectRatioView(discord.ui.View):
         if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        embed.set_image(url=f"attachment://{filename}")
+        embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
         tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
-
         reactions = CHANNEL_REACTIONS.get(interaction.channel.id, CUSTOM_REACTIONS)
         for emoji in reactions:
-            try:
-                await msg.add_reaction(emoji)
-            except:
-                pass
+            try: await msg.add_reaction(emoji)
+            except: pass
 
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
@@ -320,7 +302,6 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
-
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
@@ -345,7 +326,6 @@ class PostGenerationView(discord.ui.View):
         del_reuse_btn.callback = self.delete_reuse_callback
         self.add_item(del_reuse_btn)
 
-        # Submit Button only in SFW category
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
             submit_btn = discord.ui.Button(label="🏆🖼️ Submit for competition", style=discord.ButtonStyle.secondary, row=1)
             submit_btn.callback = self.post_gallery_callback
@@ -358,21 +338,17 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def delete_callback(self, interaction: discord.Interaction):
-        try:
-            await self.message.delete()
-        except:
-            pass
+        try: await self.message.delete()
+        except: pass
         await interaction.response.send_message("✅ Post deleted", ephemeral=True)
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
-        try:
-            await self.message.delete()
-        except:
-            pass
+        try: await self.message.delete()
+        except: pass
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320  # Contest channel
+        channel_id = 1418956422086922320
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
@@ -400,10 +376,8 @@ class PostGenerationView(discord.ui.View):
         contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
-            try:
-                await contest_msg.add_reaction(emoji)
-            except:
-                pass
+            try: await contest_msg.add_reaction(emoji)
+            except: pass
 
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
@@ -411,10 +385,8 @@ class PostGenerationView(discord.ui.View):
         try:
             await interaction.response.edit_message(view=self)
         except:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except:
-                pass
+            try: await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except: pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -432,28 +404,26 @@ class PostGenerationView(discord.ui.View):
                 category_id = interaction.channel.category.id if interaction.channel.category else None
                 variants = VARIANT_MAP.get(category_id, [])
 
-                for v in variants:
+                for idx, v in enumerate(variants):
                     btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.success)
-                    btn.callback = self.make_model_callback(v)
+                    btn.callback = self.make_model_callback(v, idx)
                     self.add_item(btn)
 
-            def make_model_callback(self, variant):
+            def make_model_callback(self, variant, idx):
                 async def callback(inner_interaction: discord.Interaction):
                     member = inner_interaction.user
                     is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-                    if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
-                        await inner_interaction.response.send_message(
-                            f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True
-                        )
-                        return
 
-                    # Pass previous inputs including steps
+                    # SFW Modelle: nur erstes frei, rest VIP
+                    category_id = inner_interaction.channel.category.id if inner_interaction.channel.category else None
+                    if category_id == SFW_CATEGORY_ID and idx > 0 and not is_vip:
+                        await inner_interaction.response.send_message(f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True)
+                        return
                     previous_inputs = {
                         "prompt": self.prompt_text,
                         "negative_prompt": self.variant.get("negative_prompt", ""),
                         "steps": self.variant.get("steps")
                     }
-
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
@@ -489,12 +459,15 @@ class VeniceView(discord.ui.View):
             category_id = interaction.channel.category.id if interaction.channel.category else None
             hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
 
-            if not is_vip and variant["model"] not in ["lustify-sdxl", "stable-diffusion-3.5"]:
-                await interaction.response.send_message(
-                    f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic models are for all)",
-                    ephemeral=True
-                )
-                return
+            # SFW: nur erstes Modell frei
+            if category_id == SFW_CATEGORY_ID:
+                variants = VARIANT_MAP.get(category_id, [])
+                if variant != variants[0] and not is_vip:
+                    await interaction.response.send_message(
+                        f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic models are for all)",
+                        ephemeral=True
+                    )
+                    return
 
             await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip))
         return callback
@@ -511,10 +484,8 @@ class VeniceCog(commands.Cog):
     async def ensure_button_message(self, channel: discord.TextChannel):
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                try: await msg.delete()
+                except: pass
         view = VeniceView(self.session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
@@ -522,10 +493,8 @@ class VeniceCog(commands.Cog):
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
         async for msg in channel.history(limit=10):
             if msg.components and not msg.embeds and not msg.attachments:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                try: await msg.delete()
+                except: pass
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
 
