@@ -391,10 +391,9 @@ class PostGenerationView(discord.ui.View):
         # ---------------- Original-Post aktualisieren ----------------
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            new_description = original_embed.description or ""
-            # Neue Zeile über dem Bild
-            new_description = "🏅 In Contest\n" + new_description
-            original_embed.description = new_description
+            old_desc = original_embed.description or ""
+            # Zeile über dem Bild einfügen
+            original_embed.description = f"🏅 In Contest\n{old_desc}"
             try:
                 await self.message.edit(embed=original_embed)
             except:
