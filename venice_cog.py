@@ -367,38 +367,37 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Nur die URL des ersten Attachments verwenden
-        image_url = self.message.attachments[0].url if self.message.attachments else None
+        files = []
+        for attachment in self.message.attachments:
+            fp = io.BytesIO()
+            await attachment.save(fp)
+            fp.seek(0)
+            files.append(discord.File(fp, filename=attachment.filename))
 
-        # Embed erstellen: Autor + Avatar + Datum + Bild-URL
-        embed = discord.Embed(color=discord.Color.blurple())
-        today = datetime.now().strftime("%Y-%m-%d")
-        embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
-        if image_url:
-            embed.set_image(url=image_url)
+        embed = None
+        if self.message.embeds:
+            original_embed = self.message.embeds[0]
+            embed = discord.Embed.from_dict(original_embed.to_dict())
+            full_prompt = self.prompt_text.replace("\n\n", "\n")
+            embed.description = f"🔮 Prompt:\n{full_prompt}"
+            neg_prompt = self.variant.get("negative_prompt")
+            if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+                embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        # Link zur Originalnachricht in die Description
-        original_link = self.message.jump_url
-        embed.description = f"[View original post]({original_link})"
-
-        # Nachricht senden
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        contest_msg = await channel.send(content=mention_text, embed=embed)
+        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
-        # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try: await contest_msg.add_reaction(emoji)
             except: pass
 
-        # Submit-Button deaktivieren
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            try: await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
             except: pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
