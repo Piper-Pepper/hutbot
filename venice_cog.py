@@ -380,7 +380,7 @@ class PostGenerationView(discord.ui.View):
             if original_embed.footer:
                 embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
 
-        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
+        mention_text = f"🎖️<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed)
 
         # Reactions hinzufügen
