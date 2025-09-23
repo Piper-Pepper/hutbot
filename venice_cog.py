@@ -20,6 +20,7 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 NSFW_CATEGORY_ID = 1415769711052062820
 SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926
+SPECIAL_ROLE_ID = 1375147276413964408  # nur diese Rolle darf den neuen Button benutzen
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
@@ -194,6 +195,7 @@ class VeniceModal(discord.ui.Modal):
         )
 
 # ---------------- Aspect Ratio View ----------------
+
 class AspectRatioView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip):
         super().__init__(timeout=None)
@@ -204,20 +206,36 @@ class AspectRatioView(discord.ui.View):
         self.author = author
         self.is_vip = is_vip
 
+        # Standard Buttons
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
         btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
+        # Neuer spezieller Button
+        btn_1_1_hi = discord.ui.Button(label="⏹️1:1 (hi)", style=discord.ButtonStyle.success)
 
+        # Callbacks
         btn_1_1.callback = self.make_callback(1280, 1280, "1:1")
         btn_16_9.callback = self.make_callback(1280, 816, "16:9")
         btn_9_16.callback = self.make_callback(816, 1280, "9:16")
+        btn_1_1_hi.callback = self.make_special_callback(1280, 1280, "1:1 (hi)", SPECIAL_ROLE_ID)
 
-        self.add_item(btn_1_1)
-        self.add_item(btn_16_9)
-        self.add_item(btn_9_16)
+        # Buttons hinzufügen
+        for btn in [btn_1_1, btn_16_9, btn_9_16, btn_1_1_hi]:
+            self.add_item(btn)
 
     def make_callback(self, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
+            await self.generate_image(interaction, width, height, ratio_name)
+        return callback
+
+    def make_special_callback(self, width, height, ratio_name, required_role_id):
+        async def callback(interaction: discord.Interaction):
+            member = interaction.user
+            if not any(role.id == required_role_id for role in member.roles):
+                await interaction.response.send_message(
+                    f"❌ You need <@&{required_role_id}> to use this aspect ratio!", ephemeral=True
+                )
+                return
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
 
@@ -302,6 +320,7 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
+
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
