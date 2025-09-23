@@ -104,6 +104,7 @@ class VeniceModal(discord.ui.Modal):
         self.is_vip = is_vip
         previous_inputs = previous_inputs or {}
 
+        # Prompt
         prompt_value = previous_inputs.get("prompt", "")
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
@@ -113,6 +114,7 @@ class VeniceModal(discord.ui.Modal):
             default=prompt_value
         )
 
+        # Negative Prompt
         neg_value = previous_inputs.get("negative_prompt", "")
         if neg_value and not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
             neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
@@ -127,6 +129,7 @@ class VeniceModal(discord.ui.Modal):
             default=neg_value
         )
 
+        # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG (> stricter AI adherence)",
@@ -135,16 +138,18 @@ class VeniceModal(discord.ui.Modal):
             placeholder=cfg_default
         )
 
-        # Steps mit max aus Config
+        # Steps
         self.max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
+        previous_steps = previous_inputs.get("steps")
         self.steps_value = discord.ui.TextInput(
             label=f"Steps (1-{self.max_steps})",
             style=discord.TextStyle.short,
             required=False,
-            placeholder=f"{CFG_REFERENCE[variant['model']]['default_steps']} (this model allows max {self.max_steps} steps; more steps = longer render)",
-            default=str(CFG_REFERENCE[variant['model']]['default_steps'])
+            placeholder=f"{CFG_REFERENCE[variant['model']]['default_steps']} (more steps takes longer to AI render)",
+            default=str(previous_steps) if previous_steps is not None else ""
         )
 
+        # Items hinzufügen
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
@@ -175,15 +180,18 @@ class VeniceModal(discord.ui.Modal):
             "steps": steps_val
         }
 
+        # Speichern für eventuelles Re-use
+        self.previous_inputs = {
+            "prompt": self.prompt.value,
+            "negative_prompt": negative_prompt,
+            "steps": steps_val
+        }
+
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
             view=AspectRatioView(self.session, variant, self.prompt.value, self.hidden_suffix, interaction.user, self.is_vip),
             ephemeral=True
         )
-
-# ---------------- AspectRatioView & PostGenerationView ----------------
-# ... hier bleibt der Code so wie er ist, nur die Steps-Logik im Modal nutzt nun default/max aus CFG_REFERENCE
-# Submit-Button-Feature in PostGenerationView bleibt erhalten
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
@@ -224,7 +232,7 @@ class AspectRatioView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         cfg = self.variant["cfg_scale"]
-        steps = self.variant.get("steps", int(cfg))
+        steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
 
         progress_msg = await interaction.followup.send(f"⏳ Generating image... 0%", ephemeral=True)
 
@@ -272,7 +280,7 @@ class AspectRatioView(discord.ui.View):
 
         embed.set_image(url=f"attachment://{filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', 30)}"
+        tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
@@ -296,9 +304,6 @@ class AspectRatioView(discord.ui.View):
         self.stop()
 
 # ---------------- Post Generation View ----------------
-# ... der Rest bleibt unverändert, wie in deinem Originalcode, nur der VeniceModal wurde angepasst.
-
-# ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, message):
         super().__init__(timeout=None)
@@ -313,7 +318,6 @@ class PostGenerationView(discord.ui.View):
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
 
-        # Delete Buttons (work reliably)
         del_btn = discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red)
         del_btn.callback = self.delete_callback
         self.add_item(del_btn)
@@ -335,20 +339,17 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def delete_callback(self, interaction: discord.Interaction):
-        # Delete the original posted image message
         try:
             await self.message.delete()
-        except Exception:
+        except:
             pass
         await interaction.response.send_message("✅ Post deleted", ephemeral=True)
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
-        # Delete the original posted image message, then open reuse modal flow
         try:
             await self.message.delete()
-        except Exception:
+        except:
             pass
-        # show_reuse_models will use interaction.response.send_message, so call it and return
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
@@ -359,7 +360,6 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Copy attachments (images)
         files = []
         for attachment in self.message.attachments:
             fp = io.BytesIO()
@@ -367,39 +367,34 @@ class PostGenerationView(discord.ui.View):
             fp.seek(0)
             files.append(discord.File(fp, filename=attachment.filename))
 
-        # Take embed and ensure prompt is FULL
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
-            # overwrite description with full prompt text
             full_prompt = self.prompt_text.replace("\n\n", "\n")
             embed.description = f"🔮 Prompt:\n{full_prompt}"
             neg_prompt = self.variant.get("negative_prompt")
             if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
                 embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
-        # Single post: content + embed + files
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
-        # Add contest reactions (1,2,3)
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
-            except Exception:
+            except:
                 pass
 
-        # Disable submit button (prevent duplicate submits)
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
-        except Exception:
+        except:
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except Exception:
+            except:
                 pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
@@ -433,13 +428,19 @@ class PostGenerationView(discord.ui.View):
                         )
                         return
 
-                    # open modal with previous inputs (reuse prompt)
+                    # Pass previous inputs including steps
+                    previous_inputs = {
+                        "prompt": self.prompt_text,
+                        "negative_prompt": self.variant.get("negative_prompt", ""),
+                        "steps": self.variant.get("steps")
+                    }
+
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
                         self.hidden_suffix,
                         is_vip=is_vip,
-                        previous_inputs={"prompt": self.prompt_text, "negative_prompt": self.variant.get("negative_prompt", "")}
+                        previous_inputs=previous_inputs
                     ))
                 return callback
 
@@ -493,7 +494,7 @@ class VeniceCog(commands.Cog):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
-                except Exception:
+                except:
                     pass
         view = VeniceView(self.session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
@@ -504,7 +505,7 @@ class VeniceCog(commands.Cog):
             if msg.components and not msg.embeds and not msg.attachments:
                 try:
                     await msg.delete()
-                except Exception:
+                except:
                     pass
         view = VeniceView(session, channel)
         await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
