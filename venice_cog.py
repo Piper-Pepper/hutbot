@@ -27,7 +27,8 @@ NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
 # oben in der Funktion
-pepper = "<:01pepper_icon:1377636862847619213>"
+pepper = "<a:01pepper_icon:1377636862847619213>"
+
 
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
