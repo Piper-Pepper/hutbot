@@ -367,39 +367,40 @@ class PostGenerationView(discord.ui.View):
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Kopieren des Original-Embeds
+        # Nur die URL des ersten Attachments verwenden
+        image_url = self.message.attachments[0].url if self.message.attachments else None
+
+        # Embed erstellen: Autor + Avatar + Datum + Bild-URL
         embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
             embed = discord.Embed.from_dict(original_embed.to_dict())
 
-            # Description ersetzen: nur Link zum Original
+            # Prompt und NegPrompt entfernen
             embed.description = f"[View original post]({self.message.jump_url})"
 
-        # Nachricht im Contest-Channel senden
+            # Footer auf "🏅 In Contest" ändern, Icon kann bestehen bleiben
+            original_footer = original_embed.footer
+            footer_icon = original_footer.icon_url if original_footer else None
+            embed.set_footer(text="🏅 In Contest", icon_url=footer_icon)
+
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed)
 
         # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
-            try:
-                await contest_msg.add_reaction(emoji)
-            except:
-                pass
+            try: await contest_msg.add_reaction(emoji)
+            except: pass
 
         # Submit-Button deaktivieren
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
-
-        # Originalnachricht aktualisieren
         try:
             await interaction.response.edit_message(view=self)
         except:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except:
-                pass
+            try: await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except: pass
 
 
     async def show_reuse_models(self, interaction: discord.Interaction):
