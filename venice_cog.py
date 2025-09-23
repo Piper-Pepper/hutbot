@@ -305,7 +305,7 @@ class AspectRatioView(discord.ui.View):
             except: pass
 
         await interaction.followup.send(
-            content=f"🚨{interaction.user.mention}, would you like to use your prompts again? You can tweak them, if you like...",
+            content=f"🚨{interaction.user.mention}, re-use & edit your prompt?",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg),
             ephemeral=True
         )
