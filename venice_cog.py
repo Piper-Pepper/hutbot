@@ -217,7 +217,7 @@ class AspectRatioView(discord.ui.View):
         async def callback(interaction: discord.Interaction):
             if not self.is_vip and ratio_name in ["16:9", "9:16"]:
                 await interaction.response.send_message(
-                    f"❌ You need <@&{VIP_ROLE_ID}> to use this aspect ratio! 1:1 works for all.",
+                    f"❌ You need <@&{VIP_ROLE_ID}> to use this option",
                     ephemeral=True
                 )
                 return
@@ -447,7 +447,7 @@ class PostGenerationView(discord.ui.View):
                 return callback
 
         await interaction.response.send_message(
-            f"{interaction.user.mention}, which model do you want to use with your re-used prompt?",
+            f"{interaction.user.mention}, which model for the re-used prompt?",
             view=ReuseModelView(self.session, interaction.user, self.prompt_text, self.hidden_suffix, self.variant),
             ephemeral=True
         )
@@ -500,7 +500,7 @@ class VeniceCog(commands.Cog):
                 try: await msg.delete()
                 except: pass
         view = VeniceView(self.session, channel)
-        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
+        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
@@ -509,7 +509,7 @@ class VeniceCog(commands.Cog):
                 try: await msg.delete()
                 except: pass
         view = VeniceView(session, channel)
-        await channel.send("💡 Click a button to start generating a 🖼️**NEW** image!", view=view)
+        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
 
     @commands.Cog.listener()
     async def on_ready(self):
