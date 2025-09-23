@@ -202,7 +202,7 @@ class AspectRatioView(discord.ui.View):
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
         btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
-        btn_hi = discord.ui.Button(label="🟥1:1 (⚡Hi)", style=discord.ButtonStyle.primary)
+        btn_hi = discord.ui.Button(label="🟥1:1 (⚡)", style=discord.ButtonStyle.success)
 
         # Callbacks
         btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
