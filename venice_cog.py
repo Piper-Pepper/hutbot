@@ -434,8 +434,9 @@ class PostGenerationView(discord.ui.View):
                     previous_inputs = {
                         "prompt": self.prompt_text,
                         "negative_prompt": self.variant.get("negative_prompt", ""),
-                        "steps": self.variant.get("steps")
+                        "steps": CFG_REFERENCE[variant["model"]]["default_steps"]  # immer Standard
                     }
+
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
