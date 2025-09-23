@@ -177,8 +177,7 @@ class VeniceModal(discord.ui.Modal):
 
         self.previous_inputs = {
             "prompt": self.prompt.value,
-            "negative_prompt": negative_prompt,
-            "steps": steps_val
+            "negative_prompt": negative_prompt
         }
 
         await interaction.response.send_message(
