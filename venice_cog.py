@@ -239,13 +239,19 @@ class AspectRatioView(discord.ui.View):
 
         progress_msg = await interaction.followup.send("⏳ Generating image... 0%", ephemeral=True)
 
-        prompt_factor = len(self.prompt_text)/1000
+        prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps*0.04 + cfg*0.25 + prompt_factor*0.9)
+            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.25 + prompt_factor * 0.9)
             try:
-                await progress_msg.edit(content=f"⏳ Generating image... {i*10}%")
+                progress_text = (
+                    f"⏳ Generating image for **{self.author.display_name}** "
+                    f"with **{self.variant['label']}** "
+                    f"(Aspect ratio: {ratio_name} | CFG: {cfg} | Steps: {steps})... {i*10}%"
+                )
+                await progress_msg.edit(content=progress_text)
             except:
                 pass
+
 
         full_prompt = self.prompt_text + self.hidden_suffix
         if full_prompt and not full_prompt[0].isalnum():
