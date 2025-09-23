@@ -26,6 +26,9 @@ DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, wat
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
+# oben in der Funktion
+pepper = "<:01pepper_icon:1377636862847619213>"
+
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
@@ -237,19 +240,16 @@ class AspectRatioView(discord.ui.View):
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
 
-        progress_text = (
-            f"<:01pepper_icon:1377636862847619213> Generating image for **{self.author.display_name}** "
-            f"with **{self.variant['label']}** "
-            f"(Aspect ratio: {ratio_name} | CFG: {cfg} | Steps: {steps})... 0%"
-        )
-        progress_msg = await interaction.followup.send(progress_text, ephemeral=True)
+
+        # initiale Ephemeral-Message (ersetzt deine alte mit der Sanduhr)
+        progress_msg = await interaction.followup.send(f"{pepper} Generating image... starting", ephemeral=True)
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
             await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.25 + prompt_factor * 0.9)
             try:
                 progress_text = (
-                    f"<:01pepper_icon:1377636862847619213> Generating image for **{self.author.display_name}** "
+                    f"{pepper} Generating image for **{self.author.display_name}** "
                     f"with **{self.variant['label']}** "
                     f"(Aspect ratio: {ratio_name} | CFG: {cfg} | Steps: {steps})... {i*10}%"
                 )
