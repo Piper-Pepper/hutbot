@@ -391,18 +391,12 @@ class PostGenerationView(discord.ui.View):
         # ---------------- Original-Post aktualisieren ----------------
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            # Alte Beschreibung holen
-            old_desc = original_embed.description or ""
-            
-            # "🏅 In Contest" oben einfügen, Rest unverändert
-            if not old_desc.startswith("🏅 In Contest"):
-                original_embed.description = f"🏅 In Contest\n{old_desc}"
-
+            # Title auf "🏅 In Contest" setzen
+            original_embed.title = "🏅 In Contest"
             try:
                 await self.message.edit(embed=original_embed)
-            except Exception as e:
-                print(f"Failed to edit original embed: {e}")
-
+            except:
+                pass
 
         # Submit-Button deaktivieren
         for child in self.children:
@@ -414,6 +408,7 @@ class PostGenerationView(discord.ui.View):
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
             except: pass
+
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
