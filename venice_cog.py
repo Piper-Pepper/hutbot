@@ -360,52 +360,52 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320  # Contest Channel
-        role_id = 1419024270201454684     # Contest Role
+        channel_id = 1418956422086922320
+        role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
             await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
             return
 
-        # Nur das Bild kopieren (Attachment)
-        if not self.message.attachments:
-            await interaction.response.send_message("❌ Original post has no image!", ephemeral=True)
-            return
+        # Bilder als Attachment kopieren
+        files = []
+        for attachment in self.message.attachments:
+            fp = io.BytesIO()
+            await attachment.save(fp)
+            fp.seek(0)
+            files.append(discord.File(fp, filename=attachment.filename))
 
-        original_attachment = self.message.attachments[0]
-        fp = io.BytesIO()
-        await original_attachment.save(fp)
-        fp.seek(0)
-        discord_file = discord.File(fp, filename=original_attachment.filename)
+        # Minimal-Embed erstellen: nur Autor + Avatar + Datum
+        today = datetime.now().strftime("%Y-%m-%d")
+        embed = discord.Embed(color=discord.Color.blurple())
+        embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
+        # Link zur Originalnachricht über dem Bild
+        original_link = self.message.jump_url
+        embed.description = f"[View original post]({original_link})"
 
-        # Nachrichtentext mit Role/User Mention, Datum & Link zur Originalnachricht
-        timestamp = self.message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        msg_content = (
-            f"<@&{role_id}> {self.author.mention} has submitted!\n"
-            f"{timestamp}\n"
-            f"[View Original]({self.message.jump_url})"
-        )
+        # Mentions
+        mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
 
         # Nachricht senden
-        contest_msg = await channel.send(content=msg_content, file=discord_file)
+        contest_msg = await channel.send(content=mention_text, embed=embed, files=files)
 
-        # Voting-Reactions anhängen
+        # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
             try:
                 await contest_msg.add_reaction(emoji)
             except:
                 pass
 
-        # Disable Submit Button
+        # Submit-Button deaktivieren
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except:
-            try: 
+            try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except: 
+            except:
                 pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
