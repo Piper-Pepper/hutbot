@@ -141,7 +141,7 @@ class VeniceModal(discord.ui.Modal):
             label=f"Steps (1-{self.max_steps})",
             style=discord.TextStyle.short,
             required=False,
-            placeholder=f"{CFG_REFERENCE[variant['model']]['default_steps']} (more steps->longer timeto render)",
+            placeholder=f"{CFG_REFERENCE[variant['model']]['default_steps']} (more steps->AI needs more time to render)",
             default=str(previous_steps) if previous_steps is not None else ""
         )
 
@@ -388,24 +388,6 @@ class PostGenerationView(discord.ui.View):
             try: 
                 await contest_msg.add_reaction(emoji)
             except: 
-                pass
-
-        # ---------------- Original-Post Footer anpassen ----------------
-        if self.message.embeds:
-            original_embed = self.message.embeds[0]
-
-            # Footer prüfen
-            footer_text = original_embed.footer.text if original_embed.footer else ""
-            footer_icon = original_embed.footer.icon_url if original_embed.footer else None
-
-            # Footer anpassen, alten Text behalten und Contest 🏅 anhängen
-            new_footer_text = f"{footer_text} | Contest 🏅" if footer_text else "Contest 🏅"
-            original_embed.set_footer(text=new_footer_text, icon_url=footer_icon)
-
-            # Original-Embed aktualisieren
-            try:
-                await self.message.edit(embed=original_embed)
-            except:
                 pass
 
         # Submit-Button deaktivieren
