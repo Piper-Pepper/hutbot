@@ -368,33 +368,35 @@ class PostGenerationView(discord.ui.View):
             return
 
         # ---------------- Contest-Channel Embed ----------------
-        embed = None
+        contest_embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            embed = discord.Embed.from_dict(original_embed.to_dict())
+            contest_embed = discord.Embed.from_dict(original_embed.to_dict())
 
             # Prompt/NegPrompt entfernen, nur Link zur Originalnachricht
-            embed.description = f"[View original post]({self.message.jump_url})"
+            contest_embed.description = f"[View original post]({self.message.jump_url})"
 
-            # Footer unverändert lassen (so wie im Original)
+            # Footer unverändert lassen
             if original_embed.footer:
-                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
+                contest_embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
 
+        # Contest-Message abschicken
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        contest_msg = await channel.send(content=mention_text, embed=embed)
+        contest_msg = await channel.send(content=mention_text, embed=contest_embed)
 
         # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
-            try: await contest_msg.add_reaction(emoji)
-            except: pass
+            try: 
+                await contest_msg.add_reaction(emoji)
+            except: 
+                pass
 
         # ---------------- Original-Post aktualisieren ----------------
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            # Beschreibung aktualisieren: oben "🏅 In Contest"
-            original_description = original_embed.description or ""
-            if not original_description.startswith("🏅 In Contest"):
-                original_embed.description = "🏅 In Contest\n" + original_description
+            # "🏅 In Contest" über dem bestehenden Inhalt hinzufügen
+            new_description = f"🏅 In Contest\n{original_embed.description or ''}"
+            original_embed.description = new_description
             try:
                 await self.message.edit(embed=original_embed)
             except:
@@ -409,7 +411,8 @@ class PostGenerationView(discord.ui.View):
         except:
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except: pass
+            except: 
+                pass
 
 
     async def show_reuse_models(self, interaction: discord.Interaction):
