@@ -202,7 +202,7 @@ class AspectRatioView(discord.ui.View):
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
         btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
-        btn_hi = discord.ui.Button(label="🟥1:1 (⚡)", style=discord.ButtonStyle.success)
+        btn_hi = discord.ui.Button(label="🟥1:1⚡", style=discord.ButtonStyle.success)
 
         # Callbacks
         btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
@@ -283,7 +283,20 @@ class AspectRatioView(discord.ui.View):
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        tech_info = f"{self.variant['model']} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
+
+        # Modellname-Kürzel Map
+        MODEL_SHORT = {
+            "lustify-sdxl": "lustify",
+            "flux-dev-uncensored": "flux-unc",
+            "venice-sd35": "sd35",
+            "flux-dev": "flux",
+            "hidream": "hidreams",
+            "wai-Illustrious": "wai"
+        }
+
+        # Footer
+        short_model_name = MODEL_SHORT.get(self.variant['model'], self.variant['model'])
+        tech_info = f"{short_model_name} | {width}x{height} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
