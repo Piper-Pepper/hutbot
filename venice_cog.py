@@ -368,21 +368,20 @@ class PostGenerationView(discord.ui.View):
             return
 
         # ---------------- Contest-Channel Embed ----------------
-        contest_embed = None
+        embed = None
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            contest_embed = discord.Embed.from_dict(original_embed.to_dict())
+            embed = discord.Embed.from_dict(original_embed.to_dict())
 
             # Prompt/NegPrompt entfernen, nur Link zur Originalnachricht
-            contest_embed.description = f"[View original post]({self.message.jump_url})"
+            embed.description = f"[View original post]({self.message.jump_url})"
 
             # Footer unverändert lassen
             if original_embed.footer:
-                contest_embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
+                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
 
-        # Contest-Message abschicken
         mention_text = f"<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        contest_msg = await channel.send(content=mention_text, embed=contest_embed)
+        contest_msg = await channel.send(content=mention_text, embed=embed)
 
         # Reactions hinzufügen
         for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
@@ -391,12 +390,19 @@ class PostGenerationView(discord.ui.View):
             except: 
                 pass
 
-        # ---------------- Original-Post aktualisieren ----------------
+        # ---------------- Original-Post Footer anpassen ----------------
         if self.message.embeds:
             original_embed = self.message.embeds[0]
-            # "🏅 In Contest" über dem bestehenden Inhalt hinzufügen
-            new_description = f"🏅 In Contest\n{original_embed.description or ''}"
-            original_embed.description = new_description
+
+            # Footer prüfen
+            footer_text = original_embed.footer.text if original_embed.footer else ""
+            footer_icon = original_embed.footer.icon_url if original_embed.footer else None
+
+            # Footer anpassen, alten Text behalten und Contest 🏅 anhängen
+            new_footer_text = f"{footer_text} | Contest 🏅" if footer_text else "Contest 🏅"
+            original_embed.set_footer(text=new_footer_text, icon_url=footer_icon)
+
+            # Original-Embed aktualisieren
             try:
                 await self.message.edit(embed=original_embed)
             except:
@@ -411,7 +417,7 @@ class PostGenerationView(discord.ui.View):
         except:
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except: 
+            except:
                 pass
 
 
