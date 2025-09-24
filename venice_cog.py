@@ -308,6 +308,11 @@ class AspectRatioView(discord.ui.View):
             truncated_prompt = truncated_prompt[:500] + " [...]"
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
+        # Prüfen, ob ein abweichender Hidden Suffix genutzt wurde
+        default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+        if self.hidden_suffix and self.hidden_suffix != default_hidden_suffix:
+            embed.description += "\n🫥 Hidden Prompt used"
+
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
@@ -344,6 +349,7 @@ class AspectRatioView(discord.ui.View):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
 
         self.stop()
+
 
 # ---------------- PostGenerationView, VeniceView, VeniceCog, Setup ----------------
 # Aufgrund der Länge kommt der Rest direkt in Fortsetzung.
