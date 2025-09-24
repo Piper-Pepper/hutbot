@@ -26,9 +26,7 @@ DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, wat
 NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
 SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
 
-# oben in der Funktion
 pepper = "<a:01pepper_icon:1377636862847619213>"
-
 
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
@@ -149,6 +147,9 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None else ""
         )
 
+        # Neu: hidden_prompt übernehmen
+        self.hidden_prompt = previous_inputs.get("hidden_prompt", "")
+
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
@@ -181,7 +182,9 @@ class VeniceModal(discord.ui.Modal):
 
         self.previous_inputs = {
             "prompt": self.prompt.value,
-            "negative_prompt": negative_prompt
+            "negative_prompt": negative_prompt,
+            "steps": steps_val,
+            "hidden_prompt": self.hidden_prompt  # wichtig für Re-Use
         }
 
         await interaction.response.send_message(
@@ -189,6 +192,10 @@ class VeniceModal(discord.ui.Modal):
             view=AspectRatioView(self.session, variant, self.prompt.value, self.hidden_suffix, interaction.user, self.is_vip),
             ephemeral=True
         )
+
+# ------------------ Restlicher Code bleibt unverändert ------------------
+# Alle Views (AspectRatioView, PostGenerationView, VeniceView) und Cog-Setup bleiben so wie in deinem ursprünglichen Code.
+# Im Modal-Aufruf beim Re-Use (show_reuse_models) wird jetzt previous_inputs inklusive "hidden_prompt" korrekt übergeben.
 
 # ---------------- Aspect Ratio View ----------------
 class AspectRatioView(discord.ui.View):
