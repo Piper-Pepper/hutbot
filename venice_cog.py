@@ -159,8 +159,8 @@ class VeniceModal(discord.ui.Modal):
             label="Hidden Suffix",
             style=discord.TextStyle.short,
             required=False,
-            placeholder=hidden_suffix,
-            default=prev_hidden
+            placeholder=hidden_suffix if not prev_hidden else "",  # Nur beim ersten Mal Placeholder
+            default=prev_hidden  # Zeigt den bereits eingegebenen Text, bis zu 500 Zeichen
         )
 
         # Add items
