@@ -213,13 +213,21 @@ class VeniceModal(discord.ui.Modal):
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_to_use, interaction.user, self.is_vip),
+            view=AspectRatioView(
+                self.session, 
+                variant, 
+                self.prompt.value, 
+                hidden_to_use, 
+                interaction.user, 
+                self.is_vip,
+                category_id=interaction.channel.category.id if interaction.channel.category else None
+            ),
             ephemeral=True
         )
 
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip, category_id=None):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
@@ -227,6 +235,7 @@ class AspectRatioView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
         self.author = author
         self.is_vip = is_vip
+        self.category_id = category_id  # <-- Kategorie speichern
 
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
@@ -240,6 +249,7 @@ class AspectRatioView(discord.ui.View):
 
         for b in [btn_1_1, btn_16_9, btn_9_16, btn_hi]:
             self.add_item(b)
+
 
     def make_callback(self, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
@@ -268,7 +278,7 @@ class AspectRatioView(discord.ui.View):
         progress_msg = await interaction.followup.send(f"{pepper} Generating image... starting", ephemeral=True)
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.30 + prompt_factor * 0.9)
+            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.35 + prompt_factor * 0.9)
             try:
                 progress_text = (
                     f"{pepper} Generating image for **{self.author.display_name}** "
@@ -311,7 +321,7 @@ class AspectRatioView(discord.ui.View):
         # Prüfen, ob ein abweichender Hidden Suffix genutzt wurde
         default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
         if self.hidden_suffix and self.hidden_suffix != default_hidden_suffix:
-            embed.description += "\n🫥 Hidden Prompt used"
+            embed.description += "\n🔒 Hidden Prompt used"
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
