@@ -247,7 +247,7 @@ class AspectRatioView(discord.ui.View):
 
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.25 + prompt_factor * 0.9)
+            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.30 + prompt_factor * 0.9)
             try:
                 progress_text = (
                     f"{pepper} Generating image for **{self.author.display_name}** "
