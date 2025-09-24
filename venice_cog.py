@@ -332,7 +332,7 @@ class AspectRatioView(discord.ui.View):
         default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
         prev_hidden_marker = self.previous_inputs.get("hidden_suffix", None)
         if isinstance(prev_hidden_marker, str) and prev_hidden_marker != "" and prev_hidden_marker != default_hidden_suffix:
-            embed.description += "\n🔒 Hidden Prompt used"
+            embed.description += "\n\n🔒 Hidden Prompt"
 
         neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
