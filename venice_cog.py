@@ -103,6 +103,7 @@ class VeniceModal(discord.ui.Modal):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
+        self.hidden_suffix_value = hidden_suffix  # default hidden suffix
         self.is_vip = is_vip
         previous_inputs = previous_inputs or {}
 
@@ -115,19 +116,19 @@ class VeniceModal(discord.ui.Modal):
             default=previous_inputs.get("prompt", "")
         )
 
-        # Negative Prompt
+        # Negative prompt
         neg_value = previous_inputs.get("negative_prompt", "")
         if neg_value and not neg_value.startswith(DEFAULT_NEGATIVE_PROMPT):
             neg_value = DEFAULT_NEGATIVE_PROMPT + ", " + neg_value
         else:
             neg_value = DEFAULT_NEGATIVE_PROMPT
+
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=300,
-            default=neg_value if "negative_prompt" in previous_inputs else "",
-            placeholder=DEFAULT_NEGATIVE_PROMPT
+            default=neg_value
         )
 
         # CFG
@@ -137,28 +138,29 @@ class VeniceModal(discord.ui.Modal):
             style=discord.TextStyle.short,
             required=False,
             placeholder=cfg_default,
-            default=previous_inputs.get("cfg", "")
+            default=previous_inputs.get("cfg_value", "")
         )
 
         # Steps
-        self.max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
+        max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
         default_steps = CFG_REFERENCE[variant["model"]]["default_steps"]
         previous_steps = previous_inputs.get("steps")
         self.steps_value = discord.ui.TextInput(
-            label=f"Steps (1-{self.max_steps})",
+            label=f"Steps (1-{max_steps})",
             style=discord.TextStyle.short,
             required=False,
-            placeholder=f"{default_steps} (more steps->AI needs more time to render)",
+            placeholder=str(default_steps),
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
 
-        # Hidden Suffix
-        self.hidden_suffix_input = discord.ui.TextInput(
+        # Hidden suffix
+        prev_hidden = previous_inputs.get("hidden_suffix", "")
+        self.hidden_suffix = discord.ui.TextInput(
             label="Hidden Suffix",
             style=discord.TextStyle.short,
             required=False,
-            default=previous_inputs.get("hidden_suffix", hidden_suffix),
-            placeholder=hidden_suffix
+            placeholder=hidden_suffix,
+            default=prev_hidden
         )
 
         # Add items
@@ -166,7 +168,7 @@ class VeniceModal(discord.ui.Modal):
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
         self.add_item(self.steps_value)
-        self.add_item(self.hidden_suffix_input)
+        self.add_item(self.hidden_suffix)
 
     async def on_submit(self, interaction: discord.Interaction):
         # CFG
@@ -176,14 +178,13 @@ class VeniceModal(discord.ui.Modal):
             cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
         # Steps
-        default_steps = CFG_REFERENCE[self.variant["model"]]["default_steps"]
         try:
             steps_val = int(self.steps_value.value)
-            steps_val = max(1, min(steps_val, self.max_steps))
+            steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
         except:
-            steps_val = default_steps
+            steps_val = CFG_REFERENCE[self.variant['model']]['default_steps']
 
-        # Negative Prompt
+        # Negative prompt
         negative_prompt = self.negative_prompt.value.strip()
         if negative_prompt and not negative_prompt.startswith(DEFAULT_NEGATIVE_PROMPT):
             negative_prompt = DEFAULT_NEGATIVE_PROMPT + ", " + negative_prompt
@@ -191,9 +192,10 @@ class VeniceModal(discord.ui.Modal):
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
         # Hidden Suffix
-        hidden_suffix_val = self.hidden_suffix_input.value.strip() or self.hidden_suffix_input.placeholder
+        user_hidden = self.hidden_suffix.value.strip()
+        hidden_to_use = user_hidden if user_hidden else self.hidden_suffix_value
 
-        # Variant erweitern
+        # Variant dict
         variant = {
             **self.variant,
             "cfg_scale": cfg_val,
@@ -201,17 +203,17 @@ class VeniceModal(discord.ui.Modal):
             "steps": steps_val
         }
 
-        # previous_inputs für Re-Use
         self.previous_inputs = {
             "prompt": self.prompt.value,
-            "negative_prompt": self.negative_prompt.value.strip() if self.negative_prompt.value.strip() != DEFAULT_NEGATIVE_PROMPT else "",
-            "steps": steps_val if steps_val != default_steps else None,
-            "hidden_suffix": self.hidden_suffix_input.value.strip() if self.hidden_suffix_input.value.strip() else None
+            "negative_prompt": negative_prompt,
+            "cfg_value": self.cfg_value.value,
+            "steps": steps_val if steps_val != CFG_REFERENCE[self.variant['model']]['default_steps'] else None,
+            "hidden_suffix": user_hidden
         }
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_suffix_val, interaction.user, self.is_vip),
+            view=AspectRatioView(self.session, variant, self.prompt.value, hidden_to_use, interaction.user, self.is_vip),
             ephemeral=True
         )
 
