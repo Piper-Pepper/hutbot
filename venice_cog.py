@@ -23,8 +23,8 @@ VIP_ROLE_ID = 1377051179615522926
 SPECIAL_ROLE_ID = 1375147276413964408  # für High-Res Button
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
-NSFW_PROMPT_SUFFIX = " (NSFW, show explicit details)"
-SFW_PROMPT_SUFFIX = " (SFW, no explicit details)"
+NSFW_PROMPT_SUFFIX = " NSFW, nudity, show explicit details"
+SFW_PROMPT_SUFFIX = " SFW, no nudity, no explicit details"
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
