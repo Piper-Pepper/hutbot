@@ -60,11 +60,6 @@ CUSTOM_REACTIONS = [
     "<:011pump:1346549688836296787>",
 ]
 
-CHANNEL_REACTIONS = {
-    1418956422086922320: ["1️⃣", "2️⃣", "3️⃣"],
-    1418956422086922321: ["1️⃣", "2️⃣", "3️⃣"]
-}
-
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
@@ -100,20 +95,13 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session, variant, hidden_suffix_default, is_vip, previous_inputs=None):
-        """
-        hidden_suffix_default: the default suffix to display as placeholder on first open (NSFW/SFW)
-        previous_inputs: dict or None. If provided and contains key 'hidden_suffix', that means
-                         a previous explicit value existed (could be empty string meaning user deleted it).
-                         If previous_inputs is None or does not contain 'hidden_suffix', treat as first-open.
-        """
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
-        self.hidden_suffix_value = hidden_suffix_default  # default hidden suffix to use on first-open if user leaves blank
+        self.hidden_suffix_value = hidden_suffix_default
         self.is_vip = is_vip
-        # we keep previous_inputs reference for logic in on_submit
         previous_inputs = previous_inputs if previous_inputs is not None else {}
-        # Detect whether a previous explicit hidden_suffix value was provided
+
         self._had_previous_hidden = "hidden_suffix" in previous_inputs
 
         # Prompt
@@ -125,12 +113,10 @@ class VeniceModal(discord.ui.Modal):
             default=previous_inputs.get("prompt", "")
         )
 
-        # Negative prompt: use previous value if provided, otherwise default.
-        # **Do not** append DEFAULT_NEGATIVE_PROMPT again — keep previous as-is.
+        # Negative prompt
         neg_value = previous_inputs.get("negative_prompt", None)
         if neg_value is None or (isinstance(neg_value, str) and neg_value.strip() == ""):
             neg_value = DEFAULT_NEGATIVE_PROMPT
-
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
@@ -141,7 +127,6 @@ class VeniceModal(discord.ui.Modal):
 
         # CFG
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
-        # placeholder must be <= 100 chars -> ensure it
         cfg_placeholder = cfg_default[:100]
         self.cfg_value = discord.ui.TextInput(
             label="CFG (> stricter AI adherence)",
@@ -164,24 +149,19 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
 
-        # Hidden suffix:
-        # - If previous_inputs included a 'hidden_suffix' key, we show it as default (could be empty string meaning explicit deletion).
-        # - If not, this is the first open: show the default as placeholder (shortened to 100 chars) and leave default empty.
+        # Hidden suffix
         prev_hidden = previous_inputs.get("hidden_suffix", None)
         if prev_hidden is None:
-            # first time: placeholder = default (trimmed)
             placeholder_value = (hidden_suffix_default[:100]) if hidden_suffix_default else ""
             self.hidden_suffix = discord.ui.TextInput(
                 label="Hidden Suffix",
                 style=discord.TextStyle.short,
                 required=False,
                 placeholder=placeholder_value,
-                default="",  # no default text, so user sees placeholder
+                default="",
                 max_length=500
             )
         else:
-            # reuse: prefill with what was explicitly stored (could be empty string)
-            # no placeholder in this case
             self.hidden_suffix = discord.ui.TextInput(
                 label="Hidden Suffix",
                 style=discord.TextStyle.short,
@@ -191,7 +171,6 @@ class VeniceModal(discord.ui.Modal):
                 max_length=500
             )
 
-        # Add items
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
@@ -199,46 +178,34 @@ class VeniceModal(discord.ui.Modal):
         self.add_item(self.hidden_suffix)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # CFG
         try:
             cfg_val = float(self.cfg_value.value)
         except:
             cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
-        # Steps
         try:
             steps_val = int(self.steps_value.value)
             steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
         except:
             steps_val = CFG_REFERENCE[self.variant['model']]['default_steps']
 
-        # Negative prompt: use the value the user entered; if empty -> fallback to DEFAULT_NEGATIVE_PROMPT
         negative_prompt = (self.negative_prompt.value or "").strip()
         if not negative_prompt:
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
-        # Hidden Suffix handling:
-        # - If this Modal was a reuse (self._had_previous_hidden is True), then whatever the user leaves
-        #   (including empty string) is the explicit value and should be stored/used.
-        # - If this Modal was the first-open (no previous hidden), then if the user leaves the field empty,
-        #   we **use the default_hidden_suffix** for generation, but we store previous_inputs hidden_suffix = None
-        #   to indicate that the user never explicitly set a hidden suffix.
         user_hidden = (self.hidden_suffix.value or "").strip()
 
         if self._had_previous_hidden:
-            # reuse: keep exactly what user wrote (could be empty string)
-            hidden_to_use = user_hidden  # possibly ""
-            stored_hidden_for_reuse = user_hidden  # store exact user value (incl. empty)
+            hidden_to_use = user_hidden
+            stored_hidden_for_reuse = user_hidden
         else:
-            # first open: if user left empty -> use default for generation, but store None to mark 'no explicit user value'
             if user_hidden:
                 hidden_to_use = user_hidden
                 stored_hidden_for_reuse = user_hidden
             else:
-                hidden_to_use = self.hidden_suffix_value  # default used for generation
-                stored_hidden_for_reuse = None  # mark that user hasn't explicitly set anything
+                hidden_to_use = self.hidden_suffix_value
+                stored_hidden_for_reuse = None
 
-        # Variant dict
         variant = {
             **self.variant,
             "cfg_scale": cfg_val,
@@ -246,7 +213,6 @@ class VeniceModal(discord.ui.Modal):
             "steps": steps_val
         }
 
-        # Save previous_inputs for reuse dialogs. Note: hidden_suffix may be None meaning 'no explicit user value'.
         self.previous_inputs = {
             "prompt": self.prompt.value,
             "negative_prompt": negative_prompt,
@@ -255,8 +221,6 @@ class VeniceModal(discord.ui.Modal):
             "hidden_suffix": stored_hidden_for_reuse
         }
 
-        # Create AspectRatioView and pass along previous_inputs so PostGenerationView and reuse flows
-        # can correctly know whether a hidden_suffix was explicitly set previously.
         category_id = interaction.channel.category.id if interaction.channel and interaction.channel.category else None
 
         await interaction.response.send_message(
@@ -281,11 +245,10 @@ class AspectRatioView(discord.ui.View):
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
-        self.hidden_suffix = hidden_suffix  # the value actually used for generation (may be default or explicit)
+        self.hidden_suffix = hidden_suffix
         self.author = author
         self.is_vip = is_vip
-        self.category_id = category_id  # <-- Kategorie speichern
-        # previous_inputs: dict created in VeniceModal.on_submit, may contain 'hidden_suffix' == None (no explicit) or string (could be "")
+        self.category_id = category_id
         self.previous_inputs = previous_inputs or {}
 
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
@@ -339,7 +302,6 @@ class AspectRatioView(discord.ui.View):
             except:
                 pass
 
-        # full_prompt: combine prompt_text and the (possibly default) hidden suffix used for generation
         full_prompt = (self.prompt_text or "") + (self.hidden_suffix or "")
         if full_prompt and not full_prompt[0].isalnum():
             full_prompt = " " + full_prompt
@@ -369,16 +331,8 @@ class AspectRatioView(discord.ui.View):
             truncated_prompt = truncated_prompt[:500] + " [...]"
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
-        # Decide whether to show "Hidden Prompt used":
-        # We must check whether the user explicitly set a hidden suffix that differs from the default.
-        # self.previous_inputs may contain 'hidden_suffix' == None (means never explicitly set),
-        # or a string (could be empty string meaning user explicitly deleted).
         default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
         prev_hidden_marker = self.previous_inputs.get("hidden_suffix", None)
-        # If prev_hidden_marker is None -> user never explicitly set hidden suffix (first-open & left blank),
-        # in that case generation used default_hidden_suffix (self.hidden_suffix == default) and we DO NOT mark "Hidden Prompt used".
-        # If prev_hidden_marker is a non-empty string -> user explicitly set value; show mark if differs from default.
-        # If prev_hidden_marker is an empty string -> user explicitly deleted hidden suffix; do NOT show mark.
         if isinstance(prev_hidden_marker, str) and prev_hidden_marker != "" and prev_hidden_marker != default_hidden_suffix:
             embed.description += "\n🔒 Hidden Prompt used"
 
@@ -397,18 +351,16 @@ class AspectRatioView(discord.ui.View):
             "hidream": "hidreams",
             "wai-Illustrious": "wai"
         }
-
         short_model_name = MODEL_SHORT.get(self.variant['model'], self.variant['model'])
         tech_info = f"{short_model_name} | {width}x{height} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
-        reactions = CHANNEL_REACTIONS.get(interaction.channel.id, CUSTOM_REACTIONS)
+        reactions = CUSTOM_REACTIONS
         for emoji in reactions:
             try: await msg.add_reaction(emoji)
             except: pass
 
-        # Pass the previous_inputs through to PostGenerationView so reuse flow has correct info
         await interaction.followup.send(
             content=f"🚨{interaction.user.mention}, re-use & edit your prompt?",
             view=PostGenerationView(self.session, self.variant, self.prompt_text, self.hidden_suffix, self.author, msg, previous_inputs=self.previous_inputs),
@@ -420,7 +372,6 @@ class AspectRatioView(discord.ui.View):
 
         self.stop()
 
-# ---------------- PostGenerationView, VeniceView, VeniceCog, Setup ----------------
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, message, previous_inputs=None):
@@ -511,8 +462,7 @@ class PostGenerationView(discord.ui.View):
                 self.session = session
                 self.author = author
                 self.prompt_text = prompt_text
-                # hidden_suffix_marker is what we want to pass as previous_inputs['hidden_suffix']:
-                # it can be None (no explicit user value before) or a string (possibly empty)
+
                 self.hidden_suffix_marker = hidden_suffix_marker
                 self.variant = variant
 
@@ -533,8 +483,6 @@ class PostGenerationView(discord.ui.View):
                         await inner_interaction.response.send_message(f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True)
                         return
 
-                    # Prepare previous_inputs to pass to the modal:
-                    # Use the variant's negative_prompt (if any) as starting value.
                     prev_inputs = {
                         "prompt": self.prompt_text,
                         "negative_prompt": self.variant.get("negative_prompt", ""),
@@ -553,8 +501,7 @@ class PostGenerationView(discord.ui.View):
                     ))
                 return callback
 
-        # We pass the previous_inputs['hidden_suffix'] marker to the reuse view so re-opened modal knows
-        # whether a user explicitly set a value before (string or empty) or never touched it (None).
+
         hidden_marker = self.previous_inputs.get("hidden_suffix", None)
         await interaction.response.send_message(
             f"{interaction.user.mention}, which model for the re-used prompt?",
