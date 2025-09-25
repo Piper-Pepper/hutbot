@@ -294,7 +294,7 @@ class AspectRatioView(discord.ui.View):
                 progress_text = (
                     f"{pepper} Generating image for **{self.author.display_name}** "
                     f"with **{self.variant['label']}** "
-                    f"(AR: {ratio_name} | CFG: {cfg} | Steps: {steps})... {i*10}%"
+                    f" ... {i*10}%"
                 )
                 await progress_msg.edit(content=progress_text)
             except:
