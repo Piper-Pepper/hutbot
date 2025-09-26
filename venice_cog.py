@@ -397,7 +397,7 @@ class PostGenerationView(discord.ui.View):
 
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
             submit_btn = discord.ui.Button(
-                label="Submit image to contest",  # Text bleibt normal
+                label="Submit image to contest🏆",  # Text bleibt normal
                 style=discord.ButtonStyle.blurple,
                 row=1,
                 emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")  # Custom Emoji
