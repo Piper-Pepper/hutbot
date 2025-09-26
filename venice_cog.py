@@ -396,9 +396,15 @@ class PostGenerationView(discord.ui.View):
         self.add_item(del_reuse_btn)
 
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
-            submit_btn = discord.ui.Button(label="🏆🖼️ Submit for competition", style=discord.ButtonStyle.secondary, row=1)
+            submit_btn = discord.ui.Button(
+                label="Submit image to contest",  # Text bleibt normal
+                style=discord.ButtonStyle.blurple,
+                row=1,
+                emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")  # Custom Emoji
+            )
             submit_btn.callback = self.post_gallery_callback
             self.add_item(submit_btn)
+
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
