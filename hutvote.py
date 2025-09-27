@@ -136,7 +136,10 @@ class HutVote(commands.Cog):
                 continue
             posted_message_ids.add(msg.id)
 
-            # Reaction lines: emoji once + numeric count
+            # Zuerst den Link zum Originalpost senden (Debug)
+            await interaction.followup.send(f"Original Post: {msg.jump_url}")
+
+            # Reaction lines: emoji einmal + numerische Count
             reaction_lines = []
             for r_id in REACTIONS:
                 emoji_obj = guild.get_emoji(r_id)
@@ -144,7 +147,7 @@ class HutVote(commands.Cog):
                 reaction_lines.append(f"{emoji_display} {counts[r_id]}")
             reaction_line = "\n".join(reaction_lines)
 
-            # Title = first mention or author
+            # Titel = erste Erwähnung oder Autor
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
 
@@ -161,15 +164,18 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            embed = discord.Embed(
-                title=title,
-                description=f"{reaction_line}\n[Post]({msg.jump_url})",
-                color=discord.Color.green()
-            )
+            # Embed nur senden, wenn Bild/Thumbnail existiert
             if img_url:
+                embed = discord.Embed(
+                    title=title,
+                    description=f"{reaction_line}\n[Post]({msg.jump_url})",
+                    color=discord.Color.green()
+                )
                 embed.set_image(url=img_url)
-
-            await interaction.followup.send(embed=embed)
+                await interaction.followup.send(embed=embed)
+            else:
+                # Sonst wenigstens Reaktionen als Text anzeigen
+                await interaction.followup.send(f"Reactions:\n{reaction_line}")
 
         # Extra post: top1 creator
         top1_msg = top5[0][1]
