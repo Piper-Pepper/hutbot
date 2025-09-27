@@ -28,7 +28,7 @@ REACTIONS = [
     1387083454575022213,  # main 2
     1347536448831754383,  # main 3
     1346549711817146400,  # main 4
-    1346549688836296787   # main 5 (war bisher Tiebreaker)
+    1346549688836296787   # main 5
 ]
 
 MAIN_REACTIONS = REACTIONS[:5]  # die ersten 5 für Platzierung
@@ -78,7 +78,7 @@ class HutVote(commands.Cog):
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-        # Collect messages with at least one reaction from visible channels
+        # Collect messages from visible channels
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
@@ -98,7 +98,7 @@ class HutVote(commands.Cog):
                     if msg.author.id != BOT_ID:
                         continue
 
-                    # Alle Reaktionen zählen
+                    # Zähle die ersten 5 Reaktionen
                     counts = {}
                     for r_id in MAIN_REACTIONS:
                         counts[r_id] = 0
@@ -133,9 +133,6 @@ class HutVote(commands.Cog):
             if msg.id in posted_message_ids:
                 continue
             posted_message_ids.add(msg.id)
-
-            # Zuerst den Link zum Originalpost senden
-            await interaction.followup.send(f"Original Post: {msg.jump_url}")
 
             # Reaction lines für die ersten 5 Reaktionen
             reaction_lines = []
@@ -178,7 +175,7 @@ class HutVote(commands.Cog):
                 embed.set_image(url=img_url)
                 await interaction.followup.send(embed=embed)
             else:
-                await interaction.followup.send(f"{reaction_line}{extra_text}")
+                await interaction.followup.send(f"{reaction_line}\n[Post]({msg.jump_url}){extra_text}")
 
         # Extra post: top1 creator
         top1_msg = top5[0][1]
