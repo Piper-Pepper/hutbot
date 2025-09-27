@@ -177,14 +177,13 @@ class HutVote(commands.Cog):
                 img_embed.set_image(url=img_url)
                 await interaction.followup.send(embed=img_embed)
 
-        # Extra post: Top1 creator mention
+        # Extra post: Top1 creator mention (with ping)
         top1_msg = top3[0][1]
         top1_count = top3[0][0]
         top1_emoji_display = emoji_display
-        top1_creator_name = top1_msg.mentions[0].display_name if top1_msg.mentions else top1_msg.author.display_name
+        top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value} the user {top1_creator_name} has created the image with most {top1_emoji_display} votes ({top1_count}x) in the {category_obj.name}!!"
-       
+            f"In {calendar.month_name[int(month.value)]}/{year.value} the user {top1_creator_mention} has created the image with most {top1_emoji_display} votes ({top1_count}x) in the {category_obj.name}!!"
         )
 
 
