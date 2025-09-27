@@ -83,15 +83,12 @@ class HutVote(commands.Cog):
 
         guild = interaction.guild
 
-        # Resolve selected emoji using the guild object
+        # Resolve selected emoji
         _, selected_emoji_id = EMOJI_MAP[emoji.value]
         emoji_obj = guild.get_emoji(selected_emoji_id)
-        if emoji_obj:
-            emoji_display = str(emoji_obj)  # renders correctly in embed
-        else:
-            emoji_display = EMOJI_MAP[emoji.value][0]  # fallback string
+        emoji_display = str(emoji_obj) if emoji_obj else EMOJI_MAP[emoji.value][0]
 
-        # Calculate start and end of month
+        # Start and end of month
         try:
             start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
             last_day = calendar.monthrange(int(year.value), int(month.value))[1]
@@ -107,17 +104,14 @@ class HutVote(commands.Cog):
 
         await interaction.response.defer(thinking=True)
 
-        # Collect messages with this emoji
+        # Collect messages with the selected emoji
         matched_msgs = []
-
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
                 continue
-
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
                 continue
-
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     for reaction in msg.reactions:
@@ -157,10 +151,10 @@ class HutVote(commands.Cog):
         # Track posted messages to avoid duplicates in this command run
         posted_message_ids = set()
 
-        # Image embeds with emoji, tiebreaker, and first mention as title
+        # Send image embeds for top3
         for count, msg in top3:
             if msg.id in posted_message_ids:
-                continue  # Skip already processed message
+                continue
             posted_message_ids.add(msg.id)
 
             other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
@@ -168,7 +162,7 @@ class HutVote(commands.Cog):
             creator_mention = msg.mentions[0].mention if msg.mentions else msg.author.mention
             title = f"Image by {creator_name}"
 
-            # Check if there is an attachment or embed image
+            # Always generate embed, even if no image
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -186,7 +180,6 @@ class HutVote(commands.Cog):
                 )
                 img_embed.set_image(url=img_url)
             else:
-                # Fallback: Embed ohne Bild, nur Info
                 img_embed = discord.Embed(
                     title=title,
                     description=f"{emoji_display} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)\n(No image attached)",
@@ -195,7 +188,7 @@ class HutVote(commands.Cog):
 
             await interaction.followup.send(embed=img_embed)
 
-        # Extra post: Top1 creator mention (with ping)
+        # Extra post: Top1 creator mention with ping
         top1_msg = top3[0][1]
         top1_count = top3[0][0]
         top1_emoji_display = emoji_display
