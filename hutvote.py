@@ -22,17 +22,6 @@ MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
-# Custom emoji IDs
-REACTIONS = [
-    1387086056498921614,  # main 1
-    1387083454575022213,  # main 2
-    1347536448831754383,  # main 3
-    1346549711817146400,  # main 4
-    1346549688836296787   # main 5
-]
-
-MAIN_REACTIONS = REACTIONS[:5]  # die ersten 5 für Platzierung
-
 BOT_ID = 1379906834588106883  # nur Posts von diesem Bot berücksichtigen
 
 class HutVote(commands.Cog):
@@ -78,17 +67,15 @@ class HutVote(commands.Cog):
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-        # Collect messages from visible channels
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
                 continue
 
-            # Skip channels not visible to @everyone
+            # Sichtbarkeit prüfen
             overwrites = channel.overwrites_for(guild.default_role)
             if overwrites.view_channel is False:
                 continue
-
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
                 continue
@@ -97,17 +84,7 @@ class HutVote(commands.Cog):
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     if msg.author.id != BOT_ID:
                         continue
-
-                    # Zähle die ersten 5 Reaktionen
-                    counts = {}
-                    for r_id in MAIN_REACTIONS:
-                        counts[r_id] = 0
-                        for reaction in msg.reactions:
-                            if getattr(reaction.emoji, "id", None) == r_id:
-                                counts[r_id] = reaction.count
-                                break
-
-                    matched_msgs.append((counts, msg))
+                    matched_msgs.append(msg)
             except Exception:
                 continue
 
@@ -115,45 +92,34 @@ class HutVote(commands.Cog):
             await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
-        # Sort top5: Hauptreaktionen + zusätzliche Reaktionen als Tiebreaker
-        def sort_key(item):
-            counts, msg = item
-            main_sum = sum(counts[r_id] for r_id in MAIN_REACTIONS)
-            extra_sum = sum(
-                reaction.count for reaction in msg.reactions
-                if getattr(reaction.emoji, "id", None) not in MAIN_REACTIONS
-            )
-            return (main_sum, extra_sum, msg.created_at)
+        # Sortieren nach Top-5 Reaktionen + zusätzliche Reaktionen
+        def sort_key(msg: discord.Message):
+            # Top-5 Reaktionen (höchste Count)
+            sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
+            top5_sum = sum(r.count for r in sorted_reacts[:5])
+            extra_sum = sum(r.count for r in sorted_reacts[5:])
+            return (top5_sum, extra_sum, msg.created_at)
 
-        top5 = sorted(matched_msgs, key=sort_key, reverse=True)[:5]
+        top5_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:5]
 
-        posted_message_ids = set()
-
-        for counts, msg in top5:
-            if msg.id in posted_message_ids:
-                continue
-            posted_message_ids.add(msg.id)
-
-            # Reaction lines für die ersten 5 Reaktionen
+        for msg in top5_msgs:
+            # Top-5 Reaktionen mit Emoji
+            sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
             reaction_lines = []
-            for r_id in MAIN_REACTIONS:
-                emoji_obj = guild.get_emoji(r_id)
-                emoji_display = str(emoji_obj) if emoji_obj else f"<:{r_id}>"
-                reaction_lines.append(f"{emoji_display} {counts[r_id]}")
+            for r in sorted_reacts[:5]:
+                emoji_display = str(r.emoji) if isinstance(r.emoji, discord.Emoji) else r.emoji
+                reaction_lines.append(f"{emoji_display} {r.count}")
             reaction_line = "\n".join(reaction_lines)
 
-            # Zusätzliche Reaktionen zählen
-            extra_reactions = sum(
-                reaction.count for reaction in msg.reactions
-                if getattr(reaction.emoji, "id", None) not in MAIN_REACTIONS
-            )
+            # Zusätzliche Reaktionen
+            extra_reactions = sum(r.count for r in sorted_reacts[5:])
             extra_text = f"\n({extra_reactions} additional reactions)" if extra_reactions else ""
 
-            # Titel = erste Erwähnung oder Autor
+            # Titel
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
 
-            # Image URL fallback
+            # Bild
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -166,6 +132,7 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
+            # Embed oder Text senden
             if img_url:
                 embed = discord.Embed(
                     title=title,
@@ -177,13 +144,12 @@ class HutVote(commands.Cog):
             else:
                 await interaction.followup.send(f"{reaction_line}\n[Post]({msg.jump_url}){extra_text}")
 
-        # Extra post: top1 creator
-        top1_msg = top5[0][1]
+        # Extra post: Top1 Creator
+        top1_msg = top5_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
             f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} has created the image with most total votes in the {category_obj.name}!"
         )
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HutVote(bot))
