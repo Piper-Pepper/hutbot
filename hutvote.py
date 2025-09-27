@@ -136,7 +136,7 @@ class HutVote(commands.Cog):
 
         top3 = sorted(matched_msgs, key=sort_key, reverse=True)[:3]
 
-        # Overview embed
+        # Overview embed (emoji in value)
         embed = discord.Embed(
             title=f"Top 3 posts for {selected_emoji_str} in {calendar.month_name[int(month.value)]} {year.value} ({category_obj.name})",
             color=discord.Color.blurple()
@@ -144,8 +144,9 @@ class HutVote(commands.Cog):
         lines = []
         for i, (count, msg) in enumerate(top3, start=1):
             date_str = msg.created_at.strftime("%Y-%m-%d")
-            lines.append(f"{i}. **{count}x** in #{msg.channel.name} ({date_str}) — [Post]({msg.jump_url})")
-        embed.add_field(name=selected_emoji_str, value="\n".join(lines), inline=False)
+            other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
+            lines.append(f"{i}. {selected_emoji_str} — **{count}x** in #{msg.channel.name} ({date_str}) — [Post]({msg.jump_url}) (and {other_count} other reactions)")
+        embed.add_field(name="Top 3 Posts", value="\n".join(lines), inline=False)
         await interaction.followup.send(embed=embed)
 
         # Image embeds
