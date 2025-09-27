@@ -8,7 +8,7 @@ import calendar
 # Only this role can use the command
 ALLOWED_ROLE = 1346428405368750122
 
-# Category choices (only these two selectable)
+# Category choices
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
     app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
@@ -109,7 +109,6 @@ class HutVote(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 continue
 
-            # Only count channels the bot can read
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
                 continue
@@ -129,8 +128,13 @@ class HutVote(commands.Cog):
             await interaction.followup.send(f"No posts found with {selected_emoji_str} in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
-        # Top 3
-        top3 = sorted(matched_msgs, key=lambda x: (x[0], x[1].created_at), reverse=True)[:3]
+        # Sort top3 with tiebreaker: sum of other reactions
+        def sort_key(item):
+            count_selected, msg = item
+            other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
+            return (count_selected, other_count, msg.created_at)
+
+        top3 = sorted(matched_msgs, key=sort_key, reverse=True)[:3]
 
         # Overview embed
         embed = discord.Embed(
