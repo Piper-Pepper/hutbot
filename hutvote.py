@@ -8,7 +8,7 @@ import calendar
 # Only this role can use the command
 ALLOWED_ROLE = 1346428405368750122
 
-# Category choices (only these two selectable)
+# Category choices
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
     app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
@@ -37,6 +37,16 @@ MONTH_CHOICES = [
     app_commands.Choice(name="December", value="12"),
 ]
 
+# Emoji choices (name -> actual emoji)
+EMOJI_MAP = {
+    "Great": "<:01sthumb:1387086056498921614>",
+    "Funny": "<:01smile_piper:1387083454575022213>",
+    "No way!": "<:02No:1347536448831754383>",
+    "11": "<:011:1346549711817146400>",
+    "Pump": "<:011pump:1346549688836296787>",
+}
+EMOJI_CHOICES = [app_commands.Choice(name=name, value=name) for name in EMOJI_MAP.keys()]
+
 
 class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -50,12 +60,13 @@ class HutVote(commands.Cog):
         year="Select year",
         month="Select month",
         category="Select category",
-        emoji="Select the emoji"
+        emoji="Select emoji"
     )
     @app_commands.choices(
         year=YEAR_CHOICES,
         month=MONTH_CHOICES,
-        category=CATEGORY_CHOICES
+        category=CATEGORY_CHOICES,
+        emoji=EMOJI_CHOICES
     )
     async def hut_vote(
         self,
@@ -63,13 +74,16 @@ class HutVote(commands.Cog):
         year: app_commands.Choice[str],
         month: app_commands.Choice[str],
         category: app_commands.Choice[str],
-        emoji: discord.Emoji
+        emoji: app_commands.Choice[str]
     ):
         # Permission check
         member_roles = getattr(interaction.user, "roles", [])
         if not any(r.id == ALLOWED_ROLE for r in member_roles):
             await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
             return
+
+        # Resolve selected emoji
+        selected_emoji = EMOJI_MAP[emoji.value]
 
         # Calculate start and end of month
         try:
@@ -106,7 +120,7 @@ class HutVote(commands.Cog):
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     for reaction in msg.reactions:
-                        if getattr(reaction.emoji, "id", None) == emoji.id:
+                        if str(reaction.emoji) == selected_emoji:
                             matched_msgs.append((reaction.count, msg))
             except discord.Forbidden:
                 continue
@@ -114,7 +128,7 @@ class HutVote(commands.Cog):
                 continue
 
         if not matched_msgs:
-            await interaction.followup.send(f"No posts found with {emoji} in {calendar.month_name[int(month.value)]} {year.value}.")
+            await interaction.followup.send(f"No posts found with {selected_emoji} in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
         # Top 3
@@ -122,14 +136,14 @@ class HutVote(commands.Cog):
 
         # Overview embed
         embed = discord.Embed(
-            title=f"Top 3 posts for {emoji} in {calendar.month_name[int(month.value)]} {year.value} ({category_obj.name})",
+            title=f"Top 3 posts for {selected_emoji} in {calendar.month_name[int(month.value)]} {year.value} ({category_obj.name})",
             color=discord.Color.blurple()
         )
         lines = []
         for i, (count, msg) in enumerate(top3, start=1):
             date_str = msg.created_at.strftime("%Y-%m-%d")
             lines.append(f"{i}. **{count}x** in #{msg.channel.name} ({date_str}) — [Post]({msg.jump_url})")
-        embed.add_field(name=str(emoji), value="\n".join(lines), inline=False)
+        embed.add_field(name=selected_emoji, value="\n".join(lines), inline=False)
         await interaction.followup.send(embed=embed)
 
         # Image embeds
@@ -145,7 +159,7 @@ class HutVote(commands.Cog):
 
             if img_url:
                 img_embed = discord.Embed(
-                    description=f"{emoji} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url})",
+                    description=f"{selected_emoji} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url})",
                     color=discord.Color.green()
                 )
                 img_embed.set_image(url=img_url)
