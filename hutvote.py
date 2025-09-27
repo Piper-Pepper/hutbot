@@ -77,8 +77,7 @@ class HutVote(commands.Cog):
         emoji: app_commands.Choice[str]
     ):
         # Permission check
-        member_roles = getattr(interaction.user, "roles", [])
-        if not any(r.id == ALLOWED_ROLE for r in member_roles):
+        if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
             return
 
@@ -149,7 +148,7 @@ class HutVote(commands.Cog):
         embed.add_field(name="Top 3 Posts", value="\n".join(lines), inline=False)
         await interaction.followup.send(embed=embed)
 
-        # Image embeds
+        # Image embeds with emoji and tiebreaker
         for count, msg in top3:
             img_url = None
             if msg.attachments:
@@ -161,8 +160,9 @@ class HutVote(commands.Cog):
                     img_url = msg.embeds[0].thumbnail.url
 
             if img_url:
+                other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
                 img_embed = discord.Embed(
-                    description=f"{selected_emoji_str} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url})",
+                    description=f"{selected_emoji_str} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)",
                     color=discord.Color.green()
                 )
                 img_embed.set_image(url=img_url)
