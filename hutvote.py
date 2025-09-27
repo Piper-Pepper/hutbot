@@ -154,7 +154,7 @@ class HutVote(commands.Cog):
         embed.add_field(name="Top 3 Posts", value="\n".join(lines), inline=False)
         await interaction.followup.send(embed=embed)
 
-        # Image embeds with emoji and tiebreaker
+        # Image embeds with emoji, tiebreaker, and first mention as title
         for count, msg in top3:
             img_url = None
             if msg.attachments:
@@ -167,12 +167,24 @@ class HutVote(commands.Cog):
 
             if img_url:
                 other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
+                creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
+                title = f"Image by {creator_name}"
                 img_embed = discord.Embed(
+                    title=title,
                     description=f"{emoji_display} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)",
                     color=discord.Color.green()
                 )
                 img_embed.set_image(url=img_url)
                 await interaction.followup.send(embed=img_embed)
+
+        # Extra post: Top1 creator mention
+        top1_msg = top3[0][1]
+        top1_count = top3[0][0]
+        top1_emoji_display = emoji_display
+        top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
+        await interaction.followup.send(
+            f"Currently {top1_creator_mention} has created the image with the most {top1_emoji_display} votes ({top1_count}x)!"
+        )
 
 
 async def setup(bot: commands.Bot):
