@@ -77,14 +77,21 @@ class HutVote(commands.Cog):
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-        # Collect messages with at least one main reaction
+        # Collect messages with at least one main reaction from visible channels
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
                 continue
+
+            # Skip channels not visible to @everyone
+            overwrites = channel.overwrites_for(guild.default_role)
+            if overwrites.view_channel is False:
+                continue
+
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
                 continue
+
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     counts = {}
