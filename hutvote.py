@@ -34,6 +34,8 @@ REACTIONS = [
 MAIN_REACTIONS = REACTIONS[:4]  # first 4 for top5 sorting
 TIEBREAK_REACTION = REACTIONS[4]  # fifth reaction for tie-breaker
 
+BOT_ID = 1379906834588106883  # nur Posts von diesem Bot berücksichtigen
+
 class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -94,6 +96,10 @@ class HutVote(commands.Cog):
 
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
+                    # nur Posts vom Bot berücksichtigen
+                    if msg.author.id != BOT_ID:
+                        continue
+
                     counts = {}
                     has_main = False
                     for r_id in REACTIONS:
