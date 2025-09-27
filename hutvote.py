@@ -28,11 +28,10 @@ REACTIONS = [
     1387083454575022213,  # main 2
     1347536448831754383,  # main 3
     1346549711817146400,  # main 4
-    1346549688836296787   # tiebreaker
+    1346549688836296787   # main 5 (war bisher Tiebreaker)
 ]
 
-MAIN_REACTIONS = REACTIONS[:4]  # first 4 for top5 sorting
-TIEBREAK_REACTION = REACTIONS[4]  # fifth reaction for tie-breaker
+MAIN_REACTIONS = REACTIONS[:5]  # die ersten 5 für Platzierung
 
 BOT_ID = 1379906834588106883  # nur Posts von diesem Bot berücksichtigen
 
@@ -79,7 +78,7 @@ class HutVote(commands.Cog):
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-        # Collect messages with at least one main reaction from visible channels
+        # Collect messages with at least one reaction from visible channels
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
@@ -96,23 +95,19 @@ class HutVote(commands.Cog):
 
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
-                    # nur Posts vom Bot berücksichtigen
                     if msg.author.id != BOT_ID:
                         continue
 
+                    # Alle Reaktionen zählen
                     counts = {}
-                    has_main = False
-                    for r_id in REACTIONS:
+                    for r_id in MAIN_REACTIONS:
+                        counts[r_id] = 0
                         for reaction in msg.reactions:
                             if getattr(reaction.emoji, "id", None) == r_id:
                                 counts[r_id] = reaction.count
-                                if r_id in MAIN_REACTIONS and reaction.count > 0:
-                                    has_main = True
                                 break
-                        else:
-                            counts[r_id] = 0
-                    if has_main:
-                        matched_msgs.append((counts, msg))
+
+                    matched_msgs.append((counts, msg))
             except Exception:
                 continue
 
@@ -120,12 +115,15 @@ class HutVote(commands.Cog):
             await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
-        # Sort top5 by sum of main reactions, tie-breaker
+        # Sort top5: Hauptreaktionen + zusätzliche Reaktionen als Tiebreaker
         def sort_key(item):
             counts, msg = item
             main_sum = sum(counts[r_id] for r_id in MAIN_REACTIONS)
-            tie = counts[TIEBREAK_REACTION]
-            return (main_sum, tie, msg.created_at)
+            extra_sum = sum(
+                reaction.count for reaction in msg.reactions
+                if getattr(reaction.emoji, "id", None) not in MAIN_REACTIONS
+            )
+            return (main_sum, extra_sum, msg.created_at)
 
         top5 = sorted(matched_msgs, key=sort_key, reverse=True)[:5]
 
@@ -136,16 +134,23 @@ class HutVote(commands.Cog):
                 continue
             posted_message_ids.add(msg.id)
 
-            # Zuerst den Link zum Originalpost senden (Debug)
+            # Zuerst den Link zum Originalpost senden
             await interaction.followup.send(f"Original Post: {msg.jump_url}")
 
-            # Reaction lines: emoji einmal + numerische Count
+            # Reaction lines für die ersten 5 Reaktionen
             reaction_lines = []
-            for r_id in REACTIONS:
+            for r_id in MAIN_REACTIONS:
                 emoji_obj = guild.get_emoji(r_id)
                 emoji_display = str(emoji_obj) if emoji_obj else f"<:{r_id}>"
                 reaction_lines.append(f"{emoji_display} {counts[r_id]}")
             reaction_line = "\n".join(reaction_lines)
+
+            # Zusätzliche Reaktionen zählen
+            extra_reactions = sum(
+                reaction.count for reaction in msg.reactions
+                if getattr(reaction.emoji, "id", None) not in MAIN_REACTIONS
+            )
+            extra_text = f"\n({extra_reactions} additional reactions)" if extra_reactions else ""
 
             # Titel = erste Erwähnung oder Autor
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
@@ -164,18 +169,16 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            # Embed nur senden, wenn Bild/Thumbnail existiert
             if img_url:
                 embed = discord.Embed(
                     title=title,
-                    description=f"{reaction_line}\n[Post]({msg.jump_url})",
+                    description=f"{reaction_line}\n[Post]({msg.jump_url}){extra_text}",
                     color=discord.Color.green()
                 )
                 embed.set_image(url=img_url)
                 await interaction.followup.send(embed=embed)
             else:
-                # Sonst wenigstens Reaktionen als Text anzeigen
-                await interaction.followup.send(f"Reactions:\n{reaction_line}")
+                await interaction.followup.send(f"{reaction_line}{extra_text}")
 
         # Extra post: top1 creator
         top1_msg = top5[0][1]
