@@ -1,4 +1,4 @@
-# cogs/hutvote_debug.py
+# cogs/hutvote_botonly.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import calendar
 
 ALLOWED_ROLE = 1346428405368750122
+BOT_ID = 1379906834588106883
 
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
@@ -22,7 +23,6 @@ MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
-# Custom emoji IDs
 REACTIONS = [
     1387086056498921614,  # main 1
     1387083454575022213,  # main 2
@@ -34,13 +34,13 @@ REACTIONS = [
 MAIN_REACTIONS = REACTIONS[:4]
 TIEBREAK_REACTION = REACTIONS[4]
 
-class HutVoteDebug(commands.Cog):
+class HutVoteBotOnly(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(
-        name="hut_vote_debug",
-        description="Shows top 5 posts with debug logs"
+        name="hut_vote",
+        description="Shows top 5 bot posts with reactions"
     )
     @app_commands.describe(
         year="Select year",
@@ -52,7 +52,7 @@ class HutVoteDebug(commands.Cog):
         month=MONTH_CHOICES,
         category=CATEGORY_CHOICES
     )
-    async def hut_vote_debug(
+    async def hut_vote(
         self,
         interaction: discord.Interaction,
         year: app_commands.Choice[str],
@@ -83,18 +83,17 @@ class HutVoteDebug(commands.Cog):
 
             overwrites = channel.overwrites_for(guild.default_role)
             if overwrites.view_channel is False:
-                print(f"Skipping {channel.name}: @everyone cannot view")
                 continue
 
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
-                print(f"Skipping {channel.name}: Bot cannot view or read messages")
                 continue
-
-            print(f"Scanning channel: {channel.name}")
 
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
+                    if msg.author.id != BOT_ID:
+                        continue  # Only bot posts
+
                     counts = {}
                     has_main = False
                     for r_id in REACTIONS:
@@ -107,17 +106,22 @@ class HutVoteDebug(commands.Cog):
                         else:
                             counts[r_id] = 0
 
-                    print(f"Message {msg.id} in {channel.name}: counts={counts}, has_main={has_main}")
+                    if not has_main:
+                        continue
 
-                    if has_main:
-                        matched_msgs.append((counts, msg))
+                    if not msg.attachments and not msg.embeds:
+                        continue  # Skip posts without images
+
+                    matched_msgs.append((counts, msg))
+
             except Exception as e:
                 print(f"Error reading channel {channel.name}: {e}")
 
         if not matched_msgs:
-            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
+            await interaction.followup.send(f"No bot posts found in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
+        # Sort by main reactions sum + tie-breaker
         def sort_key(item):
             counts, msg = item
             main_sum = sum(counts[r_id] for r_id in MAIN_REACTIONS)
@@ -165,6 +169,7 @@ class HutVoteDebug(commands.Cog):
 
             await interaction.followup.send(embed=embed)
 
+        # Extra post: top1 creator
         top1_msg = top5[0][1]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
@@ -173,4 +178,4 @@ class HutVoteDebug(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(HutVoteDebug(bot))
+    await bot.add_cog(HutVoteBotOnly(bot))
