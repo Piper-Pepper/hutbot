@@ -19,7 +19,7 @@ YEAR_CHOICES = [
 ]
 
 MONTH_CHOICES = [
-    app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1,13)
+    app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
 # Reactions
@@ -31,7 +31,7 @@ REACTIONS = {
     "Pump": 1346549688836296787
 }
 
-TOP4_KEYS = ["Great","Funny","No way!","11"]  # main reactions for top5 ranking
+TOP4_KEYS = ["Great", "Funny", "No way!", "11"]  # main reactions for top5 ranking
 TIEBREAK_KEY = "Pump"  # tiebreaker
 
 class HutVote(commands.Cog):
@@ -77,7 +77,7 @@ class HutVote(commands.Cog):
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-        # Collect messages with at least one of the tracked reactions
+        # Collect messages with at least one main reaction
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
@@ -93,7 +93,7 @@ class HutVote(commands.Cog):
                         for reaction in msg.reactions:
                             if getattr(reaction.emoji, "id", None) == r_id:
                                 counts[r_name] = reaction.count
-                                if r_name in TOP4_KEYS and reaction.count>0:
+                                if r_name in TOP4_KEYS and reaction.count > 0:
                                     has_main = True
                                 break
                         else:
@@ -124,12 +124,16 @@ class HutVote(commands.Cog):
                 continue
             posted_message_ids.add(msg.id)
 
-            # Build reaction count line
-            reaction_line = " ".join(f"{str(guild.get_emoji(REACTIONS[k]))*counts[k]}" for k in REACTIONS.keys())
+            # Build reaction count lines: Emoji once + numeric count
+            reaction_lines = []
+            for k in REACTIONS.keys():
+                emoji_obj = guild.get_emoji(REACTIONS[k])
+                emoji_display = str(emoji_obj) if emoji_obj else k
+                reaction_lines.append(f"{emoji_display} {counts[k]}")
+            reaction_line = "\n".join(reaction_lines)
 
             # Title = first mention or author
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
-            creator_mention = msg.mentions[0].mention if msg.mentions else msg.author.mention
             title = f"Image by {creator_name}"
 
             # Image URL fallback
