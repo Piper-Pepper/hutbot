@@ -5,48 +5,34 @@ from discord import app_commands
 from datetime import datetime, timezone
 import calendar
 
-# Only this role can use the command
 ALLOWED_ROLE = 1346428405368750122
 
-# Category choices
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
     app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
 ]
 
-# Year choices: this year and last year
 current_year = datetime.utcnow().year
 YEAR_CHOICES = [
     app_commands.Choice(name=str(current_year), value=str(current_year)),
     app_commands.Choice(name=str(current_year - 1), value=str(current_year - 1)),
 ]
 
-# Month choices
 MONTH_CHOICES = [
-    app_commands.Choice(name="January", value="01"),
-    app_commands.Choice(name="February", value="02"),
-    app_commands.Choice(name="March", value="03"),
-    app_commands.Choice(name="April", value="04"),
-    app_commands.Choice(name="May", value="05"),
-    app_commands.Choice(name="June", value="06"),
-    app_commands.Choice(name="July", value="07"),
-    app_commands.Choice(name="August", value="08"),
-    app_commands.Choice(name="September", value="09"),
-    app_commands.Choice(name="October", value="10"),
-    app_commands.Choice(name="November", value="11"),
-    app_commands.Choice(name="December", value="12"),
+    app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1,13)
 ]
 
-# Emoji mapping: Name -> (Custom Emoji String, ID)
-EMOJI_MAP = {
-    "Great": ("<:01sthumb:1387086056498921614>", 1387086056498921614),
-    "Funny": ("<:01smile_piper:1387083454575022213>", 1387083454575022213),
-    "No way!": ("<:02No:1347536448831754383>", 1347536448831754383),
-    "11": ("<:011:1346549711817146400>", 1346549711817146400),
-    "Pump": ("<:011pump:1346549688836296787>", 1346549688836296787),
+# Reactions
+REACTIONS = {
+    "Great": 1387086056498921614,
+    "Funny": 1387083454575022213,
+    "No way!": 1347536448831754383,
+    "11": 1346549711817146400,
+    "Pump": 1346549688836296787
 }
-EMOJI_CHOICES = [app_commands.Choice(name=name, value=name) for name in EMOJI_MAP.keys()]
 
+TOP4_KEYS = ["Great","Funny","No way!","11"]  # main reactions for top5 ranking
+TIEBREAK_KEY = "Pump"  # tiebreaker
 
 class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -54,49 +40,31 @@ class HutVote(commands.Cog):
 
     @app_commands.command(
         name="hut_vote",
-        description="Shows the top 3 posts for a selected emoji in a given month"
+        description="Shows the top 5 posts by reactions for a category/month/year"
     )
     @app_commands.describe(
         year="Select year",
         month="Select month",
-        category="Select category",
-        emoji="Select emoji"
+        category="Select category"
     )
     @app_commands.choices(
         year=YEAR_CHOICES,
         month=MONTH_CHOICES,
-        category=CATEGORY_CHOICES,
-        emoji=EMOJI_CHOICES
+        category=CATEGORY_CHOICES
     )
     async def hut_vote(
         self,
         interaction: discord.Interaction,
         year: app_commands.Choice[str],
         month: app_commands.Choice[str],
-        category: app_commands.Choice[str],
-        emoji: app_commands.Choice[str]
+        category: app_commands.Choice[str]
     ):
         # Permission check
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
             return
 
         guild = interaction.guild
-
-        # Resolve selected emoji
-        _, selected_emoji_id = EMOJI_MAP[emoji.value]
-        emoji_obj = guild.get_emoji(selected_emoji_id)
-        emoji_display = str(emoji_obj) if emoji_obj else EMOJI_MAP[emoji.value][0]
-
-        # Start and end of month
-        try:
-            start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
-            last_day = calendar.monthrange(int(year.value), int(month.value))[1]
-            end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid year or month.", ephemeral=True)
-            return
-
         category_obj = guild.get_channel(int(category.value))
         if not category_obj or not isinstance(category_obj, discord.CategoryChannel):
             await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
@@ -104,7 +72,12 @@ class HutVote(commands.Cog):
 
         await interaction.response.defer(thinking=True)
 
-        # Collect messages with the selected emoji
+        # Month range
+        start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
+        last_day = calendar.monthrange(int(year.value), int(month.value))[1]
+        end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
+
+        # Collect messages with at least one of the tracked reactions
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
@@ -114,87 +87,79 @@ class HutVote(commands.Cog):
                 continue
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
-                    for reaction in msg.reactions:
-                        emoji_id = getattr(reaction.emoji, "id", None)
-                        if emoji_id == selected_emoji_id:
-                            matched_msgs.append((reaction.count, msg))
-            except discord.Forbidden:
-                continue
+                    counts = {}
+                    has_main = False
+                    for r_name, r_id in REACTIONS.items():
+                        for reaction in msg.reactions:
+                            if getattr(reaction.emoji, "id", None) == r_id:
+                                counts[r_name] = reaction.count
+                                if r_name in TOP4_KEYS and reaction.count>0:
+                                    has_main = True
+                                break
+                        else:
+                            counts[r_name] = 0
+                    if has_main:
+                        matched_msgs.append((counts, msg))
             except Exception:
                 continue
 
         if not matched_msgs:
-            await interaction.followup.send(f"No posts found with {emoji_display} in {calendar.month_name[int(month.value)]} {year.value}.")
+            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
-        # Sort top3 with tiebreaker: sum of other reactions
+        # Sort top5 by sum of TOP4, tie-breaker = Pump
         def sort_key(item):
-            count_selected, msg = item
-            other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
-            return (count_selected, other_count, msg.created_at)
+            counts, msg = item
+            main_sum = sum(counts[k] for k in TOP4_KEYS)
+            tie = counts[TIEBREAK_KEY]
+            return (main_sum, tie, msg.created_at)
 
-        top3 = sorted(matched_msgs, key=sort_key, reverse=True)[:3]
+        top5 = sorted(matched_msgs, key=sort_key, reverse=True)[:5]
 
-        # Overview embed
-        embed = discord.Embed(
-            title=f"Top 3 posts for {emoji_display} in {calendar.month_name[int(month.value)]} {year.value} ({category_obj.name})",
-            color=discord.Color.blurple()
-        )
-        lines = []
-        for i, (count, msg) in enumerate(top3, start=1):
-            date_str = msg.created_at.strftime("%Y-%m-%d")
-            other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
-            lines.append(f"{i}. {emoji_display} — **{count}x** in #{msg.channel.name} ({date_str}) — [Post]({msg.jump_url}) (and {other_count} other reactions)")
-        embed.add_field(name="Top 3 Posts", value="\n".join(lines), inline=False)
-        await interaction.followup.send(embed=embed)
-
-        # Track posted messages to avoid duplicates in this command run
         posted_message_ids = set()
 
-        # Send image embeds for top3
-        for count, msg in top3:
+        # Post each top5 message
+        for counts, msg in top5:
             if msg.id in posted_message_ids:
                 continue
             posted_message_ids.add(msg.id)
 
-            other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
+            # Build reaction count line
+            reaction_line = " ".join(f"{str(guild.get_emoji(REACTIONS[k]))*counts[k]}" for k in REACTIONS.keys())
+
+            # Title = first mention or author
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             creator_mention = msg.mentions[0].mention if msg.mentions else msg.author.mention
             title = f"Image by {creator_name}"
 
-            # Always generate embed, even if no image
+            # Image URL fallback
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
             elif msg.embeds:
-                if msg.embeds[0].image:
-                    img_url = msg.embeds[0].image.url
-                elif msg.embeds[0].thumbnail:
-                    img_url = msg.embeds[0].thumbnail.url
+                for e in msg.embeds:
+                    if e.image:
+                        img_url = e.image.url
+                        break
+                    elif e.thumbnail:
+                        img_url = e.thumbnail.url
+                        break
 
+            embed = discord.Embed(
+                title=title,
+                description=f"{reaction_line}\n[Post]({msg.jump_url})",
+                color=discord.Color.green()
+            )
             if img_url:
-                img_embed = discord.Embed(
-                    title=title,
-                    description=f"{emoji_display} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)",
-                    color=discord.Color.green()
-                )
-                img_embed.set_image(url=img_url)
-            else:
-                img_embed = discord.Embed(
-                    title=title,
-                    description=f"{emoji_display} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)\n(No image attached)",
-                    color=discord.Color.green()
-                )
+                embed.set_image(url=img_url)
 
-            await interaction.followup.send(embed=img_embed)
+            await interaction.followup.send(embed=embed)
 
-        # Extra post: Top1 creator mention with ping
-        top1_msg = top3[0][1]
-        top1_count = top3[0][0]
-        top1_emoji_display = emoji_display
+        # Extra post: top1 creator
+        top1_msg = top5[0][1]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value} the user {top1_creator_mention} has created the image with most {top1_emoji_display} votes ({top1_count}x) in the {category_obj.name}!!"
+            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} has created the image with most total votes in the {category_obj.name}!"
         )
 
 
