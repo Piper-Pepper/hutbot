@@ -22,17 +22,17 @@ MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
-# Reactions
-REACTIONS = {
-    "Great": 1387086056498921614,
-    "Funny": 1387083454575022213,
-    "No way!": 1347536448831754383,
-    "11": 1346549711817146400,
-    "Pump": 1346549688836296787
-}
+# Custom emoji IDs
+REACTIONS = [
+    1387086056498921614,  # main 1
+    1387083454575022213,  # main 2
+    1347536448831754383,  # main 3
+    1346549711817146400,  # main 4
+    1346549688836296787   # tiebreaker
+]
 
-TOP4_KEYS = ["Great", "Funny", "No way!", "11"]  # main reactions for top5 ranking
-TIEBREAK_KEY = "Pump"  # tiebreaker
+MAIN_REACTIONS = REACTIONS[:4]  # first 4 for top5 sorting
+TIEBREAK_REACTION = REACTIONS[4]  # fifth reaction for tie-breaker
 
 class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -89,15 +89,15 @@ class HutVote(commands.Cog):
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     counts = {}
                     has_main = False
-                    for r_name, r_id in REACTIONS.items():
+                    for r_id in REACTIONS:
                         for reaction in msg.reactions:
                             if getattr(reaction.emoji, "id", None) == r_id:
-                                counts[r_name] = reaction.count
-                                if r_name in TOP4_KEYS and reaction.count > 0:
+                                counts[r_id] = reaction.count
+                                if r_id in MAIN_REACTIONS and reaction.count > 0:
                                     has_main = True
                                 break
                         else:
-                            counts[r_name] = 0
+                            counts[r_id] = 0
                     if has_main:
                         matched_msgs.append((counts, msg))
             except Exception:
@@ -107,29 +107,28 @@ class HutVote(commands.Cog):
             await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
-        # Sort top5 by sum of TOP4, tie-breaker = Pump
+        # Sort top5 by sum of main reactions, tie-breaker
         def sort_key(item):
             counts, msg = item
-            main_sum = sum(counts[k] for k in TOP4_KEYS)
-            tie = counts[TIEBREAK_KEY]
+            main_sum = sum(counts[r_id] for r_id in MAIN_REACTIONS)
+            tie = counts[TIEBREAK_REACTION]
             return (main_sum, tie, msg.created_at)
 
         top5 = sorted(matched_msgs, key=sort_key, reverse=True)[:5]
 
         posted_message_ids = set()
 
-        # Post each top5 message
         for counts, msg in top5:
             if msg.id in posted_message_ids:
                 continue
             posted_message_ids.add(msg.id)
 
-            # Build reaction count lines: Emoji once + numeric count
+            # Reaction lines: emoji once + numeric count
             reaction_lines = []
-            for k in REACTIONS.keys():
-                emoji_obj = guild.get_emoji(REACTIONS[k])
-                emoji_display = str(emoji_obj) if emoji_obj else k
-                reaction_lines.append(f"{emoji_display} {counts[k]}")
+            for r_id in REACTIONS:
+                emoji_obj = guild.get_emoji(r_id)
+                emoji_display = str(emoji_obj) if emoji_obj else f"<:{r_id}>"
+                reaction_lines.append(f"{emoji_display} {counts[r_id]}")
             reaction_line = "\n".join(reaction_lines)
 
             # Title = first mention or author
