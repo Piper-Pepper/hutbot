@@ -9,11 +9,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Channel & Role IDs
 BUTTON_CHANNEL_ID = 1382079493711200549
 TICKET_CHANNEL_ID = 1390430555124007145
+SECOND_BUTTON_CHANNEL_ID = 1362109155531423894  # new channel
 TICKET_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1385054753754714162/ticket_small.jpg"
+SECOND_EMBED_IMAGE = "https://cdn.discordapp.com/attachments/1383652563408392232/1421560571861532807/western_beware.gif"
 REQUIRED_ROLE_ID = 1377051179615522926  # Role für PMVJ & Pepper Police
 
+# JSONBin config
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 BIN_ID = os.getenv("TICKET_BIN")
 HEADERS = {
@@ -96,7 +100,7 @@ class ApplyPMVJButton(Button):
             role = interaction.guild.get_role(REQUIRED_ROLE_ID)
             role_name = role.name if role else "Required Role"
             await interaction.response.send_message(
-                f"⚠️ You have to be at least Level 5 and inhabit the role **{role_name}** to do this.",
+                f"⚠️ You have to be at least Level 4 and inhabit the role **{role_name}** to do this.",
                 ephemeral=True
             )
             return
@@ -131,8 +135,17 @@ class ApplyPepperPoliceButton(Button):
             return
         await interaction.response.send_modal(TicketModal(bot=self.bot, title_prefix="Apply for Pepper Police", image_url=self.police_image))
 
-# ---------------- Ticket View ----------------
+# ---------------- Ticket Views ----------------
 class TicketView(View):
+    def __init__(self, bot: commands.Bot, channel_id: int):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.add_item(TicketButton(bot, channel_id))
+        self.add_item(ApplyPMVJButton(bot, channel_id))
+        self.add_item(ApplyHutRiddlerButton(bot, channel_id))
+        self.add_item(ApplyPepperPoliceButton(bot, channel_id))
+
+class TicketViewEmbed(View):
     def __init__(self, bot: commands.Bot, channel_id: int):
         super().__init__(timeout=None)
         self.bot = bot
@@ -146,10 +159,13 @@ class TicketCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.post_button_message.start()
+        self.post_embed_button_message.start()
 
     def cog_unload(self):
         self.post_button_message.cancel()
+        self.post_embed_button_message.cancel()
 
+    # First version: plain text + buttons
     @tasks.loop(count=1)
     async def post_button_message(self):
         await self.bot.wait_until_ready()
@@ -183,29 +199,81 @@ class TicketCog(commands.Cog):
             except Exception as e:
                 print(f"⚠️ Error loading/editing message: {e}")
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        channel = self.bot.get_channel(BUTTON_CHANNEL_ID)
+    # Second version: embed with image + buttons
+    @tasks.loop(count=1)
+    async def post_embed_button_message(self):
+        await self.bot.wait_until_ready()
+        channel = self.bot.get_channel(SECOND_BUTTON_CHANNEL_ID)
         if not channel:
-            print("❌ Button channel not found on_ready")
+            print("❌ Second button channel not found.")
             return
 
         data = load_buttons_data()
-        message_id = data.get(str(BUTTON_CHANNEL_ID))
+        message_id = data.get(str(SECOND_BUTTON_CHANNEL_ID))
 
-        if message_id:
+        embed = discord.Embed(
+            title="Choose your path…",
+            description="Pick wisely, partner 🤠",
+            color=discord.Color.dark_gold()
+        )
+        embed.set_image(url=SECOND_EMBED_IMAGE)
+
+        if message_id is None:
+            print(f"[INFO] No saved embed message ID, sending new embed button...")
+            view = TicketViewEmbed(self.bot, SECOND_BUTTON_CHANNEL_ID)
+            msg = await channel.send(embed=embed, view=view)
+            data[str(SECOND_BUTTON_CHANNEL_ID)] = str(msg.id)
+            save_buttons_data(data)
+            print(f"➕ New embed button message posted: {msg.id}")
+        else:
             try:
                 message = await channel.fetch_message(int(message_id))
-                await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))
-                print(f"🔄 View attached to message {message_id} on on_ready")
+                await message.edit(embed=embed, view=TicketViewEmbed(self.bot, SECOND_BUTTON_CHANNEL_ID))
+                print(f"♻️ Loaded embed button message and attached view: {message_id}")
             except discord.NotFound:
-                print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
-        else:
-            view = TicketView(self.bot, BUTTON_CHANNEL_ID)
-            msg = await channel.send("So.. what do you want from Ms Pepper exactly🫦?", view=view)
-            data[str(BUTTON_CHANNEL_ID)] = str(msg.id)
-            save_buttons_data(data)
-            print("ℹ️ View added without message ID (no persistent button)")
+                print(f"❌ Stored embed message {message_id} not found! Posting new one...")
+                view = TicketViewEmbed(self.bot, SECOND_BUTTON_CHANNEL_ID)
+                msg = await channel.send(embed=embed, view=view)
+                data[str(SECOND_BUTTON_CHANNEL_ID)] = str(msg.id)
+                save_buttons_data(data)
+                print(f"➕ New embed button message posted: {msg.id}")
+            except Exception as e:
+                print(f"⚠️ Error loading/editing embed message: {e}")
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # First
+        channel = self.bot.get_channel(BUTTON_CHANNEL_ID)
+        if channel:
+            data = load_buttons_data()
+            message_id = data.get(str(BUTTON_CHANNEL_ID))
+            if message_id:
+                try:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.edit(view=TicketView(self.bot, BUTTON_CHANNEL_ID))
+                    print(f"🔄 View attached to message {message_id} on on_ready")
+                except discord.NotFound:
+                    print(f"❌ Stored message {message_id} not found on_ready! Please restart or reset the message ID.")
+
+        # Second
+        channel2 = self.bot.get_channel(SECOND_BUTTON_CHANNEL_ID)
+        if channel2:
+            data = load_buttons_data()
+            message_id = data.get(str(SECOND_BUTTON_CHANNEL_ID))
+            embed = discord.Embed(
+                title="Choose your path…",
+                description="Pick wisely, partner 🤠",
+                color=discord.Color.dark_gold()
+            )
+            embed.set_image(url=SECOND_EMBED_IMAGE)
+
+            if message_id:
+                try:
+                    message = await channel2.fetch_message(int(message_id))
+                    await message.edit(embed=embed, view=TicketViewEmbed(self.bot, SECOND_BUTTON_CHANNEL_ID))
+                    print(f"🔄 Embed view attached to message {message_id} on on_ready")
+                except discord.NotFound:
+                    print(f"❌ Stored embed message {message_id} not found on_ready! Please restart or reset the embed message ID.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TicketCog(bot))
