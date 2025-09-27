@@ -1,4 +1,4 @@
-# cogs/hutvote_botonly.py
+# cogs/hutvote.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import calendar
 
 ALLOWED_ROLE = 1346428405368750122
-BOT_ID = 1379906834588106883
 
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
@@ -23,6 +22,7 @@ MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
+# Custom emoji IDs
 REACTIONS = [
     1387086056498921614,  # main 1
     1387083454575022213,  # main 2
@@ -31,16 +31,16 @@ REACTIONS = [
     1346549688836296787   # tiebreaker
 ]
 
-MAIN_REACTIONS = REACTIONS[:4]
-TIEBREAK_REACTION = REACTIONS[4]
+MAIN_REACTIONS = REACTIONS[:4]  # first 4 for top5 sorting
+TIEBREAK_REACTION = REACTIONS[4]  # fifth reaction for tie-breaker
 
-class HutVoteBotOnly(commands.Cog):
+class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(
         name="hut_vote",
-        description="Shows top 5 bot posts with reactions"
+        description="Shows the top 5 posts by reactions for a category/month/year"
     )
     @app_commands.describe(
         year="Select year",
@@ -59,6 +59,7 @@ class HutVoteBotOnly(commands.Cog):
         month: app_commands.Choice[str],
         category: app_commands.Choice[str]
     ):
+        # Permission check
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
             return
@@ -71,16 +72,18 @@ class HutVoteBotOnly(commands.Cog):
 
         await interaction.response.defer(thinking=True)
 
+        # Month range
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
+        # Collect messages with at least one main reaction from visible channels
         matched_msgs = []
-
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
                 continue
 
+            # Skip channels not visible to @everyone
             overwrites = channel.overwrites_for(guild.default_role)
             if overwrites.view_channel is False:
                 continue
@@ -91,9 +94,6 @@ class HutVoteBotOnly(commands.Cog):
 
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
-                    if msg.author.id != BOT_ID:
-                        continue  # Only bot posts
-
                     counts = {}
                     has_main = False
                     for r_id in REACTIONS:
@@ -105,23 +105,16 @@ class HutVoteBotOnly(commands.Cog):
                                 break
                         else:
                             counts[r_id] = 0
-
-                    if not has_main:
-                        continue
-
-                    if not msg.attachments and not msg.embeds:
-                        continue  # Skip posts without images
-
-                    matched_msgs.append((counts, msg))
-
-            except Exception as e:
-                print(f"Error reading channel {channel.name}: {e}")
+                    if has_main:
+                        matched_msgs.append((counts, msg))
+            except Exception:
+                continue
 
         if not matched_msgs:
-            await interaction.followup.send(f"No bot posts found in {calendar.month_name[int(month.value)]} {year.value}.")
+            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
             return
 
-        # Sort by main reactions sum + tie-breaker
+        # Sort top5 by sum of main reactions, tie-breaker
         def sort_key(item):
             counts, msg = item
             main_sum = sum(counts[r_id] for r_id in MAIN_REACTIONS)
@@ -137,6 +130,7 @@ class HutVoteBotOnly(commands.Cog):
                 continue
             posted_message_ids.add(msg.id)
 
+            # Reaction lines: emoji once + numeric count
             reaction_lines = []
             for r_id in REACTIONS:
                 emoji_obj = guild.get_emoji(r_id)
@@ -144,9 +138,11 @@ class HutVoteBotOnly(commands.Cog):
                 reaction_lines.append(f"{emoji_display} {counts[r_id]}")
             reaction_line = "\n".join(reaction_lines)
 
+            # Title = first mention or author
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
 
+            # Image URL fallback
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -178,4 +174,4 @@ class HutVoteBotOnly(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(HutVoteBotOnly(bot))
+    await bot.add_cog(HutVote(bot))
