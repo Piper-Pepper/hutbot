@@ -181,9 +181,10 @@ class HutVote(commands.Cog):
         top1_msg = top3[0][1]
         top1_count = top3[0][0]
         top1_emoji_display = emoji_display
-        top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
+        top1_creator_name = top1_msg.mentions[0].display_name if top1_msg.mentions else top1_msg.author.display_name
         await interaction.followup.send(
-            f"Currently {top1_creator_mention} has created the image with the most {top1_emoji_display} votes ({top1_count}x)!"
+            f"In {calendar.month_name[int(month.value)]}/{year.value} the user {top1_creator_name} has created the image with most {top1_emoji_display} votes ({top1_count}x) in the {category_obj.name}!!"
+       
         )
 
 
