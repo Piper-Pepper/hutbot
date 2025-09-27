@@ -54,7 +54,7 @@ async def main():
             "gather",
             "reset",
             "riddle",
-            "gather_contest",
+            "hutvote",
             "riddle_post"
         ]
 
