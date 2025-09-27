@@ -154,8 +154,21 @@ class HutVote(commands.Cog):
         embed.add_field(name="Top 3 Posts", value="\n".join(lines), inline=False)
         await interaction.followup.send(embed=embed)
 
+        # Track posted messages to avoid duplicates in this command run
+        posted_message_ids = set()
+
         # Image embeds with emoji, tiebreaker, and first mention as title
         for count, msg in top3:
+            if msg.id in posted_message_ids:
+                continue  # Skip already processed message
+            posted_message_ids.add(msg.id)
+
+            other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
+            creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
+            creator_mention = msg.mentions[0].mention if msg.mentions else msg.author.mention
+            title = f"Image by {creator_name}"
+
+            # Check if there is an attachment or embed image
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -166,16 +179,21 @@ class HutVote(commands.Cog):
                     img_url = msg.embeds[0].thumbnail.url
 
             if img_url:
-                other_count = sum(r.count for r in msg.reactions if getattr(r.emoji, "id", None) != selected_emoji_id)
-                creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
-                title = f"Image by {creator_name}"
                 img_embed = discord.Embed(
                     title=title,
                     description=f"{emoji_display} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)",
                     color=discord.Color.green()
                 )
                 img_embed.set_image(url=img_url)
-                await interaction.followup.send(embed=img_embed)
+            else:
+                # Fallback: Embed ohne Bild, nur Info
+                img_embed = discord.Embed(
+                    title=title,
+                    description=f"{emoji_display} — **{count}x** in #{msg.channel.name} — [Post]({msg.jump_url}) (and {other_count} other reactions)\n(No image attached)",
+                    color=discord.Color.green()
+                )
+
+            await interaction.followup.send(embed=img_embed)
 
         # Extra post: Top1 creator mention (with ping)
         top1_msg = top3[0][1]
