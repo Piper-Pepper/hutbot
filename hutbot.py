@@ -55,6 +55,7 @@ async def main():
             "reset",
             "riddle",
             "hutvote",
+            "poppy",
             "riddle_post"
         ]
 
