@@ -22,8 +22,8 @@ VIP_ROLE_ID = 1377051179615522926
 SPECIAL_ROLE_ID = 1375147276413964408
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
-PIPER_SUFFIX = "20 years old girl. Pale white skin with freckles. She has red bangs and green eyes. She wears green headphones with black auricles. Her mouth has a slight overbite. Shwe is completely nude. Her skin is oily and wet. We see her whole nude and skinny body. She has perky little tits with small errects niplles. She has a freshly shaved anf puffy and wet vagina. She is naked except her black Doc Martens Boots. ,Areola wrinkles,pointy nipples,small nipples,pink nipples"
-POPPY_SUFFIX = "This is Poppy dummy suffix"
+PIPER_SUFFIX = "This is Piper hidden suffix"
+POPPY_SUFFIX = "This is Poppy hidden suffix"
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
@@ -46,10 +46,7 @@ ALL_VARIANTS = [
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
-    base = "_".join(prompt.split()[:5]) or "image"
-    base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
-    if not base or not base[0].isalnum():
-        base = "img_" + base
+    base = "piper_poppy"
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict, width: int, height: int, steps=None, cfg_scale=None, negative_prompt=None) -> bytes | None:
@@ -85,18 +82,9 @@ class VeniceModal(discord.ui.Modal):
         self.is_vip = is_vip
         previous_inputs = previous_inputs if previous_inputs is not None else {}
 
-        # Prompt
-        self.prompt = discord.ui.TextInput(
-            label="Main Prompt",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=1000,
-            default=previous_inputs.get("prompt", "")
-        )
-
         # Piper
         self.piper = discord.ui.TextInput(
-            label="Piper (at least one of Piper/Poppy required)",
+            label="Piper (optional)",
             style=discord.TextStyle.short,
             required=False,
             max_length=300,
@@ -105,7 +93,7 @@ class VeniceModal(discord.ui.Modal):
 
         # Poppy
         self.poppy = discord.ui.TextInput(
-            label="Poppy",
+            label="Poppy (optional)",
             style=discord.TextStyle.short,
             required=False,
             max_length=300,
@@ -145,7 +133,6 @@ class VeniceModal(discord.ui.Modal):
         )
 
         # add items
-        self.add_item(self.prompt)
         self.add_item(self.piper)
         self.add_item(self.poppy)
         self.add_item(self.negative_prompt)
@@ -154,7 +141,7 @@ class VeniceModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         if not self.piper.value.strip() and not self.poppy.value.strip():
-            await interaction.response.send_message("❌ You must fill at least Piper or Poppy.", ephemeral=True)
+            await interaction.response.send_message("❌ You must fill Piper and/or Poppy.", ephemeral=True)
             return
 
         try:
@@ -170,13 +157,20 @@ class VeniceModal(discord.ui.Modal):
 
         negative_prompt = self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
 
-        # build suffixes
-        suffix_parts = []
+        # build full prompt
+        full_prompt = ""
         if self.piper.value.strip():
-            suffix_parts.append(PIPER_SUFFIX)
+            full_prompt += self.piper.value.strip() + " " + PIPER_SUFFIX
         if self.poppy.value.strip():
-            suffix_parts.append(POPPY_SUFFIX)
-        full_prompt = self.prompt.value + " " + " ".join(suffix_parts)
+            full_prompt += " " + self.poppy.value.strip() + " " + POPPY_SUFFIX
+
+        # embed display string
+        if self.piper.value.strip() and self.poppy.value.strip():
+            display_name = "Piper & Poppy"
+        elif self.piper.value.strip():
+            display_name = "Piper"
+        else:
+            display_name = "Poppy"
 
         variant = {
             **self.variant,
@@ -186,7 +180,6 @@ class VeniceModal(discord.ui.Modal):
         }
 
         self.previous_inputs = {
-            "prompt": self.prompt.value,
             "piper": self.piper.value,
             "poppy": self.poppy.value,
             "negative_prompt": negative_prompt,
@@ -201,6 +194,7 @@ class VeniceModal(discord.ui.Modal):
                 variant,
                 full_prompt,
                 interaction.user,
+                display_name,
                 self.is_vip,
                 previous_inputs=self.previous_inputs
             ),
@@ -209,12 +203,13 @@ class VeniceModal(discord.ui.Modal):
 
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, author, is_vip, previous_inputs=None):
+    def __init__(self, session, variant, prompt_text, author, display_name, is_vip, previous_inputs=None):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.author = author
+        self.display_name = display_name
         self.is_vip = is_vip
         self.previous_inputs = previous_inputs or {}
 
@@ -282,14 +277,7 @@ class AspectRatioView(discord.ui.View):
         today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
-        truncated_prompt = (self.prompt_text or "").replace("\n\n", "\n")
-        if len(truncated_prompt) > 500:
-            truncated_prompt = truncated_prompt[:500] + " [...]"
-        embed.description = f"🔮 Prompt:\n{truncated_prompt}"
-
-        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-        if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
-            embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
+        embed.description = f"🔮 Prompt: {self.display_name}"
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
@@ -333,14 +321,6 @@ class PostGenerationView(discord.ui.View):
         del_btn.callback = self.delete_callback
         self.add_item(del_btn)
 
-        submit_btn = discord.ui.Button(
-            label="Submit image to contest🏆",
-            style=discord.ButtonStyle.blurple,
-            row=1
-        )
-        submit_btn.callback = self.post_gallery_callback
-        self.add_item(submit_btn)
-
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
 
@@ -356,27 +336,6 @@ class PostGenerationView(discord.ui.View):
         try: await self.message.delete()
         except: pass
         await interaction.response.send_message("✅ Post deleted", ephemeral=True)
-
-    async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320
-        role_id = 1419024270201454684
-        channel = interaction.guild.get_channel(channel_id)
-        if not channel:
-            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
-            return
-
-        embed = None
-        if self.message.embeds:
-            original_embed = self.message.embeds[0]
-            embed = discord.Embed.from_dict(original_embed.to_dict())
-            embed.description = f"[View original post]({self.message.jump_url})"
-            if original_embed.footer:
-                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
-
-        mention_text = f"🎖️<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        await channel.send(content=mention_text, embed=embed)
-
-        await interaction.response.send_message("✅ Submitted to contest.", ephemeral=True)
 
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
@@ -422,4 +381,4 @@ class VenicePiperPoppyCog(commands.Cog):
 
 ## ---------------- Setup ----------------
 async def setup(bot: commands.Bot):
-    await bot.add_cog(VeniceCog(bot))
+    await bot.add_cog(VenicePiperPoppyCog(bot))
