@@ -1,4 +1,4 @@
-# cogs/hutvote.py
+# hutvote.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -6,10 +6,17 @@ from datetime import datetime, timezone
 import calendar
 import json
 import os
+import logging
 
-ALLOWED_ROLE = 1346428405368750122
-BOT_ID = 1379906834588106883
+log = logging.getLogger(__name__)
 
+# === Konfiguration ===
+ALLOWED_ROLE = 1346428405368750122   # ID deiner Mod/Admin-Rolle
+BOT_ID = 1379906834588106883         # ID des Bots selbst
+POSTED_FILE = "hutvote_posted.json"
+TEST_GUILD_ID = 123456789012345678   # <--- HIER deine Testserver-ID eintragen
+
+# === Choices für Dropdowns ===
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
     app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
@@ -31,19 +38,27 @@ RANK_CHOICES = [
     app_commands.Choice(name="20", value="20"),
 ]
 
-# Datei zum Speichern der geposteten Nachrichten für Edit-Funktion
-POSTED_FILE = "hutvote_posted.json"
 
+# === JSON Helpers ===
 def load_posted():
     if os.path.exists(POSTED_FILE):
-        with open(POSTED_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(POSTED_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            log.warning("⚠️ Fehler beim Laden von %s: %s", POSTED_FILE, e)
     return {}
 
-def save_posted(data):
-    with open(POSTED_FILE, "w") as f:
-        json.dump(data, f)
 
+def save_posted(data):
+    try:
+        with open(POSTED_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log.error("❌ Fehler beim Speichern von %s: %s", POSTED_FILE, e)
+
+
+# === Cog ===
 class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -58,7 +73,7 @@ class HutVote(commands.Cog):
         month="Select month",
         category="Select category",
         ranks="Number of posts to rank",
-        open="Public (updates existing posts) or ephemeral"
+        open="Post public (updates existing posts) or ephemeral"
     )
     @app_commands.choices(
         year=YEAR_CHOICES,
@@ -75,8 +90,11 @@ class HutVote(commands.Cog):
         ranks: app_commands.Choice[str] = app_commands.Choice(name="5", value="5"),
         open: bool = False
     ):
-        # Berechtigung prüfen
-        if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
+        """Slash-Command: zeigt Top-Bilder im Monat nach Reaktionen."""
+
+        # --- Permission Check ---
+        if not isinstance(interaction.user, discord.Member) or \
+           ALLOWED_ROLE not in [r.id for r in interaction.user.roles]:
             await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
             return
 
@@ -86,12 +104,13 @@ class HutVote(commands.Cog):
             await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
             return
 
+        # --- Prepare timeframe ---
         await interaction.response.defer(thinking=True, ephemeral=not open)
-
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
 
+        # --- Collect messages ---
         matched_msgs = []
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
@@ -107,13 +126,18 @@ class HutVote(commands.Cog):
                     if msg.author.id != BOT_ID:
                         continue
                     matched_msgs.append(msg)
-            except Exception:
+            except Exception as e:
+                log.warning("⚠️ Fehler beim Lesen von %s: %s", channel, e)
                 continue
 
         if not matched_msgs:
-            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
+            await interaction.followup.send(
+                f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.",
+                ephemeral=not open
+            )
             return
 
+        # --- Ranking ---
         rank_count = int(ranks.value)
 
         def sort_key(msg: discord.Message):
@@ -124,14 +148,18 @@ class HutVote(commands.Cog):
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:rank_count]
 
-        # Initialisiere Eintrag für diese Kategorie/Monat/Jahr
+        # --- Init storage key ---
         key = f"{guild.id}-{category.value}-{year.value}-{month.value}"
         if key not in self.posted:
             self.posted[key] = {}
 
+        # --- Create embeds ---
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
-            reaction_lines = [f"{str(r.emoji) if isinstance(r.emoji, discord.Emoji) else r.emoji} {r.count}" for r in sorted_reacts[:5]]
+            reaction_lines = [
+                f"{str(r.emoji) if isinstance(r.emoji, (discord.Emoji, str)) else r.emoji} {r.count}"
+                for r in sorted_reacts[:5]
+            ]
             reaction_line = "\n".join(reaction_lines)
             extra_reactions = sum(r.count for r in sorted_reacts[5:])
             extra_text = f"\n({extra_reactions} additional reactions)" if extra_reactions else ""
@@ -152,7 +180,7 @@ class HutVote(commands.Cog):
                         break
 
             if not img_url:
-                continue  # überspringen, wenn kein Bild vorhanden
+                continue
 
             embed = discord.Embed(
                 title=title,
@@ -161,10 +189,8 @@ class HutVote(commands.Cog):
             )
             embed.set_image(url=img_url)
 
-            # Check, ob schon gepostet (nur relevant wenn open=True)
             msg_key = str(msg.id)
             if open and msg_key in self.posted[key]:
-                # Edit existing message
                 channel_id, sent_msg_id = self.posted[key][msg_key]
                 channel_obj = guild.get_channel(channel_id)
                 if channel_obj:
@@ -173,21 +199,25 @@ class HutVote(commands.Cog):
                         await sent_msg.edit(embed=embed)
                         continue
                     except Exception:
-                        pass  # falls Message gelöscht, einfach neu posten
+                        pass  # Falls gelöscht → neu posten
 
-            # Neue Nachricht posten
             sent = await interaction.followup.send(embed=embed, ephemeral=not open)
             if open:
                 self.posted[key][msg_key] = (interaction.channel_id, sent.id)
                 save_posted(self.posted)
 
-        # Extra post: Top1 Creator
+        # --- Extra Post: Top1 Creator ---
         top1_msg = top_msgs[0]
-        top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
+        top1_creator = top1_msg.mentions[0] if top1_msg.mentions else top1_msg.author
         await interaction.followup.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} has created the image with most total votes in the {category_obj.name}!",
+            f"In {calendar.month_name[int(month.value)]}/{year.value}, "
+            f"the user {top1_creator.mention} has created the image with most total votes in the {category_obj.name}!",
             ephemeral=not open
         )
 
+
+# === Setup ===
 async def setup(bot: commands.Bot):
-    await bot.add_cog(HutVote(bot))
+    cog = HutVote(bot)
+    await bot.add_cog(cog)
+    bot.tree.add_command(cog.hut_vote, guild=discord.Object(TEST_GUILD_ID))  # sofort sichtbar in Test-Server
