@@ -14,9 +14,8 @@ log = logging.getLogger(__name__)
 ALLOWED_ROLE = 1346428405368750122   # ID deiner Mod/Admin-Rolle
 BOT_ID = 1379906834588106883         # ID des Bots selbst
 POSTED_FILE = "hutvote_posted.json"
-TEST_GUILD_ID = 123456789012345678   # <--- HIER deine Testserver-ID eintragen
 
-# === Choices für Dropdowns ===
+# === Choices ===
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
     app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
@@ -218,6 +217,4 @@ class HutVote(commands.Cog):
 
 # === Setup ===
 async def setup(bot: commands.Bot):
-    cog = HutVote(bot)
-    await bot.add_cog(cog)
-    bot.tree.add_command(cog.hut_vote, guild=discord.Object(TEST_GUILD_ID))  # sofort sichtbar in Test-Server
+    await bot.add_cog(HutVote(bot))
