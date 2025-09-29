@@ -22,8 +22,9 @@ VIP_ROLE_ID = 1377051179615522926
 SPECIAL_ROLE_ID = 1375147276413964408
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
-PIPER_SUFFIX = "This is Piper hidden suffix"
-POPPY_SUFFIX = "This is Poppy hidden suffix"
+
+PIPER_SUFFIX = "Piper:(20 years old woman. Pale white skin with freckles. She has red bangs and green eyes. She wears green headphones with black auricles. Her mouth has a slight overbite. Shwe is completely nude. Her skin is oily and wet. We see her whole nude and skinny body. She has perky little tits with small errects niplles. She has a freshly shaved anf puffy and wet vagina. She is naked except her black Doc Martens Boots. ,Areola wrinkles,pointy nipples,small nipples,pink nipples)"
+POPPY_SUFFIX = "Poppy:(18years old woman. Pale super-white gothic skin. Black pigtails and blazing blue eyes. She has many piercings, especially her firm C-Cup breast whit smallh nipples and areola are always pierced. Her clitoris is pierced as well. She has tattoos. She is just 4 feet tall.)"
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
@@ -46,7 +47,10 @@ ALL_VARIANTS = [
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
-    base = "piper_poppy"
+    base = "_".join(prompt.split()[:5]) or "image"
+    base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
+    if not base or not base[0].isalnum():
+        base = "img_" + base
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
 async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: dict, width: int, height: int, steps=None, cfg_scale=None, negative_prompt=None) -> bytes | None:
@@ -82,57 +86,48 @@ class VeniceModal(discord.ui.Modal):
         self.is_vip = is_vip
         previous_inputs = previous_inputs if previous_inputs is not None else {}
 
-        # Piper
         self.piper = discord.ui.TextInput(
-            label="Piper (optional)",
+            label="Piper (at least one of Piper/Poppy required)",
             style=discord.TextStyle.short,
             required=False,
             max_length=300,
-            default=previous_inputs.get("piper", "")
+            default=previous_inputs.get("piper", ""),
+            placeholder="Enter Piper prompt..."
         )
 
-        # Poppy
         self.poppy = discord.ui.TextInput(
-            label="Poppy (optional)",
+            label="Poppy",
             style=discord.TextStyle.short,
             required=False,
             max_length=300,
-            default=previous_inputs.get("poppy", "")
+            default=previous_inputs.get("poppy", ""),
+            placeholder="Enter Poppy prompt..."
         )
 
-        # Negative
-        neg_value = previous_inputs.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=300,
-            default=neg_value
+            default=previous_inputs.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         )
 
-        # CFG
-        cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG",
             style=discord.TextStyle.short,
             required=False,
-            placeholder=cfg_default,
+            placeholder=str(CFG_REFERENCE[variant["model"]]["cfg_scale"]),
             default=previous_inputs.get("cfg_value", "")
         )
 
-        # Steps
-        max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
-        default_steps = CFG_REFERENCE[variant["model"]]["default_steps"]
-        prev_steps = previous_inputs.get("steps")
         self.steps_value = discord.ui.TextInput(
-            label=f"Steps (1-{max_steps})",
+            label=f"Steps (1-{CFG_REFERENCE[variant['model']]['max_steps']})",
             style=discord.TextStyle.short,
             required=False,
-            placeholder=str(default_steps),
-            default=str(prev_steps) if prev_steps else ""
+            placeholder=str(CFG_REFERENCE[variant["model"]]["default_steps"]),
+            default=str(previous_inputs.get("steps", ""))
         )
 
-        # add items
         self.add_item(self.piper)
         self.add_item(self.poppy)
         self.add_item(self.negative_prompt)
@@ -141,45 +136,36 @@ class VeniceModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         if not self.piper.value.strip() and not self.poppy.value.strip():
-            await interaction.response.send_message("❌ You must fill Piper and/or Poppy.", ephemeral=True)
+            await interaction.response.send_message("❌ You must fill at least Piper or Poppy.", ephemeral=True)
             return
 
-        try:
-            cfg_val = float(self.cfg_value.value)
-        except:
-            cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
+        cfg_val = float(self.cfg_value.value) if self.cfg_value.value else CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
+        steps_val = int(self.steps_value.value) if self.steps_value.value else CFG_REFERENCE[self.variant['model']]['default_steps']
 
-        try:
-            steps_val = int(self.steps_value.value)
-            steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
-        except:
-            steps_val = CFG_REFERENCE[self.variant['model']]['default_steps']
-
+        steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
         negative_prompt = self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
 
-        # build full prompt
-        full_prompt = ""
+        # build hidden suffix
+        suffix_parts = []
+        embed_name = []
         if self.piper.value.strip():
-            full_prompt += self.piper.value.strip() + " " + PIPER_SUFFIX
+            suffix_parts.append(PIPER_SUFFIX)
+            embed_name.append("Piper")
         if self.poppy.value.strip():
-            full_prompt += " " + self.poppy.value.strip() + " " + POPPY_SUFFIX
+            suffix_parts.append(POPPY_SUFFIX)
+            embed_name.append("Poppy")
 
-        # embed display string
-        if self.piper.value.strip() and self.poppy.value.strip():
-            display_name = "Piper & Poppy"
-        elif self.piper.value.strip():
-            display_name = "Piper"
-        else:
-            display_name = "Poppy"
+        full_prompt = " ".join(suffix_parts)
+        embed_display_name = " & ".join(embed_name)
 
-        variant = {
+        variant_data = {
             **self.variant,
             "cfg_scale": cfg_val,
             "negative_prompt": negative_prompt,
             "steps": steps_val
         }
 
-        self.previous_inputs = {
+        previous_inputs = {
             "piper": self.piper.value,
             "poppy": self.poppy.value,
             "negative_prompt": negative_prompt,
@@ -188,30 +174,30 @@ class VeniceModal(discord.ui.Modal):
         }
 
         await interaction.response.send_message(
-            f"🎨 {variant['label']} ready! Choose an aspect ratio:",
+            f"🎨 {variant_data['label']} ready! Choose an aspect ratio:",
             view=AspectRatioView(
                 self.session,
-                variant,
+                variant_data,
                 full_prompt,
                 interaction.user,
-                display_name,
                 self.is_vip,
-                previous_inputs=self.previous_inputs
+                embed_display_name,
+                previous_inputs
             ),
             ephemeral=True
         )
 
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, author, display_name, is_vip, previous_inputs=None):
+    def __init__(self, session, variant, prompt_text, author, is_vip, embed_name, previous_inputs=None):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
         self.author = author
-        self.display_name = display_name
         self.is_vip = is_vip
         self.previous_inputs = previous_inputs or {}
+        self.embed_name = embed_name
 
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
@@ -277,7 +263,11 @@ class AspectRatioView(discord.ui.View):
         today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
-        embed.description = f"🔮 Prompt: {self.display_name}"
+        embed.description = f"🔮 Prompt:\n{self.embed_name}"
+
+        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+        if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+            embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
@@ -301,6 +291,8 @@ class AspectRatioView(discord.ui.View):
             ephemeral=True
         )
         self.stop()
+
+# ---------------- Restliche Views/Cog bleiben wie gehabt ----------------
 
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
