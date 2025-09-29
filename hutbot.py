@@ -9,6 +9,10 @@ import traceback
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
+# Optional: lokale Dev-Guild (für schnelleren Sync, sofort sichtbar)
+DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # z.B. "123456789012345678"
+DEV_GUILD = discord.Object(id=int(DEV_GUILD_ID)) if DEV_GUILD_ID else None
+
 intents = discord.Intents.default()
 intents.messages = True
 intents.dm_messages = True
@@ -29,8 +33,13 @@ async def on_ready():
 
     if not synced_once:
         try:
-            print("🔄 Syncing slash commands...")
-            synced = await tree.sync()
+            if DEV_GUILD:  # schneller, nur für einen Server
+                print("🧪 Syncing commands to DEV guild...")
+                synced = await tree.sync(guild=DEV_GUILD)
+            else:  # global, dauert bis zu 1 Stunde
+                print("🌍 Syncing commands globally...")
+                synced = await tree.sync()
+
             print(f"✅ Synced {len(synced)} command(s).")
             synced_once = True
         except Exception as e:
