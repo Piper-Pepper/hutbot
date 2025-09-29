@@ -23,7 +23,7 @@ SPECIAL_ROLE_ID = 1375147276413964408
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
 
-PIPER_SUFFIX = "Piper:(20 years old woman. Pale white skin with freckles. She has red bangs and green eyes. She wears green headphones with black auricles. Her mouth has a slight overbite. Shwe is completely nude. Her skin is oily and wet. We see her whole nude and skinny body. She has perky little tits with small errects niplles. She has a freshly shaved anf puffy and wet vagina. She is naked except her black Doc Martens Boots. ,Areola wrinkles,pointy nipples,small nipples,pink nipples)"
+
 POPPY_SUFFIX = "Poppy:(18years old woman. Pale super-white gothic skin. Black pigtails and blazing blue eyes. She has many piercings, especially her firm C-Cup breast whit smallh nipples and areola are always pierced. Her clitoris is pierced as well. She has tattoos. She is just 4 feet tall.)"
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
@@ -78,30 +78,24 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
         return None
 
 # ---------------- Modal ----------------
+PIPPY_SUFFIX = "Poppy:(18years old woman. Pale super-white gothic skin. Black pigtails and blazing blue eyes. She has many piercings, especially her firm C-Cup breast whit small nipples and areola are always pierced. Her clitoris is pierced as well. She has tattoos. She is just 4 feet tall.)"
+
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session, variant, is_vip, previous_inputs=None):
         super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
         self.variant = variant
         self.is_vip = is_vip
-        previous_inputs = previous_inputs if previous_inputs is not None else {}
+        previous_inputs = previous_inputs or {}
 
-        self.piper = discord.ui.TextInput(
-            label="Piper (at least one of Piper/Poppy required)",
+        # Nur noch ein Pflichtfeld
+        self.main_prompt = discord.ui.TextInput(
+            label="Prompt (required)",
             style=discord.TextStyle.short,
-            required=False,
+            required=True,
             max_length=300,
-            default=previous_inputs.get("piper", ""),
-            placeholder="Enter Piper prompt..."
-        )
-
-        self.poppy = discord.ui.TextInput(
-            label="Poppy",
-            style=discord.TextStyle.short,
-            required=False,
-            max_length=300,
-            default=previous_inputs.get("poppy", ""),
-            placeholder="Enter Poppy prompt..."
+            default=previous_inputs.get("main_prompt", ""),
+            placeholder="Enter your prompt..."
         )
 
         self.negative_prompt = discord.ui.TextInput(
@@ -128,35 +122,22 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_inputs.get("steps", ""))
         )
 
-        self.add_item(self.piper)
-        self.add_item(self.poppy)
+        self.add_item(self.main_prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
         self.add_item(self.steps_value)
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not self.piper.value.strip() and not self.poppy.value.strip():
-            await interaction.response.send_message("❌ You must fill at least Piper or Poppy.", ephemeral=True)
-            return
-
+        # Pflichtfeld wird von Discord erzwungen, kein extra check nötig
         cfg_val = float(self.cfg_value.value) if self.cfg_value.value else CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
         steps_val = int(self.steps_value.value) if self.steps_value.value else CFG_REFERENCE[self.variant['model']]['default_steps']
-
         steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
         negative_prompt = self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
 
-        # build hidden suffix
-        suffix_parts = []
-        embed_name = []
-        if self.piper.value.strip():
-            suffix_parts.append(PIPER_SUFFIX)
-            embed_name.append("Piper")
-        if self.poppy.value.strip():
-            suffix_parts.append(POPPY_SUFFIX)
-            embed_name.append("Poppy")
+        # Poppy-Suffix immer anhängen
+        full_prompt = f"{self.main_prompt.value.strip()} {POPPY_SUFFIX}"
 
-        full_prompt = " ".join(suffix_parts)
-        embed_display_name = " & ".join(embed_name)
+        embed_display_name = "Poppy"
 
         variant_data = {
             **self.variant,
@@ -166,8 +147,7 @@ class VeniceModal(discord.ui.Modal):
         }
 
         previous_inputs = {
-            "piper": self.piper.value,
-            "poppy": self.poppy.value,
+            "main_prompt": self.main_prompt.value,
             "negative_prompt": negative_prompt,
             "cfg_value": self.cfg_value.value,
             "steps": steps_val,
@@ -186,6 +166,7 @@ class VeniceModal(discord.ui.Modal):
             ),
             ephemeral=True
         )
+
 
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
