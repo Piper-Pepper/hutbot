@@ -17,12 +17,14 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
-TARGET_CHANNEL_ID = 1422144220214329375
+NSFW_CATEGORY_ID = 1415769711052062820
+SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926
-SPECIAL_ROLE_ID = 1375147276413964408
+SPECIAL_ROLE_ID = 1375147276413964408  # für High-Res Button
 
 DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
-POPPY_SUFFIX = "Poppy:(18years old woman. Pale super-white gothic skin. Black pigtails and blazing blue eyes. She has many piercings, especially her firm C-Cup breast whit smallh nipples and areola are always pierced. Her clitoris is pierced as well. She has tattoos. She is just 4 feet tall.)"
+NSFW_PROMPT_SUFFIX = " NSFW, nudity, show explicit details"
+SFW_PROMPT_SUFFIX = " SFW, no nudity, no explicit details"
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
@@ -31,17 +33,24 @@ CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
     "flux-dev-uncensored": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 30},
     "venice-sd35": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 30},
+    "flux-dev": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 30},
     "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
     "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 25, "max_steps": 30},
 }
 
-ALL_VARIANTS = [
-    {"label": "Lustify", "model": "lustify-sdxl"},
-    {"label": "FluxUnc", "model": "flux-dev-uncensored"},
-    {"label": "Venice SD35", "model": "venice-sd35"},
-    {"label": "HiDream", "model": "hidream"},
-    {"label": "Wai (Anime)", "model": "wai-Illustrious"},
-]
+VARIANT_MAP = {
+    NSFW_CATEGORY_ID: [
+        {"label": "Lustify", "model": "lustify-sdxl"},
+        {"label": "FluxUnc", "model": "flux-dev-uncensored"},
+        {"label": "Wai (Anime)", "model": "wai-Illustrious"},
+        {"label": "HiDream", "model": "hidream"},
+    ],
+    SFW_CATEGORY_ID: [
+        {"label": "Venice SD35", "model": "venice-sd35"},
+        {"label": "Flux", "model": "flux-dev"},
+        {"label": "HiDream", "model": "hidream"},
+    ]
+}
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
@@ -77,112 +86,123 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
-    def __init__(self, session, previous_inputs=None):
-        super().__init__(title="Enter Prompt")
+    def __init__(self, session, variant, poppy_prompt, is_vip, previous_inputs=None):
+        super().__init__(title=f"Generate with {variant['label']}")
         self.session = session
+        self.variant = variant
+        self.poppy_prompt = poppy_prompt
+        self.is_vip = is_vip
         previous_inputs = previous_inputs or {}
 
-        self.main_prompt = discord.ui.TextInput(
-            label="Main Prompt (required)",
-            style=discord.TextStyle.short,
+        # Prompt
+        self.prompt = discord.ui.TextInput(
+            label="Describe your image",
+            style=discord.TextStyle.paragraph,
             required=True,
-            max_length=300,
-            default=previous_inputs.get("main_prompt", ""),
-            placeholder="Enter your prompt..."
+            max_length=1000,
+            default=previous_inputs.get("prompt", "")
         )
 
+        # Negative prompt
+        neg_value = previous_inputs.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=300,
-            default=previous_inputs.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+            default=neg_value
         )
 
+        # CFG
+        cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
-            label="CFG",
+            label="CFG (> stricter AI adherence)",
             style=discord.TextStyle.short,
             required=False,
-            placeholder="6.0",
+            placeholder=cfg_default[:100],
             default=previous_inputs.get("cfg_value", "")
         )
 
+        # Steps
+        max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
+        default_steps = CFG_REFERENCE[variant["model"]]["default_steps"]
+        previous_steps = previous_inputs.get("steps")
         self.steps_value = discord.ui.TextInput(
-            label="Steps",
+            label=f"Steps (1-{max_steps})",
             style=discord.TextStyle.short,
             required=False,
-            placeholder="25",
-            default=str(previous_inputs.get("steps", ""))
+            placeholder=str(default_steps)[:100],
+            default=str(previous_steps) if previous_steps else ""
         )
 
-        self.add_item(self.main_prompt)
+        self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
         self.add_item(self.steps_value)
 
     async def on_submit(self, interaction: discord.Interaction):
-        cfg_val = float(self.cfg_value.value) if self.cfg_value.value else 6.0
-        steps_val = int(self.steps_value.value) if self.steps_value.value else 25
+        try:
+            cfg_val = float(self.cfg_value.value)
+        except:
+            cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
-        steps_val = max(1, min(steps_val, 50))
-        negative_prompt = self.negative_prompt.value or DEFAULT_NEGATIVE_PROMPT
+        try:
+            steps_val = int(self.steps_value.value)
+            steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
+        except:
+            steps_val = CFG_REFERENCE[self.variant['model']]['default_steps']
 
-        full_prompt = self.main_prompt.value + " " + POPPY_SUFFIX
+        negative_prompt = (self.negative_prompt.value or "").strip() or DEFAULT_NEGATIVE_PROMPT
 
-        previous_inputs = {
-            "main_prompt": self.main_prompt.value,
+        # Poppy Prompt wird immer genutzt
+        full_prompt = (self.prompt.value or "") + self.poppy_prompt
+        if full_prompt and not full_prompt[0].isalnum():
+            full_prompt = " " + full_prompt
+
+        # Variant Config
+        variant = {
+            **self.variant,
+            "cfg_scale": cfg_val,
             "negative_prompt": negative_prompt,
-            "cfg_value": self.cfg_value.value,
-            "steps": steps_val,
+            "steps": steps_val
         }
 
-        # zeigt KI-Modell Auswahl
+        self.previous_inputs = {
+            "prompt": self.prompt.value,
+            "negative_prompt": negative_prompt,
+            "cfg_value": self.cfg_value.value,
+            "steps": steps_val
+        }
+
+        category_id = interaction.channel.category.id if interaction.channel and interaction.channel.category else None
+
         await interaction.response.send_message(
-            f"🎨 Choose AI Model:",
-            view=VeniceView(self.session, full_prompt, interaction.user, previous_inputs, is_reuse=True),
+            f"🎨 {variant['label']} ready! Choose an aspect ratio:",
+            view=AspectRatioView(
+                self.session,
+                variant,
+                self.prompt.value,
+                self.poppy_prompt,
+                interaction.user,
+                self.is_vip,
+                category_id=category_id,
+                previous_inputs=self.previous_inputs
+            ),
             ephemeral=True
         )
 
-# ---------------- Buttons View ----------------
-class VeniceView(discord.ui.View):
-    def __init__(self, session, prompt_text, author, previous_inputs=None, is_reuse=False):
-        super().__init__(timeout=None)
-        self.session = session
-        self.prompt_text = prompt_text
-        self.author = author
-        self.previous_inputs = previous_inputs or {}
-        self.is_reuse = is_reuse
-
-        for variant in ALL_VARIANTS:
-            btn = discord.ui.Button(label=variant["label"], style=discord.ButtonStyle.blurple,
-                                   custom_id=f"model_{variant['model']}_{uuid.uuid4().hex}")
-            btn.callback = self.make_callback(variant)
-            self.add_item(btn)
-
-    def make_callback(self, variant):
-        async def callback(interaction: discord.Interaction):
-            # geht weiter zu Aspect Ratio
-            cfg_val = float(self.previous_inputs.get("cfg_value") or CFG_REFERENCE[variant["model"]]["cfg_scale"])
-            steps_val = int(self.previous_inputs.get("steps") or CFG_REFERENCE[variant["model"]]["default_steps"])
-            negative_prompt = self.previous_inputs.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT
-
-            variant_data = {**variant, "cfg_scale": cfg_val, "steps": steps_val, "negative_prompt": negative_prompt}
-
-            await interaction.response.send_message(
-                f"🎨 {variant['label']} ready! Choose an aspect ratio:",
-                view=AspectRatioView(self.session, variant_data, self.prompt_text, interaction.user),
-                ephemeral=True
-            )
-        return callback
-
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, author):
+    def __init__(self, session, variant, prompt_text, poppy_prompt, author, is_vip, category_id=None, previous_inputs=None):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
+        self.poppy_prompt = poppy_prompt
         self.author = author
+        self.is_vip = is_vip
+        self.category_id = category_id
+        self.previous_inputs = previous_inputs or {}
 
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
         btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
@@ -190,25 +210,25 @@ class AspectRatioView(discord.ui.View):
         btn_hi = discord.ui.Button(label="🟥1:1⚡", style=discord.ButtonStyle.success)
 
         btn_1_1.callback = self.make_callback(1024, 1024)
-        btn_16_9.callback = self.make_callback(1280, 816, requires_vip=True)
-        btn_9_16.callback = self.make_callback(816, 1280, requires_vip=True)
-        btn_hi.callback = self.make_callback(1280, 1280, requires_special=True)
+        btn_16_9.callback = self.make_callback(1280, 816)
+        btn_9_16.callback = self.make_callback(816, 1280)
+        btn_hi.callback = self.make_special_callback(1280, 1280, SPECIAL_ROLE_ID)
 
         for b in [btn_1_1, btn_16_9, btn_9_16, btn_hi]:
             self.add_item(b)
 
-        # immer Submit to contest
-        submit_btn = discord.ui.Button(label="Submit image to contest🏆", style=discord.ButtonStyle.blurple)
-        submit_btn.callback = self.submit_contest
-        self.add_item(submit_btn)
-
-    def make_callback(self, width, height, requires_vip=False, requires_special=False):
+    def make_callback(self, width, height):
         async def callback(interaction: discord.Interaction):
-            if requires_vip and not any(r.id == VIP_ROLE_ID for r in interaction.user.roles):
-                await interaction.response.send_message(f"❌ You need VIP to use this option", ephemeral=True)
+            if not self.is_vip and (width, height) in [(1280, 816), (816, 1280)]:
+                await interaction.response.send_message(f"❌ You need <@&{VIP_ROLE_ID}> to use this option", ephemeral=True)
                 return
-            if requires_special and not any(r.id == SPECIAL_ROLE_ID for r in interaction.user.roles):
-                await interaction.response.send_message(f"❌ You need Special role to use this option", ephemeral=True)
+            await self.generate_image(interaction, width, height)
+        return callback
+
+    def make_special_callback(self, width, height, role_id):
+        async def callback(interaction: discord.Interaction):
+            if not any(r.id == role_id for r in interaction.user.roles):
+                await interaction.response.send_message(f"❌ You need <@&{role_id}> to use this high-res option!", ephemeral=True)
                 return
             await self.generate_image(interaction, width, height)
         return callback
@@ -216,20 +236,27 @@ class AspectRatioView(discord.ui.View):
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int):
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
-        steps = self.variant.get("steps", 25)
+        steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
 
-        progress_msg = await interaction.followup.send(f"{pepper} Generating image... starting", ephemeral=True)
-        for i in range(1, 6):
-            await asyncio.sleep(0.7 + steps * 0.02 + cfg * 0.2)
+        progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True)
+        prompt_factor = len(self.prompt_text) / 1000
+        for i in range(1, 11):
+            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.35 + prompt_factor * 0.9)
             try:
-                await progress_msg.edit(content=f"{pepper} Generating image... {i*20}%")
+                progress_text = f"{pepper} Generating image for **{self.author.display_name}** ... {i*10}%"
+                await progress_msg.edit(content=progress_text)
             except: pass
 
-        img_bytes = await venice_generate(self.session, self.prompt_text, self.variant, width, height,
-                                         steps=self.variant.get("steps"), cfg_scale=cfg,
-                                         negative_prompt=self.variant.get("negative_prompt"))
+        img_bytes = await venice_generate(
+            self.session, self.prompt_text + self.poppy_prompt, self.variant, width, height,
+            steps=steps, cfg_scale=cfg,
+            negative_prompt=self.variant.get("negative_prompt")
+        )
+
         if not img_bytes:
             await interaction.followup.send("❌ Generation failed!", ephemeral=True)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
             self.stop()
             return
 
@@ -237,18 +264,172 @@ class AspectRatioView(discord.ui.View):
         fp.seek(0)
         discord_file = discord.File(fp, filename=make_safe_filename(self.prompt_text))
 
+        today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.set_author(name=f"{self.author.display_name} ({datetime.now().strftime('%Y-%m-%d')})",
-                         icon_url=self.author.display_avatar.url)
-        embed.description = f"🔮 Prompt:\n{self.prompt_text}"
+        embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
+        truncated_prompt = (self.prompt_text or "").replace("\n\n", "\n")
+        if len(truncated_prompt) > 500:
+            truncated_prompt = truncated_prompt[:500] + " [...]"
+        embed.description = f"🔮 Prompt:\n{truncated_prompt}"
+
+        neg_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
+        if neg_prompt and neg_prompt != DEFAULT_NEGATIVE_PROMPT:
+            embed.description += f"\n\n🚫 Negative Prompt:\n{neg_prompt}"
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
+        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+        short_model_name = self.variant['model'].split('-')[0]
+        embed.set_footer(text=f"{short_model_name} | {width}x{height} | CFG: {cfg} | Steps: {steps}", icon_url=guild_icon)
 
-        msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
-        await interaction.followup.send("✅ Image generated!", ephemeral=True)
+        msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed)
 
-    async def submit_contest(self, interaction: discord.Interaction):
-        await interaction.response.send_message("✅ Submitted to contest (placeholder)", ephemeral=True)
+        await interaction.followup.send(
+            content=f"🚨{interaction.user.mention}, re-use & edit your prompt?",
+            view=PostGenerationView(self.session, self.variant, self.prompt_text, self.poppy_prompt, self.author, msg, previous_inputs=self.previous_inputs),
+            ephemeral=True
+        )
+
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
+        self.stop()
+
+# ---------------- Post Generation View ----------------
+class PostGenerationView(discord.ui.View):
+    def __init__(self, session, variant, prompt_text, poppy_prompt, author, message, previous_inputs=None):
+        super().__init__(timeout=None)
+        self.session = session
+        self.variant = variant
+        self.prompt_text = prompt_text
+        self.poppy_prompt = poppy_prompt
+        self.author = author
+        self.message = message
+        self.previous_inputs = previous_inputs or {}
+
+        reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
+        reuse_btn.callback = self.reuse_callback
+        self.add_item(reuse_btn)
+
+        del_btn = discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red)
+        del_btn.callback = self.delete_callback
+        self.add_item(del_btn)
+
+        del_reuse_btn = discord.ui.Button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
+        del_reuse_btn.callback = self.delete_reuse_callback
+        self.add_item(del_reuse_btn)
+
+        if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
+            submit_btn = discord.ui.Button(
+                label="Submit image to contest🏆",
+                style=discord.ButtonStyle.blurple,
+                row=1,
+                emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")
+            )
+            submit_btn.callback = self.post_gallery_callback
+            self.add_item(submit_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author.id
+
+    async def reuse_callback(self, interaction: discord.Interaction):
+        await self.show_reuse_models(interaction)
+
+    async def delete_callback(self, interaction: discord.Interaction):
+        try: await self.message.delete()
+        except: pass
+        await interaction.response.send_message("✅ Post deleted", ephemeral=True)
+
+    async def delete_reuse_callback(self, interaction: discord.Interaction):
+        try: await self.message.delete()
+        except: pass
+        await self.show_reuse_models(interaction)
+
+    async def post_gallery_callback(self, interaction: discord.Interaction):
+        channel_id = 1418956422086922320
+        role_id = 1419024270201454684
+        channel = interaction.guild.get_channel(channel_id)
+        if not channel:
+            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
+            return
+
+        embed = None
+        if self.message.embeds:
+            original_embed = self.message.embeds[0]
+            embed = discord.Embed.from_dict(original_embed.to_dict())
+            embed.description = f"[View original post]({self.message.jump_url})"
+            if original_embed.footer:
+                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
+
+        mention_text = f"🎖️<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
+        contest_msg = await channel.send(content=mention_text, embed=embed)
+
+        for child in self.children:
+            if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
+                child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except:
+            try:
+                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
+            except:
+                pass
+
+    async def show_reuse_models(self, interaction: discord.Interaction):
+        member = interaction.user
+        is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
+
+        class ReuseModelView(discord.ui.View):
+            def __init__(self, session, author, prompt_text, poppy_prompt):
+                super().__init__(timeout=None)
+                self.session = session
+                self.author = author
+                self.prompt_text = prompt_text
+                self.poppy_prompt = poppy_prompt
+
+                category_id = interaction.channel.category.id if interaction.channel.category else None
+                variants = VARIANT_MAP.get(category_id, [])
+
+                for v in variants:
+                    btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.success)
+                    btn.callback = self.make_model_callback(v)
+                    self.add_item(btn)
+
+            def make_model_callback(self, variant):
+                async def callback(inner_interaction: discord.Interaction):
+                    await inner_interaction.response.send_modal(VeniceModal(
+                        self.session,
+                        variant,
+                        self.poppy_prompt,
+                        is_vip
+                    ))
+                return callback
+
+        await interaction.response.send_message(
+            f"{interaction.user.mention}, which model for the re-used prompt?",
+            view=ReuseModelView(self.session, interaction.user, self.prompt_text, self.poppy_prompt),
+            ephemeral=True
+        )
+
+# ---------------- Buttons View ----------------
+class VeniceView(discord.ui.View):
+    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
+        super().__init__(timeout=None)
+        self.session = session
+        self.category_id = channel.category.id if channel.category else None
+        variants = VARIANT_MAP.get(self.category_id, [])
+        for variant in variants:
+            btn = discord.ui.Button(label=variant["label"], style=discord.ButtonStyle.blurple,
+                                   custom_id=f"model_{variant['model']}_{uuid.uuid4().hex}")
+            btn.callback = self.make_callback(variant)
+            self.add_item(btn)
+
+    def make_callback(self, variant):
+        async def callback(interaction: discord.Interaction):
+            member = interaction.user
+            is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
+            category_id = interaction.channel.category.id if interaction.channel.category else None
+            hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip))
+        return callback
 
 # ---------------- Cog ----------------
 class VeniceCog(commands.Cog):
@@ -259,23 +440,29 @@ class VeniceCog(commands.Cog):
     def cog_unload(self):
         asyncio.create_task(self.session.close())
 
+    async def ensure_button_message(self, channel: discord.TextChannel):
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                try: await msg.delete()
+                except: pass
+        view = VeniceView(self.session, channel)
+        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
+
+    @staticmethod
+    async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                try: await msg.delete()
+                except: pass
+        view = VeniceView(session, channel)
+        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
+
     @commands.Cog.listener()
     async def on_ready(self):
-        channel = self.bot.get_channel(TARGET_CHANNEL_ID)
-        if channel:
-            await channel.send("💡 Click below to generate a new image!", view=VeniceModalView(self.session))
-
-# ---------------- Initial Modal View ----------------
-class VeniceModalView(discord.ui.View):
-    def __init__(self, session):
-        super().__init__(timeout=None)
-        self.session = session
-        btn = discord.ui.Button(label="Generate Image", style=discord.ButtonStyle.blurple)
-        btn.callback = self.open_modal
-        self.add_item(btn)
-
-    async def open_modal(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(VeniceModal(self.session))
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                if channel.category and channel.category.id in VARIANT_MAP:
+                    await self.ensure_button_message(channel)
 
 # ---------------- Setup ----------------
 async def setup(bot: commands.Bot):
