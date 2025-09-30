@@ -13,6 +13,12 @@ CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
 ]
 
+TOPUSER_CHOICES = [
+    app_commands.Choice(name="Top 5", value="5"),
+    app_commands.Choice(name="Top 10", value="10"),
+    app_commands.Choice(name="Top 20", value="20"),
+]
+
 current_year = datetime.utcnow().year
 YEAR_CHOICES = [
     app_commands.Choice(name=str(current_year), value=str(current_year)),
@@ -30,25 +36,35 @@ class HutVote(commands.Cog):
 
     @app_commands.command(
         name="hut_vote",
-        description="Shows the top 5 posts by reactions for a category/month/year"
+        description="Shows the top posts by reactions for a category/month/year"
     )
     @app_commands.describe(
         year="Select year",
         month="Select month",
-        category="Select category"
+        category="Select category",
+        topuser="Number of top posts to display",
+        public="Whether the posts are public or ephemeral"
     )
     @app_commands.choices(
         year=YEAR_CHOICES,
         month=MONTH_CHOICES,
-        category=CATEGORY_CHOICES
+        category=CATEGORY_CHOICES,
+        topuser=TOPUSER_CHOICES
     )
+    @app_commands.checks.cooldown(1, 5)  # Optional: kleine Rate-Limitierung
     async def hut_vote(
         self,
         interaction: discord.Interaction,
         year: app_commands.Choice[str],
         month: app_commands.Choice[str],
-        category: app_commands.Choice[str]
+        category: app_commands.Choice[str],
+        topuser: app_commands.Choice[str] = None,
+        public: bool = False
     ):
+        # Defaults
+        top_count = int(topuser.value) if topuser else 5
+        ephemeral_flag = not public  # True -> nur sichtbar für Nutzer
+
         # Permission check
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
@@ -60,7 +76,7 @@ class HutVote(commands.Cog):
             await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
             return
 
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
         # Month range
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
@@ -72,7 +88,6 @@ class HutVote(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 continue
 
-            # Sichtbarkeit prüfen
             overwrites = channel.overwrites_for(guild.default_role)
             if overwrites.view_channel is False:
                 continue
@@ -89,7 +104,7 @@ class HutVote(commands.Cog):
                 continue
 
         if not matched_msgs:
-            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.")
+            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.", ephemeral=ephemeral_flag)
             return
 
         # Sortieren nach Top-5 Reaktionen + zusätzliche Reaktionen
@@ -99,26 +114,18 @@ class HutVote(commands.Cog):
             extra_sum = sum(r.count for r in sorted_reacts[5:])
             return (top5_sum, extra_sum, msg.created_at)
 
-        top5_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:5]
+        top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
 
-        for msg in top5_msgs:
-            # Top-5 Reaktionen mit Emoji
+        for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
-            reaction_lines = []
-            for r in sorted_reacts[:5]:
-                emoji_display = str(r.emoji) if isinstance(r.emoji, discord.Emoji) else r.emoji
-                reaction_lines.append(f"{emoji_display} {r.count}")
+            reaction_lines = [f"{str(r.emoji) if isinstance(r.emoji, discord.Emoji) else r.emoji} {r.count}" for r in sorted_reacts[:5]]
             reaction_line = "\n".join(reaction_lines)
-
-            # Zusätzliche Reaktionen
             extra_reactions = sum(r.count for r in sorted_reacts[5:])
             extra_text = f"\n({extra_reactions} additional reactions)" if extra_reactions else ""
 
-            # Titel
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
 
-            # Bild
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -131,7 +138,6 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            # Embed oder Text senden
             description_text = f"{reaction_line}\n[Post]({msg.jump_url}){extra_text}"
             if img_url:
                 embed = discord.Embed(
@@ -140,16 +146,16 @@ class HutVote(commands.Cog):
                     color=discord.Color.green()
                 )
                 embed.set_image(url=img_url)
-                await interaction.followup.send(embed=embed)
+                await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
             else:
-                # Wenn kein Bild, immer noch Text posten
-                await interaction.followup.send(f"{title}\n{description_text}")
+                await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
 
-        # Extra post: Top1 Creator
-        top1_msg = top5_msgs[0]
+        # Top1 Creator
+        top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} has created the image with most total votes in the {category_obj.name}!"
+            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} has created the image with most total votes in the {category_obj.name}!",
+            ephemeral=ephemeral_flag
         )
 
 
