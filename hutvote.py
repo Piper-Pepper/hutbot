@@ -125,33 +125,27 @@ class HutVote(commands.Cog):
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Reaktionen mit Caption und Bot-Abzug
+            # Top-5 Emojis: fest aus REACTION_CAPTIONS in dieser Reihenfolge
             reaction_lines = []
-            for r in sorted_reacts[:5]:
-                if isinstance(r.emoji, discord.Emoji):
-                    emoji_key = f"<:{r.emoji.name}:{r.emoji.id}>"
-                else:
-                    emoji_key = str(r.emoji)
-
-                caption = REACTION_CAPTIONS.get(emoji_key, "")
-
-                count = r.count
-                if r.me or r.me is None:  # Bot selbst abziehen
-                    count -= 1
-                count = max(count, 0)
-
-                line = f"{str(r.emoji)} {count}"
-                if caption:
-                    line += f" — {caption}"
-                reaction_lines.append(line)
+            used_emojis = set()
+            for emoji_key in REACTION_CAPTIONS:
+                r = next(
+                    (r for r in sorted_reacts if (str(r.emoji) if not isinstance(r.emoji, discord.Emoji) else f"<:{r.emoji.name}:{r.emoji.id}>") == emoji_key),
+                    None
+                )
+                if r:
+                    count = max(r.count - 1, 0)  # Bot selbst abziehen
+                    line = f"{str(r.emoji)} {count} — {REACTION_CAPTIONS[emoji_key]}"
+                    reaction_lines.append(line)
+                    used_emojis.add(r.emoji)
 
             reaction_line = "\n".join(reaction_lines)
 
-            # Extra-Reaktionen unverändert
-            extra_reacts = sorted_reacts[5:]
+            # Additional: alles andere, keine Abzüge
+            extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             if extra_reacts:
-                extra_emojis = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
-                extra_text = f"\nAdditional: {extra_emojis}"
+                extra_text = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
+                extra_text = f"\nAdditional: {extra_text}"
             else:
                 extra_text = ""
 
@@ -170,7 +164,7 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            description_text = f"{reaction_line}\n[Post]({msg.jump_url}){extra_text}"
+            description_text = f"{reaction_line}\n[🔙Jump to Original]({msg.jump_url}){extra_text}"
 
             if img_url:
                 embed = discord.Embed(
