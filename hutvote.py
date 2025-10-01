@@ -9,8 +9,8 @@ ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883  # nur Posts von diesem Bot berücksichtigen
 
 CATEGORY_CHOICES = [
-    app_commands.Choice(name="📂 Category 1", value="1416461717038170294"),
-    app_commands.Choice(name="📂 Category 2", value="1415769711052062820"),
+    app_commands.Choice(name="📂 SFW", value="1416461717038170294"),
+    app_commands.Choice(name="📂 NSFW", value="1415769711052062820"),
 ]
 
 TOPUSER_CHOICES = [
@@ -27,6 +27,15 @@ YEAR_CHOICES = [
 
 MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
+]
+
+# Reaction captions für Top-5
+REACTION_CAPTIONS = [
+    "Great!",
+    "LMFAO",
+    "No... just... no",
+    "Better than 10",
+    "Pump that Puppet!"
 ]
 
 
@@ -51,7 +60,7 @@ class HutVote(commands.Cog):
         category=CATEGORY_CHOICES,
         topuser=TOPUSER_CHOICES
     )
-    @app_commands.checks.cooldown(1, 5)  # Optional: kleine Rate-Limitierung
+    @app_commands.checks.cooldown(1, 5)
     async def hut_vote(
         self,
         interaction: discord.Interaction,
@@ -63,7 +72,7 @@ class HutVote(commands.Cog):
     ):
         # Defaults
         top_count = int(topuser.value) if topuser else 5
-        ephemeral_flag = not public  # True -> nur sichtbar für Nutzer
+        ephemeral_flag = not public
 
         # Permission check
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
@@ -104,10 +113,13 @@ class HutVote(commands.Cog):
                 continue
 
         if not matched_msgs:
-            await interaction.followup.send(f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.", ephemeral=ephemeral_flag)
+            await interaction.followup.send(
+                f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.",
+                ephemeral=ephemeral_flag
+            )
             return
 
-        # Sortieren nach Top-5 Reaktionen + zusätzliche Reaktionen
+        # Sortierung: Top-5 Reactions + zusätzliche Reaktionen
         def sort_key(msg: discord.Message):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
             top5_sum = sum(r.count for r in sorted_reacts[:5])
@@ -118,10 +130,25 @@ class HutVote(commands.Cog):
 
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
-            reaction_lines = [f"{str(r.emoji) if isinstance(r.emoji, discord.Emoji) else r.emoji} {r.count}" for r in sorted_reacts[:5]]
+
+            # Top-5 mit Captions
+            reaction_lines = []
+            for i, r in enumerate(sorted_reacts[:5]):
+                emoji_str = str(r.emoji)  # funktioniert für Unicode + Custom Emojis
+                caption = REACTION_CAPTIONS[i] if i < len(REACTION_CAPTIONS) else ""
+                reaction_lines.append(f"{emoji_str} {r.count} — {caption}")
+
             reaction_line = "\n".join(reaction_lines)
-            extra_reactions = sum(r.count for r in sorted_reacts[5:])
-            extra_text = f"\n({extra_reactions} additional reactions)" if extra_reactions else ""
+
+            # Zusätzliche Reaktionen: Emoji × Count
+            extra_reacts = sorted_reacts[5:]
+            if extra_reacts:
+                extra_emojis = " ".join(
+                    f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0
+                )
+                extra_text = f"\nAdditional: {extra_emojis}"
+            else:
+                extra_text = ""
 
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
@@ -139,6 +166,7 @@ class HutVote(commands.Cog):
                         break
 
             description_text = f"{reaction_line}\n[Post]({msg.jump_url}){extra_text}"
+
             if img_url:
                 embed = discord.Embed(
                     title=title,
@@ -154,7 +182,8 @@ class HutVote(commands.Cog):
         top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} has created the image with most total votes in the {category_obj.name}!",
+            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} "
+            f"has created the image with most total votes in the {category_obj.name}!",
             ephemeral=ephemeral_flag
         )
 
