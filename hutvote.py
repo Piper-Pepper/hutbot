@@ -164,18 +164,22 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            description_text = f"{reaction_line}\n[🔙Jump to Original]({msg.jump_url}){extra_text}"
+        # ... (Rest deines hutvote.py bleibt gleich bis hierher)
 
-            if img_url:
-                embed = discord.Embed(
-                    title=title,
-                    description=description_text,
-                    color=discord.Color.green()
-                )
-                embed.set_image(url=img_url)
-                await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
-            else:
-                await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
+                    # Beschreibung für Embed: Top-5 + Additional + Link unten
+                    description_text = f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})"
+
+                    if img_url:
+                        embed = discord.Embed(
+                            title=title,
+                            description=description_text,
+                            color=discord.Color.green()
+                        )
+                        embed.set_image(url=img_url)
+                        await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
+                    else:
+                        # Kein Bild: Link bleibt unten
+                        await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
 
         # Top1 Creator
         top1_msg = top_msgs[0]
