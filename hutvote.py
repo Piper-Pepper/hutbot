@@ -36,9 +36,6 @@ REACTION_CAPTIONS = {
     "<:02No:1347536448831754383>": "No... just... no",
     "<:011:1346549711817146400>": "Better than 10",
     "<:011pump:1346549688836296787>": "Pump that Puppet!",
-    # Beispiel Custom-Emojis (IDs anpassen!)
-    # "<:better10:123456789012345678>": "Better than 10",
-    # "<:puppet:987654321098765432>": "Pump that Puppet!"
 }
 
 
@@ -128,7 +125,7 @@ class HutVote(commands.Cog):
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Reaktionen mit Caption
+            # Top-5 Reaktionen mit Caption und Bot-Abzug
             reaction_lines = []
             for r in sorted_reacts[:5]:
                 if isinstance(r.emoji, discord.Emoji):
@@ -137,14 +134,20 @@ class HutVote(commands.Cog):
                     emoji_key = str(r.emoji)
 
                 caption = REACTION_CAPTIONS.get(emoji_key, "")
-                line = f"{str(r.emoji)} {r.count}"
+
+                count = r.count
+                if r.me or r.me is None:  # Bot selbst abziehen
+                    count -= 1
+                count = max(count, 0)
+
+                line = f"{str(r.emoji)} {count}"
                 if caption:
                     line += f" — {caption}"
                 reaction_lines.append(line)
 
             reaction_line = "\n".join(reaction_lines)
 
-            # Extra-Reaktionen: Emoji × Count
+            # Extra-Reaktionen unverändert
             extra_reacts = sorted_reacts[5:]
             if extra_reacts:
                 extra_emojis = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
