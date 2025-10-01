@@ -131,16 +131,19 @@ class HutVote(commands.Cog):
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 mit Captions
+            # Top-5 mit fester Emoji-Zuordnung
             reaction_lines = []
-            for i, r in enumerate(sorted_reacts[:5]):
-                emoji_str = str(r.emoji)  # funktioniert für Unicode + Custom Emojis
-                caption = REACTION_CAPTIONS[i] if i < len(REACTION_CAPTIONS) else ""
-                reaction_lines.append(f"{emoji_str} {r.count} — {caption}")
+            for r in sorted_reacts[:5]:
+                emoji_str = str(r.emoji)  # Unicode oder <:custom:id>
+                caption = REACTION_CAPTIONS.get(emoji_str, "")  # nur wenn vorhanden
+                line = f"{emoji_str} {r.count}"
+                if caption:
+                    line += f" — {caption}"
+                reaction_lines.append(line)
 
             reaction_line = "\n".join(reaction_lines)
 
-            # Zusätzliche Reaktionen: Emoji × Count
+            # Extra-Reaktionen: Emoji × Count
             extra_reacts = sorted_reacts[5:]
             if extra_reacts:
                 extra_emojis = " ".join(
@@ -149,6 +152,7 @@ class HutVote(commands.Cog):
                 extra_text = f"\nAdditional: {extra_emojis}"
             else:
                 extra_text = ""
+
 
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
