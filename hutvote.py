@@ -33,9 +33,9 @@ MONTH_CHOICES = [
 REACTION_CAPTIONS = {
     "<:01sthumb:1387086056498921614>": "Great!",
     "<:01smile_piper:1387083454575022213>": "LMFAO",
-    "😬": "No... just... no",
-    "🔥": "Better than 10",
-    "🎉": "Pump that Puppet!",
+    "<:02No:1347536448831754383>": "No... just... no",
+    "<:011:1346549711817146400>": "Better than 10",
+    "<:011pump:1346549688836296787>": "Pump that Puppet!",
     # Beispiel Custom-Emojis (IDs anpassen!)
     # "<:better10:123456789012345678>": "Better than 10",
     # "<:puppet:987654321098765432>": "Pump that Puppet!"
