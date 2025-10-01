@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import calendar
 
 ALLOWED_ROLE = 1346428405368750122
-BOT_ID = 1379906834588106883  # nur Posts von diesem Bot berücksichtigen
+BOT_ID = 1379906834588106883
 
 CATEGORY_CHOICES = [
     app_commands.Choice(name="📂 SFW", value="1416461717038170294"),
@@ -29,18 +29,16 @@ MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
-# -------------------------------
-# Emoji → Caption Mapping
-# -------------------------------
+# Emoji → Caption Mapping (Unicode + Custom)
 REACTION_CAPTIONS = {
     "😂": "Great!",
     "🤣": "LMFAO",
     "😬": "No... just... no",
     "🔥": "Better than 10",
     "🎉": "Pump that Puppet!",
-    # Beispiel Custom-Emojis (IDs musst du ersetzen durch deine Server-Emojis)
-    # "<:better10:112233445566778899>": "Better than 10",
-    # "<:puppet:998877665544332211>": "Pump that Puppet!"
+    # Beispiel Custom-Emojis (IDs anpassen!)
+    # "<:better10:123456789012345678>": "Better than 10",
+    # "<:puppet:987654321098765432>": "Pump that Puppet!"
 }
 
 
@@ -78,7 +76,6 @@ class HutVote(commands.Cog):
         top_count = int(topuser.value) if topuser else 5
         ephemeral_flag = not public
 
-        # Permission check
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
             return
@@ -131,13 +128,12 @@ class HutVote(commands.Cog):
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 mit festen Captions
+            # Top-5 Reaktionen mit Caption
             reaction_lines = []
             for r in sorted_reacts[:5]:
-                # Emoji-Key für Mapping
-                if isinstance(r.emoji, discord.Emoji):  # Custom
+                if isinstance(r.emoji, discord.Emoji):
                     emoji_key = f"<:{r.emoji.name}:{r.emoji.id}>"
-                else:  # Unicode
+                else:
                     emoji_key = str(r.emoji)
 
                 caption = REACTION_CAPTIONS.get(emoji_key, "")
@@ -148,12 +144,10 @@ class HutVote(commands.Cog):
 
             reaction_line = "\n".join(reaction_lines)
 
-            # Extra-Reaktionen als Emoji × Count
+            # Extra-Reaktionen: Emoji × Count
             extra_reacts = sorted_reacts[5:]
             if extra_reacts:
-                extra_emojis = " ".join(
-                    f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0
-                )
+                extra_emojis = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
                 extra_text = f"\nAdditional: {extra_emojis}"
             else:
                 extra_text = ""
