@@ -9,8 +9,8 @@ ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
 
 CATEGORY_CHOICES = [
-    app_commands.Choice(name="📂 SFW", value="1416461717038170294"),
-    app_commands.Choice(name="📂 NSFW", value="1415769711052062820"),
+    app_commands.Choice(name="💯 SFW", value="1416461717038170294"),
+    app_commands.Choice(name="🔞 NSFW", value="1415769711052062820"),
 ]
 
 TOPUSER_CHOICES = [
@@ -134,7 +134,7 @@ class HutVote(commands.Cog):
                     None
                 )
                 if r:
-                    count = max(r.count - 1, 0)  # Bot selbst abziehen
+                    count = max(r.count - 1, 0)  # Bot selbst abziehen nur bei Top-5
                     line = f"{str(r.emoji)} {count} — {REACTION_CAPTIONS[emoji_key]}"
                     reaction_lines.append(line)
                     used_emojis.add(r.emoji)
@@ -164,22 +164,19 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-        # ... (Rest deines hutvote.py bleibt gleich bis hierher)
+            # Beschreibung für Embed: Top-5 + Additional + Link unten
+            description_text = f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})"
 
-                    # Beschreibung für Embed: Top-5 + Additional + Link unten
-                    description_text = f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})"
-
-                    if img_url:
-                        embed = discord.Embed(
-                            title=title,
-                            description=description_text,
-                            color=discord.Color.green()
-                        )
-                        embed.set_image(url=img_url)
-                        await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
-                    else:
-                        # Kein Bild: Link bleibt unten
-                        await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
+            if img_url:
+                embed = discord.Embed(
+                    title=title,
+                    description=description_text,
+                    color=discord.Color.green()
+                )
+                embed.set_image(url=img_url)
+                await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
+            else:
+                await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
 
         # Top1 Creator
         top1_msg = top_msgs[0]
