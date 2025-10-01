@@ -29,14 +29,19 @@ MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i).zfill(2)) for i in range(1, 13)
 ]
 
-# Reaction captions für Top-5
-REACTION_CAPTIONS = [
-    "Great!",
-    "LMFAO",
-    "No... just... no",
-    "Better than 10",
-    "Pump that Puppet!"
-]
+# -------------------------------
+# Emoji → Caption Mapping
+# -------------------------------
+REACTION_CAPTIONS = {
+    "😂": "Great!",
+    "🤣": "LMFAO",
+    "😬": "No... just... no",
+    "🔥": "Better than 10",
+    "🎉": "Pump that Puppet!",
+    # Beispiel Custom-Emojis (IDs musst du ersetzen durch deine Server-Emojis)
+    # "<:better10:112233445566778899>": "Better than 10",
+    # "<:puppet:998877665544332211>": "Pump that Puppet!"
+}
 
 
 class HutVote(commands.Cog):
@@ -70,7 +75,6 @@ class HutVote(commands.Cog):
         topuser: app_commands.Choice[str] = None,
         public: bool = False
     ):
-        # Defaults
         top_count = int(topuser.value) if topuser else 5
         ephemeral_flag = not public
 
@@ -87,7 +91,6 @@ class HutVote(commands.Cog):
 
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
-        # Month range
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
@@ -96,14 +99,12 @@ class HutVote(commands.Cog):
         for channel in category_obj.channels:
             if not isinstance(channel, discord.TextChannel):
                 continue
-
             overwrites = channel.overwrites_for(guild.default_role)
             if overwrites.view_channel is False:
                 continue
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
                 continue
-
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     if msg.author.id != BOT_ID:
@@ -119,7 +120,6 @@ class HutVote(commands.Cog):
             )
             return
 
-        # Sortierung: Top-5 Reactions + zusätzliche Reaktionen
         def sort_key(msg: discord.Message):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
             top5_sum = sum(r.count for r in sorted_reacts[:5])
@@ -131,19 +131,24 @@ class HutVote(commands.Cog):
         for msg in top_msgs:
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 mit fester Emoji-Zuordnung
+            # Top-5 mit festen Captions
             reaction_lines = []
             for r in sorted_reacts[:5]:
-                emoji_str = str(r.emoji)  # Unicode oder <:custom:id>
-                caption = REACTION_CAPTIONS.get(emoji_str, "")  # nur wenn vorhanden
-                line = f"{emoji_str} {r.count}"
+                # Emoji-Key für Mapping
+                if isinstance(r.emoji, discord.Emoji):  # Custom
+                    emoji_key = f"<:{r.emoji.name}:{r.emoji.id}>"
+                else:  # Unicode
+                    emoji_key = str(r.emoji)
+
+                caption = REACTION_CAPTIONS.get(emoji_key, "")
+                line = f"{str(r.emoji)} {r.count}"
                 if caption:
                     line += f" — {caption}"
                 reaction_lines.append(line)
 
             reaction_line = "\n".join(reaction_lines)
 
-            # Extra-Reaktionen: Emoji × Count
+            # Extra-Reaktionen als Emoji × Count
             extra_reacts = sorted_reacts[5:]
             if extra_reacts:
                 extra_emojis = " ".join(
@@ -152,7 +157,6 @@ class HutVote(commands.Cog):
                 extra_text = f"\nAdditional: {extra_emojis}"
             else:
                 extra_text = ""
-
 
             creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
             title = f"Image by {creator_name}"
