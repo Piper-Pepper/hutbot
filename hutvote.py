@@ -31,8 +31,8 @@ MONTH_CHOICES = [
 
 # Emoji → Caption Mapping (Unicode + Custom)
 REACTION_CAPTIONS = {
-    "😂": "Great!",
-    "🤣": "LMFAO",
+    "<:01sthumb:1387086056498921614>": "Great!",
+    "<:01smile_piper:1387083454575022213>": "LMFAO",
     "😬": "No... just... no",
     "🔥": "Better than 10",
     "🎉": "Pump that Puppet!",
