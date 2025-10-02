@@ -8,10 +8,17 @@ import calendar
 ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
 
+# CATEGORY_CHOICES nur ID + Name für Slash-Auswahl
 CATEGORY_CHOICES = [
-    app_commands.Choice(name="🟢", value="1416461717038170294"),
-    app_commands.Choice(name="🔞", value="1415769711052062820"),
+    app_commands.Choice(name="SFW", value="1416461717038170294"),
+    app_commands.Choice(name="NSFW", value="1415769711052062820"),
 ]
+
+# Map der Icons
+CATEGORY_ICONS = {
+    "1416461717038170294": "🟢",
+    "1415769711052062820": "🔞",
+}
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -28,8 +35,6 @@ YEAR_CHOICES = [
 MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i)) for i in range(1, 13)
 ]
-
-CATEGORY_NAME_MAP = {c.value: c.name for c in CATEGORY_CHOICES}
 
 REACTION_CAPTIONS = {
     "<:01sthumb:1387086056498921614>": "Great!",
@@ -85,11 +90,14 @@ class HutVote(commands.Cog):
             await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
             return
 
-        pretty_category_name = CATEGORY_NAME_MAP.get(str(category_obj.id), category_obj.name)
+        # Kategorie-Icon aus Map
+        category_icon = CATEGORY_ICONS.get(category.value, "🎨")
+        # Kategorie-Name dynamisch aus Discord
+        category_name = category_obj.name
 
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
-        # Time range
+        # Zeitspanne
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
@@ -128,24 +136,17 @@ class HutVote(commands.Cog):
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
 
-        # INTRO Embed
+        # Intro-Embed
         intro_embed = discord.Embed(
-            title=f"🏆 Top {top_count} in {pretty_category_name} "
+            title=f"🏆 Top {top_count} in {category_icon} {category_name} "
                   f"({calendar.month_name[int(month.value)]} {year.value})",
-            description=(f"This is the **Top {top_count}** in **{pretty_category_name}** "
+            description=(f"This is the **Top {top_count}** in **{category_icon} {category_name}** "
                          f"for {calendar.month_name[int(month.value)]} {year.value}."),
             color=discord.Color.gold()
         )
 
-        # Kategorie-Icon ermitteln
-        category_icon = next(
-            (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
-            "🎨"
-        )
-
-        # Footer: Guildname | Kategorie-Icon + Kategoriename | Channelname
         intro_embed.set_footer(
-            text=f"{guild.name} Rankings | {category_icon} {pretty_category_name} | #{interaction.channel.name}",
+            text=f"{guild.name} Rankings | {category_icon} {category_name} | #{interaction.channel.name}",
             icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
         )
 
@@ -173,7 +174,7 @@ class HutVote(commands.Cog):
                         reaction_parts.append(f"{str(r.emoji)} {count}")
 
             reaction_line = " ".join(reaction_parts)
-            
+
             # Additional Reactions
             extra_parts = []
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
@@ -182,20 +183,13 @@ class HutVote(commands.Cog):
                     extra_parts.append(f"{str(r.emoji)} {r.count}")
             extra_text = " ".join(extra_parts) if extra_parts else ""
 
-            # Embed-Titel mit Kategorie-Icon + Linie direkt darunter
+            # Embed-Titel
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
-
-            # Hole Icon passend zum gewählten category.value
-            category_icon = next(
-                (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
-                "🎨"
-            )
-
             title = f"{category_icon} #{idx} by {creator_name}\n{'─'*14}"
 
-            # Beschreibung zusammensetzen
+            # Beschreibung
             description_text = ""
             if reaction_line:
                 description_text += f"{reaction_line}\n\n"
@@ -223,31 +217,21 @@ class HutVote(commands.Cog):
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=creator_avatar)
-
-            # Kategorie-Icon ermitteln
-            category_icon = next(
-                (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
-                "🎨"
-            )
-
-            # Footer setzen: Kategorie-Icon + Kategoriename + Channelname
             embed.set_footer(
-                text=f"{category_icon} {pretty_category_name} | #{msg.channel.name}",
+                text=f"{category_icon} {category_name} | #{msg.channel.name}",
                 icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
             )
-
             if img_url:
                 embed.set_image(url=img_url)
 
             await intro_msg.channel.send(embed=embed)
-
 
         # Top1 Creator Announcement
         top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await intro_msg.channel.send(
             f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} "
-            f"has created the image with most total votes in {pretty_category_name}! 🎉"
+            f"has created the image with most total votes in {category_icon} {category_name}! 🎉"
         )
 
 
