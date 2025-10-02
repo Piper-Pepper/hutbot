@@ -148,7 +148,7 @@ class HutVote(commands.Cog):
         # Sub-Messages als normale Nachrichten
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
-            
+
             # Top-5 Emojis nebeneinander (nur >0 anzeigen)
             reaction_parts = []
             used_emojis = set()
@@ -190,7 +190,7 @@ class HutVote(commands.Cog):
             creator_avatar = creator.display_avatar.url
 
             # Titel zeigt Channel-Name
-            title = f"🎨 #{idx}\n👉 **Creator: ** *{creator_name}*"
+            title = f"🎨 #{idx}\n🧑‍🎨 {creator_name}"
 
             # Bildquelle
             img_url = None
