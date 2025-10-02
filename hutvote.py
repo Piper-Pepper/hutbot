@@ -130,15 +130,25 @@ class HutVote(commands.Cog):
 
         # INTRO Embed
         intro_embed = discord.Embed(
-            title=f"🏆 Top {top_count} in {pretty_category_name} ({calendar.month_name[int(month.value)]} {year.value})",
+            title=f"🏆 Top {top_count} in {pretty_category_name} "
+                  f"({calendar.month_name[int(month.value)]} {year.value})",
             description=(f"This is the **Top {top_count}** in **{pretty_category_name}** "
                          f"for {calendar.month_name[int(month.value)]} {year.value}."),
             color=discord.Color.gold()
         )
+
+        # Kategorie-Icon herausziehen
+        category_icon = next(
+            (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
+            "🎨"
+        )
+
+        # Footer setzen mit: Guild-Icon, Kategorie-Icon + Name, Channelname
         intro_embed.set_footer(
-            text=f"{guild.name} Rankings",
+            text=f"{guild.name} Rankings | {category_icon} {pretty_category_name} | #{interaction.channel.name}",
             icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
         )
+
         intro_msg = await interaction.followup.send(embed=intro_embed, wait=True)
 
         # Sub-Messages Embeds
