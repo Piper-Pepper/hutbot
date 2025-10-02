@@ -163,8 +163,6 @@ class HutVote(commands.Cog):
                         reaction_parts.append(f"{str(r.emoji)} {count}")
 
             reaction_line = " ".join(reaction_parts)
-            if reaction_line:
-                reaction_line += f"\n{'─'*20}"
 
             # Additional Reactions
             extra_parts = []
@@ -174,18 +172,19 @@ class HutVote(commands.Cog):
                     extra_parts.append(f"{str(r.emoji)} {r.count}")
             extra_text = " ".join(extra_parts) if extra_parts else ""
 
-            # Beschreibung zusammensetzen
-            if extra_text:
-                description_text = f"{reaction_line}\n\n{extra_text}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
-            else:
-                description_text = f"{reaction_line}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
-
-            # Creator Infos
+            # Embed-Titel mit Linie direkt darunter
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
+            title = f"🎨 #{idx} by {creator_name}\n{'─'*20}"
 
-            title = f"🎨 #{idx} by {creator_name}"
+            # Beschreibung zusammensetzen
+            description_text = ""
+            if reaction_line:
+                description_text += f"{reaction_line}\n\n"
+            if extra_text:
+                description_text += f"{extra_text}\n\n"
+            description_text += f"[◀️ Jump to Original to vote 📈]({msg.jump_url})"
 
             # Bildquelle
             img_url = None
