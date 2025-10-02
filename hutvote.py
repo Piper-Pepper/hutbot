@@ -9,7 +9,7 @@ ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
 
 CATEGORY_CHOICES = [
-    app_commands.Choice(name="🛑", value="1416461717038170294"),
+    app_commands.Choice(name="🟢", value="1416461717038170294"),
     app_commands.Choice(name="🔞", value="1415769711052062820"),
 ]
 
@@ -177,9 +177,9 @@ class HutVote(commands.Cog):
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
 
-            # Hole Icon aus CATEGORY_CHOICES anhand der category_value
+            # Hole Icon passend zum gewählten category.value
             category_icon = next(
-                (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category_value),
+                (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
                 "🎨"
             )
 
@@ -192,7 +192,6 @@ class HutVote(commands.Cog):
             if extra_text:
                 description_text += f"{extra_text}\n\n"
             description_text += f"[◀️ Jump / Vote 📈]({msg.jump_url})"
-
 
             # Bildquelle
             img_url = None
