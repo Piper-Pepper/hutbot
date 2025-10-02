@@ -127,7 +127,7 @@ class HutVote(commands.Cog):
             return (top5_sum, extra_sum, msg.created_at)
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
-
+        
         # INTRO Embed
         intro_embed = discord.Embed(
             title=f"🏆 Top {top_count} in {pretty_category_name} "
@@ -137,13 +137,13 @@ class HutVote(commands.Cog):
             color=discord.Color.gold()
         )
 
-        # Kategorie-Icon herausziehen
+        # Kategorie-Icon ermitteln
         category_icon = next(
             (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
             "🎨"
         )
 
-        # Footer setzen mit: Guild-Icon, Kategorie-Icon + Name, Channelname
+        # Footer: Guildname | Kategorie-Icon + Kategoriename | Channelname
         intro_embed.set_footer(
             text=f"{guild.name} Rankings | {category_icon} {pretty_category_name} | #{interaction.channel.name}",
             icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
