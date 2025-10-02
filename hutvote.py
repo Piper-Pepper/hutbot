@@ -153,7 +153,7 @@ class HutVote(commands.Cog):
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
-            title = f"🎨 #{idx}\n*👉 **Creator:** *{creator_name}*"
+            title = f"🎨 #{idx}\n*👉 **Creator: ** *{creator_name}*"
 
             # Bildquelle suchen
             img_url = None
