@@ -127,7 +127,7 @@ class HutVote(commands.Cog):
             return (top5_sum, extra_sum, msg.created_at)
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
-        
+
         # INTRO Embed
         intro_embed = discord.Embed(
             title=f"🏆 Top {top_count} in {pretty_category_name} "
@@ -223,14 +223,24 @@ class HutVote(commands.Cog):
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=creator_avatar)
+
+            # Kategorie-Icon ermitteln
+            category_icon = next(
+                (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category.value),
+                "🎨"
+            )
+
+            # Footer setzen: Kategorie-Icon + Kategoriename + Channelname
             embed.set_footer(
-                text=f"{pretty_category_name} | {msg.channel.name}",
+                text=f"{category_icon} {pretty_category_name} | #{msg.channel.name}",
                 icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
             )
+
             if img_url:
                 embed.set_image(url=img_url)
 
             await intro_msg.channel.send(embed=embed)
+
 
         # Top1 Creator Announcement
         top1_msg = top_msgs[0]
