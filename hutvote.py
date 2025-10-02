@@ -149,7 +149,7 @@ class HutVote(commands.Cog):
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Emojis nebeneinander
+            # Top-5 Emojis nebeneinander (nur >0 anzeigen)
             reaction_parts = []
             used_emojis = set()
             for emoji_key in REACTION_CAPTIONS:
@@ -161,11 +161,13 @@ class HutVote(commands.Cog):
                     None
                 )
                 if r:
-                    count = max(r.count - 1, 0)
-                    reaction_parts.append(f"{str(r.emoji)} {count}")
-                    used_emojis.add(r.emoji)
+                    count = r.count - 1  # Bot-Reaction abziehen
+                    if count > 0:  # nur anzeigen, wenn größer als 0
+                        reaction_parts.append(f"{str(r.emoji)} {count}")
+                        used_emojis.add(r.emoji)
 
             reaction_line = " ".join(reaction_parts)
+
 
             # Additional Reactions auch nebeneinander
             extra_parts = []
