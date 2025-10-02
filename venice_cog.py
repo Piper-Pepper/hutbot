@@ -289,7 +289,7 @@ class AspectRatioView(discord.ui.View):
         progress_msg = await interaction.followup.send(f"{pepper} Generating image... starting", ephemeral=True)
         prompt_factor = len(self.prompt_text) / 1000
         for i in range(1, 11):
-            await asyncio.sleep(0.9 + steps * 0.04 + cfg * 0.35 + prompt_factor * 0.9)
+            await asyncio.sleep(0.9 + steps * 0.08 + cfg * 0.38 + prompt_factor * 0.9)
             try:
                 progress_text = (
                     f"{pepper} Generating image for **{self.author.display_name}** "
@@ -457,63 +457,65 @@ class PostGenerationView(discord.ui.View):
                 pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
-            member = interaction.user
-            is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
+        member = interaction.user
+        is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
 
-            class ReuseModelView(discord.ui.View):
-                def __init__(self, session, author, prompt_text, hidden_suffix_marker, variant):
-                    super().__init__(timeout=None)
-                    self.session = session
-                    self.author = author
-                    self.prompt_text = prompt_text
-                    self.hidden_suffix_marker = hidden_suffix_marker
-                    self.variant = variant
+        class ReuseModelView(discord.ui.View):
+            def __init__(self, session, author, prompt_text, hidden_suffix_marker, variant):
+                super().__init__(timeout=None)
+                self.session = session
+                self.author = author
+                self.prompt_text = prompt_text
+                self.hidden_suffix_marker = hidden_suffix_marker
+                self.variant = variant
 
-                    category_id = interaction.channel.category.id if interaction.channel.category else None
+                category_id = interaction.channel.category.id if interaction.channel.category else None
+                variants = VARIANT_MAP.get(category_id, [])
+
+                for idx, v in enumerate(variants):
+                    # Rot statt grün für Reuse-Model Buttons
+                    btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.danger)
+                    btn.callback = self.make_model_callback(v, idx)
+                    self.add_item(btn)
+
+            def make_model_callback(self, variant, idx):
+                async def callback(inner_interaction: discord.Interaction):
+                    member = inner_interaction.user
+                    is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
+                    category_id = inner_interaction.channel.category.id if inner_interaction.channel.category else None
                     variants = VARIANT_MAP.get(category_id, [])
+                    # Rolle-Check für NSFW/SFW
+                    if variants:
+                        if variant != variants[0] and not is_vip:
+                            await inner_interaction.response.send_message(
+                                f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic model is for all)",
+                                ephemeral=True
+                            )
+                            return
 
-                    for idx, v in enumerate(variants):
-                        btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.success)
-                        btn.callback = self.make_model_callback(v, idx)
-                        self.add_item(btn)
+                    prev_inputs = {
+                        "prompt": self.prompt_text,
+                        "negative_prompt": self.variant.get("negative_prompt", ""),
+                        "steps": None,
+                        "hidden_suffix": self.hidden_suffix_marker
+                    }
 
-                def make_model_callback(self, variant, idx):
-                    async def callback(inner_interaction: discord.Interaction):
-                        member = inner_interaction.user
-                        is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-                        category_id = inner_interaction.channel.category.id if inner_interaction.channel.category else None
-                        variants = VARIANT_MAP.get(category_id, [])
-                        # Rolle-Check für NSFW/SFW
-                        if variants:
-                            if variant != variants[0] and not is_vip:
-                                await inner_interaction.response.send_message(
-                                    f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic model is for all)",
-                                    ephemeral=True
-                                )
-                                return
+                    await inner_interaction.response.send_modal(VeniceModal(
+                        self.session,
+                        variant,
+                        self.hidden_suffix_marker if self.hidden_suffix_marker is not None else (NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX),
+                        is_vip=is_vip,
+                        previous_inputs=prev_inputs
+                    ))
+                return callback
 
-                        prev_inputs = {
-                            "prompt": self.prompt_text,
-                            "negative_prompt": self.variant.get("negative_prompt", ""),
-                            "steps": None,
-                            "hidden_suffix": self.hidden_suffix_marker
-                        }
+        hidden_marker = self.previous_inputs.get("hidden_suffix", None)
+        await interaction.response.send_message(
+            f"{interaction.user.mention}, which model for the re-used prompt?",
+            view=ReuseModelView(self.session, interaction.user, self.prompt_text, hidden_marker, self.variant),
+            ephemeral=True
+        )
 
-                        await inner_interaction.response.send_modal(VeniceModal(
-                            self.session,
-                            variant,
-                            self.hidden_suffix_marker if self.hidden_suffix_marker is not None else (NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX),
-                            is_vip=is_vip,
-                            previous_inputs=prev_inputs
-                        ))
-                    return callback
-
-            hidden_marker = self.previous_inputs.get("hidden_suffix", None)
-            await interaction.response.send_message(
-                f"{interaction.user.mention}, which model for the re-used prompt?",
-                view=ReuseModelView(self.session, interaction.user, self.prompt_text, hidden_marker, self.variant),
-                ephemeral=True
-            )
 # ---------------- Buttons View ----------------
 class VeniceView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
