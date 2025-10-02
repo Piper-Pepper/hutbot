@@ -9,8 +9,8 @@ ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
 
 CATEGORY_CHOICES = [
-    app_commands.Choice(name="💯 SFW", value="1416461717038170294"),
-    app_commands.Choice(name="🔞 NSFW", value="1415769711052062820"),
+    app_commands.Choice(name="🛑", value="1416461717038170294"),
+    app_commands.Choice(name="🔞", value="1415769711052062820"),
 ]
 
 TOPUSER_CHOICES = [
@@ -163,7 +163,7 @@ class HutVote(commands.Cog):
                         reaction_parts.append(f"{str(r.emoji)} {count}")
 
             reaction_line = " ".join(reaction_parts)
-
+            
             # Additional Reactions
             extra_parts = []
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
@@ -172,11 +172,18 @@ class HutVote(commands.Cog):
                     extra_parts.append(f"{str(r.emoji)} {r.count}")
             extra_text = " ".join(extra_parts) if extra_parts else ""
 
-            # Embed-Titel mit Linie direkt darunter
+            # Embed-Titel mit Kategorie-Icon + Linie direkt darunter
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
-            title = f"🎨 #{idx} by {creator_name}\n{'─'*14}"
+
+            # Hole Icon aus CATEGORY_CHOICES anhand der category_value
+            category_icon = next(
+                (choice.name.split()[0] for choice in CATEGORY_CHOICES if choice.value == category_value),
+                "🎨"
+            )
+
+            title = f"{category_icon} #{idx} by {creator_name}\n{'─'*14}"
 
             # Beschreibung zusammensetzen
             description_text = ""
@@ -185,6 +192,7 @@ class HutVote(commands.Cog):
             if extra_text:
                 description_text += f"{extra_text}\n\n"
             description_text += f"[◀️ Jump / Vote 📈]({msg.jump_url})"
+
 
             # Bildquelle
             img_url = None
@@ -207,7 +215,7 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=creator_avatar)
             embed.set_footer(
-                text=f"Category: {pretty_category_name} | Channel: {msg.channel.name}",
+                text=f"{pretty_category_name} | {msg.channel.name}",
                 icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
             )
             if img_url:
