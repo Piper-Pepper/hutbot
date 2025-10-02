@@ -145,7 +145,7 @@ class HutVote(commands.Cog):
         )
         intro_msg = await interaction.followup.send(embed=intro_embed, wait=True)
 
-        # Sub-Messages als Replies
+        # Sub-Messages als normale Nachrichten
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
@@ -210,15 +210,14 @@ class HutVote(commands.Cog):
             if img_url:
                 embed.set_image(url=img_url)
 
-            await intro_msg.channel.send(embed=embed, reference=intro_msg.to_reference())
+            await intro_msg.channel.send(embed=embed)
 
         # Top1 Creator extra Announcement
         top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await intro_msg.channel.send(
             f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} "
-            f"has created the image with most total votes in {pretty_category_name}! 🎉",
-            reference=intro_msg.to_reference()
+            f"has created the image with most total votes in {pretty_category_name}! 🎉"
         )
 
 
