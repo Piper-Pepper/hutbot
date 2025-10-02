@@ -179,7 +179,7 @@ class HutVote(commands.Cog):
             creator_avatar = creator.display_avatar.url
 
             # Titel zeigt nun Channel-Name neben der Zahl
-            title = f"🎨 #{idx} ({msg.channel.name})\n👉 **Creator: ** *{creator_name}*"
+            title = f"🎨 #{idx}\n({msg.channel.name})\n👉 **Creator: ** *{creator_name}*"
 
             # Bildquelle
             img_url = None
