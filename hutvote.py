@@ -148,7 +148,7 @@ class HutVote(commands.Cog):
         # Sub-Messages als normale Nachrichten
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
-
+            
             # Top-5 Emojis nebeneinander (nur >0 anzeigen)
             reaction_parts = []
             used_emojis = set()
@@ -162,9 +162,9 @@ class HutVote(commands.Cog):
                 )
                 if r:
                     count = r.count - 1  # Bot-Reaction abziehen
+                    used_emojis.add(r.emoji)  # immer markieren als "schon verwendet"
                     if count > 0:  # nur anzeigen, wenn größer als 0
                         reaction_parts.append(f"{str(r.emoji)} {count}")
-                        used_emojis.add(r.emoji)
 
             reaction_line = " ".join(reaction_parts)
 
