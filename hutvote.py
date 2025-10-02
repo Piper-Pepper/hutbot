@@ -169,7 +169,7 @@ class HutVote(commands.Cog):
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             if extra_reacts:
                 extra_text = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
-                
+                extra_text = f"\n{extra_text}"
             else:
                 extra_text = ""
 
@@ -179,7 +179,7 @@ class HutVote(commands.Cog):
             creator_avatar = creator.display_avatar.url
 
             # Titel zeigt nun Channel-Name neben der Zahl
-            title = f"🎨 #{idx}\n({msg.channel.name})\n👉 **Creator: ** *{creator_name}*"
+            title = f"🎨 #{idx}\n👉 **Creator: ** *{creator_name}*"
 
             # Bildquelle
             img_url = None
