@@ -122,10 +122,10 @@ class HutVote(commands.Cog):
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
 
-        for msg in top_msgs:
+        for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Emojis: fest aus REACTION_CAPTIONS in dieser Reihenfolge
+            # Top-5 Emojis
             reaction_lines = []
             used_emojis = set()
             for emoji_key in REACTION_CAPTIONS:
@@ -141,7 +141,7 @@ class HutVote(commands.Cog):
 
             reaction_line = "\n".join(reaction_lines)
 
-            # Additional: alles andere, keine Abzüge
+            # Additional Reactions
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             if extra_reacts:
                 extra_text = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
@@ -149,9 +149,13 @@ class HutVote(commands.Cog):
             else:
                 extra_text = ""
 
-            creator_name = msg.mentions[0].display_name if msg.mentions else msg.author.display_name
-            title = f"Image by {creator_name}"
+            # Creator Infos
+            creator = msg.mentions[0] if msg.mentions else msg.author
+            creator_name = creator.display_name
+            creator_avatar = creator.display_avatar.url
+            title = f"#{idx} — Image by {creator_name}"
 
+            # Bildquelle suchen
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -164,7 +168,7 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            # Beschreibung für Embed: Top-5 + Additional + Link unten
+            # Beschreibung: Reactions + Link
             description_text = f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})"
 
             if img_url:
@@ -174,11 +178,12 @@ class HutVote(commands.Cog):
                     color=discord.Color.green()
                 )
                 embed.set_image(url=img_url)
+                embed.set_thumbnail(url=creator_avatar)  # Avatar des Erstellers
                 await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
             else:
                 await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
 
-        # Top1 Creator
+        # Top1 Creator extra Announcement
         top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
