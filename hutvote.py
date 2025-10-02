@@ -19,22 +19,18 @@ TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 20", value="20"),
 ]
 
-# Jahr-Choices: dieses Jahr und letztes Jahr
 current_year = datetime.utcnow().year
 YEAR_CHOICES = [
     app_commands.Choice(name=str(current_year), value=str(current_year)),
     app_commands.Choice(name=str(current_year - 1), value=str(current_year - 1)),
 ]
 
-# Monate als Dropdown
 MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i)) for i in range(1, 13)
 ]
 
-# Map für hübsche Category-Namen
 CATEGORY_NAME_MAP = {c.value: c.name for c in CATEGORY_CHOICES}
 
-# Emoji → Caption Mapping (wird jetzt nur für Reihenfolge genutzt)
 REACTION_CAPTIONS = {
     "<:01sthumb:1387086056498921614>": "Great!",
     "<:01smile_piper:1387083454575022213>": "LMFAO",
@@ -132,7 +128,7 @@ class HutVote(commands.Cog):
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
 
-        # INTRO
+        # INTRO Embed
         intro_embed = discord.Embed(
             title=f"🏆 Top {top_count} in {pretty_category_name} ({calendar.month_name[int(month.value)]} {year.value})",
             description=(f"This is the **Top {top_count}** in **{pretty_category_name}** "
@@ -145,41 +141,37 @@ class HutVote(commands.Cog):
         )
         intro_msg = await interaction.followup.send(embed=intro_embed, wait=True)
 
-        # Sub-Messages als normale Nachrichten
+        # Sub-Messages Embeds
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-        # Top-5 Emojis nebeneinander (nur >0 anzeigen)
-        reaction_parts = []
-        used_emojis = set()
+            # Top-5 Emojis nebeneinander
+            reaction_parts = []
+            used_emojis = set()
+            for emoji_key in REACTION_CAPTIONS:
+                r = next(
+                    (r for r in sorted_reacts if (
+                        str(r.emoji) if not isinstance(r.emoji, discord.Emoji)
+                        else f"<:{r.emoji.name}:{r.emoji.id}>"
+                    ) == emoji_key),
+                    None
+                )
+                if r:
+                    count = r.count - 1
+                    used_emojis.add(r.emoji)
+                    if count > 0:
+                        reaction_parts.append(f"{str(r.emoji)} {count}")
 
-        for emoji_key in REACTION_CAPTIONS:
-            r = next(
-                (r for r in sorted_reacts if (
-                    str(r.emoji) if not isinstance(r.emoji, discord.Emoji)
-                    else f"<:{r.emoji.name}:{r.emoji.id}>"
-                ) == emoji_key),
-                None
-            )
-            if r:
-                count = r.count - 1  # Bot-Reaction abziehen
-                used_emojis.add(r.emoji)  # markieren als "schon verwendet"
-                if count > 0:  # nur anzeigen, wenn größer als 0
-                    reaction_parts.append(f"{str(r.emoji)} {count}")
+            reaction_line = " ".join(reaction_parts)
+            if reaction_line:
+                reaction_line += f"\n{'─'*20}"
 
-        reaction_line = " ".join(reaction_parts)
-
-        # Einmalige Linie mit 20 Zeichen
-        if reaction_line:  # nur wenn es überhaupt Reaktionen gibt
-            reaction_line += f"\n{'─'*20}"
-
-            # Additional Reactions auch nebeneinander
+            # Additional Reactions
             extra_parts = []
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             for r in extra_reacts:
                 if r.count > 0:
                     extra_parts.append(f"{str(r.emoji)} {r.count}")
-
             extra_text = " ".join(extra_parts) if extra_parts else ""
 
             # Beschreibung zusammensetzen
@@ -193,7 +185,6 @@ class HutVote(commands.Cog):
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
 
-            # Titel zeigt Channel-Name
             title = f"🎨 #{idx} by {creator_name}"
 
             # Bildquelle
@@ -225,7 +216,7 @@ class HutVote(commands.Cog):
 
             await intro_msg.channel.send(embed=embed)
 
-        # Top1 Creator extra Announcement
+        # Top1 Creator Announcement
         top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await intro_msg.channel.send(
