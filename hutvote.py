@@ -13,6 +13,9 @@ CATEGORY_CHOICES = [
     app_commands.Choice(name="🔞 NSFW", value="1415769711052062820"),
 ]
 
+# Map für schnelle Umwandlung ID → Anzeigename
+CATEGORY_NAME_MAP = {c.value: c.name for c in CATEGORY_CHOICES}
+
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
     app_commands.Choice(name="Top 10", value="10"),
@@ -83,6 +86,9 @@ class HutVote(commands.Cog):
             await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
             return
 
+        # 👇 Pretty Name aus Mapping oder echter Name
+        pretty_category_name = CATEGORY_NAME_MAP.get(str(category_obj.id), category_obj.name)
+
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
@@ -122,6 +128,18 @@ class HutVote(commands.Cog):
 
         top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
 
+        # --- Startpost ---
+        intro_embed = discord.Embed(
+            title=f"🏆 Top {top_count} in {pretty_category_name}",
+            description=(
+                f"This is the **Top {top_count}** in **{pretty_category_name}** "
+                f"for {calendar.month_name[int(month.value)]} {year.value}."
+            ),
+            color=discord.Color.gold()
+        )
+        intro_msg = await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral_flag, wait=True)
+
+        # --- Folgeposts (Replies) ---
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
@@ -134,7 +152,7 @@ class HutVote(commands.Cog):
                     None
                 )
                 if r:
-                    count = max(r.count - 1, 0)  # Bot selbst abziehen nur bei Top-5
+                    count = max(r.count - 1, 0)  # Bot selbst abziehen
                     line = f"{str(r.emoji)} {count} — {REACTION_CAPTIONS[emoji_key]}"
                     reaction_lines.append(line)
                     used_emojis.add(r.emoji)
@@ -178,18 +196,24 @@ class HutVote(commands.Cog):
                     color=discord.Color.green()
                 )
                 embed.set_image(url=img_url)
-                embed.set_thumbnail(url=creator_avatar)  # Avatar des Erstellers
-                await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
+                embed.set_thumbnail(url=creator_avatar)
+                embed.set_footer(text=f"Category: {pretty_category_name} | Channel: {msg.channel.name}")
+                await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag, reference=intro_msg.to_reference())
             else:
-                await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
+                await interaction.followup.send(
+                    f"{title}\n{description_text}\n\n_Category: {pretty_category_name} | Channel: {msg.channel.name}_",
+                    ephemeral=ephemeral_flag,
+                    reference=intro_msg.to_reference()
+                )
 
-        # Top1 Creator extra Announcement
+        # --- Top1 Creator extra Announcement ---
         top1_msg = top_msgs[0]
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await interaction.followup.send(
             f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} "
-            f"has created the image with most total votes in the {category_obj.name}!",
-            ephemeral=ephemeral_flag
+            f"has created the image with most total votes in {pretty_category_name}!",
+            ephemeral=ephemeral_flag,
+            reference=intro_msg.to_reference()
         )
 
 
