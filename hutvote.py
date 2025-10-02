@@ -187,7 +187,7 @@ class HutVote(commands.Cog):
                         break
 
             # Beschreibung: Reactions + Link
-            description_text = f"{reaction_line}{extra_text}\n\n[◀️ Jump to Original to vote📈]({msg.jump_url})"
+            description_text = f"{reaction_line}{extra_text}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
 
             if img_url:
                 embed = discord.Embed(
