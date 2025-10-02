@@ -34,7 +34,7 @@ MONTH_CHOICES = [
 # Map für hübsche Category-Namen
 CATEGORY_NAME_MAP = {c.value: c.name for c in CATEGORY_CHOICES}
 
-# Emoji → Caption Mapping
+# Emoji → Caption Mapping (wird jetzt nur für Reihenfolge genutzt)
 REACTION_CAPTIONS = {
     "<:01sthumb:1387086056498921614>": "Great!",
     "<:01smile_piper:1387083454575022213>": "LMFAO",
@@ -149,36 +149,45 @@ class HutVote(commands.Cog):
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Emojis
-            reaction_lines = []
+            # Top-5 Emojis nebeneinander
+            reaction_parts = []
             used_emojis = set()
             for emoji_key in REACTION_CAPTIONS:
                 r = next(
-                    (r for r in sorted_reacts if (str(r.emoji) if not isinstance(r.emoji, discord.Emoji) else f"<:{r.emoji.name}:{r.emoji.id}>") == emoji_key),
+                    (r for r in sorted_reacts if (
+                        str(r.emoji) if not isinstance(r.emoji, discord.Emoji)
+                        else f"<:{r.emoji.name}:{r.emoji.id}>"
+                    ) == emoji_key),
                     None
                 )
                 if r:
                     count = max(r.count - 1, 0)
-                    line = f"{str(r.emoji)} {count} — {REACTION_CAPTIONS[emoji_key]}"
-                    reaction_lines.append(line)
+                    reaction_parts.append(f"{str(r.emoji)} {count}")
                     used_emojis.add(r.emoji)
 
-            reaction_line = "\n".join(reaction_lines)
+            reaction_line = " ".join(reaction_parts)
 
-            # Additional Reactions
+            # Additional Reactions auch nebeneinander
+            extra_parts = []
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
-            if extra_reacts:
-                extra_text = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
-                extra_text = f"\n{extra_text}"
+            for r in extra_reacts:
+                if r.count > 0:
+                    extra_parts.append(f"{str(r.emoji)} {r.count}")
+
+            extra_text = " ".join(extra_parts) if extra_parts else ""
+
+            # Beschreibung zusammensetzen
+            if extra_text:
+                description_text = f"{reaction_line}\n\n{extra_text}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
             else:
-                extra_text = ""
+                description_text = f"{reaction_line}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
 
             # Creator Infos
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
 
-            # Titel zeigt nun Channel-Name neben der Zahl
+            # Titel zeigt Channel-Name
             title = f"🎨 #{idx}\n👉 **Creator: ** *{creator_name}*"
 
             # Bildquelle
@@ -194,9 +203,7 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            # Beschreibung
-            description_text = f"{reaction_line}{extra_text}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
-
+            # Embed bauen
             embed = discord.Embed(
                 title=title,
                 description=description_text,
