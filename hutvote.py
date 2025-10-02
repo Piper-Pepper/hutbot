@@ -149,25 +149,29 @@ class HutVote(commands.Cog):
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Emojis nebeneinander (nur >0 anzeigen)
-            reaction_parts = []
-            used_emojis = set()
-            for emoji_key in REACTION_CAPTIONS:
-                r = next(
-                    (r for r in sorted_reacts if (
-                        str(r.emoji) if not isinstance(r.emoji, discord.Emoji)
-                        else f"<:{r.emoji.name}:{r.emoji.id}>"
-                    ) == emoji_key),
-                    None
-                )
-                if r:
-                    count = r.count - 1  # Bot-Reaction abziehen
-                    used_emojis.add(r.emoji)  # immer markieren als "schon verwendet"
-                    if count > 0:  # nur anzeigen, wenn größer als 0
-                        reaction_parts.append(f"{str(r.emoji)} {count}")
+        # Top-5 Emojis nebeneinander (nur >0 anzeigen)
+        reaction_parts = []
+        used_emojis = set()
 
-            reaction_line = " ".join(reaction_parts)
+        for emoji_key in REACTION_CAPTIONS:
+            r = next(
+                (r for r in sorted_reacts if (
+                    str(r.emoji) if not isinstance(r.emoji, discord.Emoji)
+                    else f"<:{r.emoji.name}:{r.emoji.id}>"
+                ) == emoji_key),
+                None
+            )
+            if r:
+                count = r.count - 1  # Bot-Reaction abziehen
+                used_emojis.add(r.emoji)  # markieren als "schon verwendet"
+                if count > 0:  # nur anzeigen, wenn größer als 0
+                    reaction_parts.append(f"{str(r.emoji)} {count}")
 
+        reaction_line = " ".join(reaction_parts)
+
+        # Einmalige Linie mit 20 Zeichen
+        if reaction_line:  # nur wenn es überhaupt Reaktionen gibt
+            reaction_line += f"\n{'─'*20}"
 
             # Additional Reactions auch nebeneinander
             extra_parts = []
@@ -190,7 +194,7 @@ class HutVote(commands.Cog):
             creator_avatar = creator.display_avatar.url
 
             # Titel zeigt Channel-Name
-            title = f"🎨 #{idx}\n🧑‍🎨 {creator_name}"
+            title = f"🎨 #{idx} by {creator_name}"
 
             # Bildquelle
             img_url = None
