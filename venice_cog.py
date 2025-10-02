@@ -109,7 +109,7 @@ class VeniceModal(discord.ui.Modal):
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
-            max_length=1000,
+            max_length=1500,
             default=previous_inputs.get("prompt", "")
         )
 
@@ -121,7 +121,7 @@ class VeniceModal(discord.ui.Modal):
             label="Negative Prompt (optional)",
             style=discord.TextStyle.paragraph,
             required=False,
-            max_length=300,
+            max_length=500,
             default=neg_value
         )
 
@@ -132,6 +132,7 @@ class VeniceModal(discord.ui.Modal):
             label="CFG (> stricter AI adherence)",
             style=discord.TextStyle.short,
             required=False,
+            max_length=2,
             placeholder=cfg_placeholder,
             default=previous_inputs.get("cfg_value", "")
         )
@@ -145,6 +146,7 @@ class VeniceModal(discord.ui.Modal):
             label=f"Steps (1-{max_steps})",
             style=discord.TextStyle.short,
             required=False,
+            max_length=2,
             placeholder=steps_placeholder,
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
@@ -167,7 +169,7 @@ class VeniceModal(discord.ui.Modal):
             required=False,
             placeholder=placeholder_value,
             default=default_value,
-            max_length=1500  # vorher: 500
+            max_length=800  # vorher: 500
         )
 
         # Add items
