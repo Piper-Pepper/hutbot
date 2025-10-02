@@ -153,8 +153,16 @@ class HutVote(commands.Cog):
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
-            title = f"<:01pepper_icon:1377636862847619213> #{idx} — Image by {creator_name}"
 
+            # Pepper-Emoji vor Nummer im Author
+            embed = discord.Embed(
+                description=f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})",
+                color=discord.Color.green()
+            )
+            embed.set_author(
+                name=f"<:01pepper_icon:1377636862847619213> #{idx} — Image by {creator_name}",
+                icon_url=creator_avatar
+            )
 
             # Bildquelle suchen
             img_url = None
@@ -169,20 +177,15 @@ class HutVote(commands.Cog):
                         img_url = e.thumbnail.url
                         break
 
-            # Beschreibung: Reactions + Link
-            description_text = f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})"
-
             if img_url:
-                embed = discord.Embed(
-                    title=title,
-                    description=description_text,
-                    color=discord.Color.green()
-                )
                 embed.set_image(url=img_url)
-                embed.set_thumbnail(url=creator_avatar)  # Avatar des Erstellers
                 await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
             else:
-                await interaction.followup.send(f"{title}\n{description_text}", ephemeral=ephemeral_flag)
+                await interaction.followup.send(
+                    f"<:01pepper_icon:1377636862847619213> #{idx} — Image by {creator_name}\n"
+                    f"{reaction_line}{extra_text}\n\n[🔙 Jump to Original]({msg.jump_url})",
+                    ephemeral=ephemeral_flag
+                )
 
         # Top1 Creator extra Announcement
         top1_msg = top_msgs[0]
