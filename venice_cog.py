@@ -163,11 +163,11 @@ class VeniceModal(discord.ui.Modal):
 
         self.hidden_suffix = discord.ui.TextInput(
             label="Hidden Suffix",
-            style=discord.TextStyle.short,
+            style=discord.TextStyle.paragraph,  # vorher: short
             required=False,
             placeholder=placeholder_value,
             default=default_value,
-            max_length=500
+            max_length=1500  # vorher: 500
         )
 
         # Add items
