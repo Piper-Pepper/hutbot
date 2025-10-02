@@ -176,7 +176,7 @@ class HutVote(commands.Cog):
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
-            title = f"🎨 #{idx} by {creator_name}\n{'─'*20}"
+            title = f"🎨 #{idx} by {creator_name}\n{'─'*14}"
 
             # Beschreibung zusammensetzen
             description_text = ""
@@ -184,7 +184,7 @@ class HutVote(commands.Cog):
                 description_text += f"{reaction_line}\n\n"
             if extra_text:
                 description_text += f"{extra_text}\n\n"
-            description_text += f"[◀️ Jump to Original to vote 📈]({msg.jump_url})"
+            description_text += f"[◀️ Jump / Vote 📈]({msg.jump_url})"
 
             # Bildquelle
             img_url = None
