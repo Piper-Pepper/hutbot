@@ -169,7 +169,7 @@ class HutVote(commands.Cog):
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             if extra_reacts:
                 extra_text = " ".join(f"{str(r.emoji)}×{r.count}" for r in extra_reacts if r.count > 0)
-                extra_text = f"\n{extra_text}"
+                
             else:
                 extra_text = ""
 
