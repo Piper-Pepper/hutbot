@@ -78,6 +78,7 @@ class HutVote(commands.Cog):
         top_count = int(topuser.value) if topuser else 5
         ephemeral_flag = not public
 
+        # Permissions
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
             return
@@ -92,6 +93,7 @@ class HutVote(commands.Cog):
 
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
+        # Time range
         start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(int(year.value), int(month.value))[1]
         end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
@@ -132,12 +134,14 @@ class HutVote(commands.Cog):
 
         # INTRO
         intro_embed = discord.Embed(
-            title=f"🏆 Top {top_count} in {pretty_category_name}",
-            description=(
-                f"This is the **Top {top_count}** in **{pretty_category_name}** "
-                f"for {calendar.month_name[int(month.value)]} {year.value}."
-            ),
+            title=f"🏆 Top {top_count} in {pretty_category_name} ({calendar.month_name[int(month.value)]} {year.value})",
+            description=(f"This is the **Top {top_count}** in **{pretty_category_name}** "
+                         f"for {calendar.month_name[int(month.value)]} {year.value}."),
             color=discord.Color.gold()
+        )
+        intro_embed.set_footer(
+            text=f"{guild.name} Rankings",
+            icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
         )
         intro_msg = await interaction.followup.send(embed=intro_embed, wait=True)
 
@@ -173,7 +177,9 @@ class HutVote(commands.Cog):
             creator = msg.mentions[0] if msg.mentions else msg.author
             creator_name = creator.display_name
             creator_avatar = creator.display_avatar.url
-            title = f"🎨 #{idx}\n👉 **Creator: ** *{creator_name}*"
+
+            # Titel zeigt nun Channel-Name neben der Zahl
+            title = f"🎨 #{idx} ({msg.channel.name})\n👉 **Creator: ** *{creator_name}*"
 
             # Bildquelle
             img_url = None
@@ -189,7 +195,7 @@ class HutVote(commands.Cog):
                         break
 
             # Beschreibung
-            description_text = f"{reaction_line}{extra_text}\n\n[◀️ Jump to Original to vote📈]({msg.jump_url})"
+            description_text = f"{reaction_line}{extra_text}\n\n[◀️ Jump to Original to vote 📈]({msg.jump_url})"
 
             embed = discord.Embed(
                 title=title,
@@ -197,7 +203,10 @@ class HutVote(commands.Cog):
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=creator_avatar)
-            embed.set_footer(text=f"Category: {pretty_category_name} | Channel: {msg.channel.name}")
+            embed.set_footer(
+                text=f"Category: {pretty_category_name} | Channel: {msg.channel.name}",
+                icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
+            )
             if img_url:
                 embed.set_image(url=img_url)
 
@@ -208,7 +217,7 @@ class HutVote(commands.Cog):
         top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
         await intro_msg.channel.send(
             f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} "
-            f"has created the image with most total votes in {pretty_category_name}!",
+            f"has created the image with most total votes in {pretty_category_name}! 🎉",
             reference=intro_msg.to_reference()
         )
 
