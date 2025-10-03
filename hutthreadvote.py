@@ -67,6 +67,20 @@ class HutThreadVoteLegacy(commands.Cog):
             await interaction.response.send_message("❌ Invalid thread (not found or no access).", ephemeral=True)
             return
 
+        # Versuch: dem Thread beitreten, falls archiviert oder privat
+        try:
+            if not thread_obj.joined:
+                await thread_obj.join()
+        except Exception:
+            await interaction.response.send_message("❌ Cannot join the thread.", ephemeral=True)
+            return
+
+        # Check permissions
+        perms = thread_obj.permissions_for(guild.me)
+        if not perms.read_messages or not perms.read_message_history:
+            await interaction.response.send_message("❌ I cannot read this thread.", ephemeral=True)
+            return
+
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
         # Alle Posts vom Bot im Thread sammeln
