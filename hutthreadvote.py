@@ -4,7 +4,8 @@ from discord.ext import commands
 from discord import app_commands
 import re
 
-BOT_ID = 1339242900906836090  # Poster-Bot für die Threads
+SEARCH_BOT_ID = 1339242900906836090  # Bot, dessen Posts durchsucht werden
+SCAN_BOT_ID = 1379906834588106883    # Dein Bot, der scannt
 
 THREAD_CHOICES = [
     app_commands.Choice(name="Thread 1", value="1416599342298435735"),
@@ -67,7 +68,7 @@ class HutThreadVoteLegacy(commands.Cog):
             await interaction.response.send_message("❌ Invalid thread (not found or no access).", ephemeral=True)
             return
 
-        # Versuch: dem Thread beitreten, falls archiviert oder privat
+        # Versuch: dem Thread beitreten, falls nicht joined oder archiviert
         try:
             if not thread_obj.joined:
                 await thread_obj.join()
@@ -83,11 +84,11 @@ class HutThreadVoteLegacy(commands.Cog):
 
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
-        # Alle Posts vom Bot im Thread sammeln
+        # Alle Posts vom SEARCH_BOT_ID im Thread sammeln
         matched_msgs = []
         try:
             async for msg in thread_obj.history(limit=None, oldest_first=True):
-                if msg.author.id != BOT_ID:
+                if msg.author.id != SEARCH_BOT_ID:
                     continue
                 matched_msgs.append(msg)
         except Exception:
