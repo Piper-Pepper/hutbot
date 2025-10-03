@@ -136,7 +136,7 @@ class HutThreadVote(commands.Cog):
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-5 Emojis
+            # Top-Emojis aus Map
             reaction_parts = []
             used_emojis = set()
             for emoji_key in REACTION_CAPTIONS:
@@ -148,22 +148,25 @@ class HutThreadVote(commands.Cog):
                     None
                 )
                 if r:
-                    count = r.count - 1
-                    used_emojis.add(r.emoji)
+                    count = r.count - 1  # Bot-Reaction abziehen
                     if count > 0:
+                        used_emojis.add(r.emoji)
                         reaction_parts.append(f"{str(r.emoji)} {count}")
 
-            reaction_line = " ".join(reaction_parts)
+            reaction_line = " ".join(reaction_parts) if reaction_parts else ""
 
-            # Extra reactions
+            # Extra-Reactions
             extra_parts = []
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             for r in extra_reacts:
-                if r.count > 0:
-                    extra_parts.append(f"{str(r.emoji)} {r.count}")
+                count = r.count
+                if r.me:  # Bot selbst reagiert?
+                    count -= 1
+                if count > 0:
+                    extra_parts.append(f"{str(r.emoji)} {count}")
             extra_text = " ".join(extra_parts) if extra_parts else ""
 
-            # Creator herausziehen
+            # Creator aus Embed-Description ziehen
             creator_mention = None
             creator_name = msg.author.display_name
             creator_avatar = msg.author.display_avatar.url
@@ -179,7 +182,7 @@ class HutThreadVote(commands.Cog):
 
             title = f"#{idx} by {creator_name}\n{'─'*14}"
 
-            # Beschreibung
+            # Beschreibung bauen
             description_text = ""
             if reaction_line:
                 description_text += f"{reaction_line}\n\n"
