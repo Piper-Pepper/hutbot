@@ -1,9 +1,8 @@
-# cogs/hutthreadvote.py
+# cogs/hutthreadvote_legacy.py
 import discord
 from discord.ext import commands
 from discord import app_commands
-from datetime import datetime, timezone
-import calendar, re
+import re
 
 BOT_ID = 1339242900906836090  # Poster-Bot für die Threads
 
@@ -20,16 +19,6 @@ TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 20", value="20"),
 ]
 
-current_year = datetime.utcnow().year
-YEAR_CHOICES = [
-    app_commands.Choice(name=str(current_year), value=str(current_year)),
-    app_commands.Choice(name=str(current_year - 1), value=str(current_year - 1)),
-]
-
-MONTH_CHOICES = [
-    app_commands.Choice(name=calendar.month_name[i], value=str(i)) for i in range(1, 13)
-]
-
 REACTION_CAPTIONS = {
     "<:01sthumb:1387086056498921614>": "Great!",
     "<:01smile_piper:1387083454575022213>": "LMFAO",
@@ -39,43 +28,36 @@ REACTION_CAPTIONS = {
 }
 
 
-class HutThreadVote(commands.Cog):
+class HutThreadVoteLegacy(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(
-        name="hut_threadvote",
-        description="Shows the top posts by reactions for a selected thread/month/year"
+        name="legacy_vote",
+        description="Shows top posts by reactions in the selected thread (all time)."
     )
     @app_commands.describe(
-        year="Select year",
-        month="Select month",
         thread="Select thread",
         topuser="Number of top posts to display",
         public="Whether the posts are public or ephemeral"
     )
     @app_commands.choices(
-        year=YEAR_CHOICES,
-        month=MONTH_CHOICES,
         thread=THREAD_CHOICES,
         topuser=TOPUSER_CHOICES
     )
     @app_commands.checks.cooldown(1, 5)
-    async def hut_threadvote(
+    async def legacy_vote(
         self,
         interaction: discord.Interaction,
-        year: app_commands.Choice[str],
-        month: app_commands.Choice[str],
         thread: app_commands.Choice[str],
         topuser: app_commands.Choice[str] = None,
         public: bool = False
     ):
         top_count = int(topuser.value) if topuser else 5
         ephemeral_flag = not public
-
         guild = interaction.guild
 
-        # Threads müssen per fetch_channel geladen werden
+        # Thread holen
         try:
             thread_obj = await guild.fetch_channel(int(thread.value))
         except Exception:
@@ -87,14 +69,10 @@ class HutThreadVote(commands.Cog):
 
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
-        # Zeitspanne
-        start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
-        last_day = calendar.monthrange(int(year.value), int(month.value))[1]
-        end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
-
+        # Alle Posts vom Bot im Thread sammeln
         matched_msgs = []
         try:
-            async for msg in thread_obj.history(after=start_dt, before=end_dt, limit=None):
+            async for msg in thread_obj.history(limit=None, oldest_first=True):
                 if msg.author.id != BOT_ID:
                     continue
                 matched_msgs.append(msg)
@@ -103,12 +81,12 @@ class HutThreadVote(commands.Cog):
 
         if not matched_msgs:
             await interaction.followup.send(
-                f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.",
+                f"No posts found in thread {thread_obj.name}.",
                 ephemeral=ephemeral_flag
             )
             return
 
-        # Sortierfunktion
+        # Sortieren nach Top-Reaktionen
         def sort_key(msg: discord.Message):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
             top5_sum = sum(r.count for r in sorted_reacts[:5])
@@ -119,10 +97,8 @@ class HutThreadVote(commands.Cog):
 
         # Intro-Embed
         intro_embed = discord.Embed(
-            title=f"🏆 Top {top_count} in Thread {thread_obj.name} "
-                  f"({calendar.month_name[int(month.value)]} {year.value})",
-            description=(f"This is the **Top {top_count}** in **{thread_obj.name}** "
-                         f"for {calendar.month_name[int(month.value)]} {year.value}."),
+            title=f"🏆 Top {top_count} in Thread {thread_obj.name} (All Time)",
+            description=f"This is the **Top {top_count}** posts in **{thread_obj.name}** (all time).",
             color=discord.Color.gold()
         )
         intro_embed.set_footer(
@@ -136,7 +112,7 @@ class HutThreadVote(commands.Cog):
         for idx, msg in enumerate(top_msgs, start=1):
             sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
 
-            # Top-Emojis aus Map
+            # Top-Emojis
             reaction_parts = []
             used_emojis = set()
             for emoji_key in REACTION_CAPTIONS:
@@ -148,25 +124,25 @@ class HutThreadVote(commands.Cog):
                     None
                 )
                 if r:
-                    count = r.count - 1  # Bot-Reaction abziehen
+                    count = r.count - 1
                     if count > 0:
                         used_emojis.add(r.emoji)
                         reaction_parts.append(f"{str(r.emoji)} {count}")
 
             reaction_line = " ".join(reaction_parts) if reaction_parts else ""
 
-            # Extra-Reactions
+            # Extra-Emojis
             extra_parts = []
             extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
             for r in extra_reacts:
                 count = r.count
-                if r.me:  # Bot selbst reagiert?
+                if r.me:
                     count -= 1
                 if count > 0:
                     extra_parts.append(f"{str(r.emoji)} {count}")
             extra_text = " ".join(extra_parts) if extra_parts else ""
 
-            # Creator aus Embed-Description ziehen
+            # Creator aus Embed
             creator_mention = None
             creator_name = msg.author.display_name
             creator_avatar = msg.author.display_avatar.url
@@ -182,7 +158,7 @@ class HutThreadVote(commands.Cog):
 
             title = f"#{idx} by {creator_name}\n{'─'*14}"
 
-            # Beschreibung bauen
+            # Beschreibung
             description_text = ""
             if reaction_line:
                 description_text += f"{reaction_line}\n\n"
@@ -190,7 +166,7 @@ class HutThreadVote(commands.Cog):
                 description_text += f"{extra_text}\n\n"
             description_text += f"[◀️ Jump / Vote 📈]({msg.jump_url})"
 
-            # Bildquelle
+            # Bild
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -218,14 +194,13 @@ class HutThreadVote(commands.Cog):
 
             await intro_msg.channel.send(embed=embed)
 
-        # Top1 announcement
+        # Top1 Announcement
         top1_msg = top_msgs[0]
         top1_url = top1_msg.jump_url
         await intro_msg.channel.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value}, "
-            f"the top post in **{thread_obj.name}** is [here]({top1_url}) 🎉"
+            f"The top post in **{thread_obj.name}** (all time) is [here]({top1_url}) 🎉"
         )
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(HutThreadVote(bot))
+    await bot.add_cog(HutThreadVoteLegacy(bot))
