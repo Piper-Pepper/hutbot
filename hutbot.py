@@ -60,7 +60,7 @@ async def main():
             "reset",
             "riddle",
             "hutvote",  # <- your vote cog
-            "poppy",
+            "hutthreadvote",
             "riddle_post"
         ]
 
