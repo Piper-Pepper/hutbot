@@ -327,8 +327,8 @@ class AspectRatioView(discord.ui.View):
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
         truncated_prompt = (self.prompt_text or "").replace("\n\n", "\n")
-        if len(truncated_prompt) > 500:
-            truncated_prompt = truncated_prompt[:500] + " [...]"
+        if len(truncated_prompt) > 600:
+            truncated_prompt = truncated_prompt[:600] + " [...]"
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
         default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
