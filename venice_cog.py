@@ -52,14 +52,6 @@ VARIANT_MAP = {
     ]
 }
 
-CUSTOM_REACTIONS = [
-    "<:01sthumb:1387086056498921614>",
-    "<:01smile_piper:1387083454575022213>",
-    "<:02No:1347536448831754383>",
-    "<:011:1346549711817146400>",
-    "<:011pump:1346549688836296787>",
-]
-
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
@@ -355,8 +347,15 @@ class AspectRatioView(discord.ui.View):
         tech_info = f"{short_model_name} | {width}x{height} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
+        # --- Hier neue Reaktionen ---
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
-        reactions = CUSTOM_REACTIONS
+        reactions = [
+            "1️⃣",
+            "2️⃣",
+            "3️⃣",
+            "<:011:1346549711817146400>",
+            "<:011pump:1346549688836296787>"
+        ]
         for emoji in reactions:
             try: await msg.add_reaction(emoji)
             except: pass
@@ -382,7 +381,6 @@ class PostGenerationView(discord.ui.View):
         self.hidden_suffix = hidden_suffix  # value actually used for generation (may be default)
         self.author = author
         self.message = message
-        # previous_inputs from VeniceModal.on_submit; may include 'hidden_suffix' == None (no explicit user value) or a string (could be "")
         self.previous_inputs = previous_inputs or {}
 
         reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
@@ -399,10 +397,10 @@ class PostGenerationView(discord.ui.View):
 
         if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
             submit_btn = discord.ui.Button(
-                label="Submit image to contest🏆",  # Text bleibt normal
+                label="Submit image to contest🏆",
                 style=discord.ButtonStyle.blurple,
                 row=1,
-                emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")  # Custom Emoji
+                emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")
             )
             submit_btn.callback = self.post_gallery_callback
             self.add_item(submit_btn)
@@ -475,7 +473,6 @@ class PostGenerationView(discord.ui.View):
                 variants = VARIANT_MAP.get(category_id, [])
 
                 for idx, v in enumerate(variants):
-                    # Rot statt grün für Reuse-Model Buttons
                     btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.danger)
                     btn.callback = self.make_model_callback(v, idx)
                     self.add_item(btn)
@@ -486,7 +483,6 @@ class PostGenerationView(discord.ui.View):
                     is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
                     category_id = inner_interaction.channel.category.id if inner_interaction.channel.category else None
                     variants = VARIANT_MAP.get(category_id, [])
-                    # Rolle-Check für NSFW/SFW
                     if variants:
                         if variant != variants[0] and not is_vip:
                             await inner_interaction.response.send_message(
@@ -538,7 +534,6 @@ class VeniceView(discord.ui.View):
             category_id = interaction.channel.category.id if interaction.channel.category else None
 
             variants = VARIANT_MAP.get(category_id, [])
-            # Rolle-Check für NSFW/SFW: nur erste Variante für alle, andere nur VIP
             if variants:
                 if variant != variants[0] and not is_vip:
                     await interaction.response.send_message(
