@@ -14,24 +14,22 @@ class StatusManager(commands.Cog):
 
     # 🌞 Status-Pools je Tageszeit (jetzt nur Text!)
     status_morning = [
-        "☕ with wholesome morning goons ☕",
-        "🕊️ to soft moans and birdsong",
-        "🌄 the sunrise over the Goon Hut",
-        "🌄 the sunrise over Goonsville",
-        "🌄 the Goon Morning rising...",
-        "⁉️ to something you will never guess",
-        "☕ her steamy goon-morning coffee",
-        "🚬 her goon-morning joint getting rolled up",
-        "🚬 her goon-morning cigarette smokin'",
-        "🐔 your morning-woody grow",
+        "☕ drinking with wholesome morning goons ☕",
+        "🕊️ listens to soft moans and birdsong",
+        "🌄 enjoys the sunrise over the Goon Hut",
+        "🌄 watches the sunrise over Goonsville",
+        "🌄 wishes a Goon Morning...",
+        "☕ drinking her steamy goon-morning coffee",
+        "🚬 smoking her goon-morning joint",
+        "🚬 smoking her goon-morning cigarette",
+        "🐔 looks at your morning-woody",
     ]
 
     status_day = [
-        "🏟️ the daily Goon Games",
-        "🌞 Hide & Seek with Goon-Mommies",
-        "🐸 with her 'lil green friend'",
+        "🏟️ playing  daily Goon Games",
+        "🌞 catching some Goon-Mommies",
+        "🐸 having fun with her dildo",
         "🔫 Piper’s law being enforced",
-        "🫳 to mysterious afternoon sounds...",
         "🌬️ High-Noon weed-smoking",
         "🎧 to some steamy PMV beats",
         "🦅 watching over horny degenerates like a hawk",
@@ -39,11 +37,11 @@ class StatusManager(commands.Cog):
 
     status_night = [
         "💦 with slippery thoughts in the dark",
-        "🔫 Russian Roulette with a Goon-Mommy",
-        "😺 with her secret midnight cat",
+        "🔫 plays Russian Roulette with a Goon-Mommy",
+        "😺 caressing her Cum-Kitty",
         "👀 your shameful late-night rituals",
         "📼 to forbidden late-night audio",
-        "♣️ Strip-Poker with the Hut crew",
+        "♣️ plays Strip-Poker with the Hut crew",
         "🌄 her good-night screen glow",
         "🌇 the sunset over the Goon Hut 🛖",
     ]
