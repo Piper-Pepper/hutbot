@@ -40,10 +40,10 @@ CFG_REFERENCE = {
 
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
-        {"label": "Lustify", "model": "lustify-sdxl"},
+        {"label": "Lustify🔞", "model": "lustify-sdxl"},
         {"label": "SD35", "model": "venice-sd35"},
         {"label": "Flux", "model": "flux-dev-uncensored"},
-        {"label": "Wai", "model": "wai-Illustrious"},
+        {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "HiDream", "model": "hidream"},
     ],
     SFW_CATEGORY_ID: [
