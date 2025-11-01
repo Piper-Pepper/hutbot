@@ -144,13 +144,12 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
 
-       
+
         # Add items
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
         self.add_item(self.steps_value)
-        self.add_item(self.hidden_suffix)
 
 
     async def on_submit(self, interaction: discord.Interaction):
