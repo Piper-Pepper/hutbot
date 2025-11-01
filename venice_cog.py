@@ -22,8 +22,8 @@ SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926
 SPECIAL_ROLE_ID = 1375147276413964408  # für High-Res Button
 
-DEFAULT_NEGATIVE_PROMPT = "lores, disfigured, bad anatomy, missing fingers, extra limbs, watermark"
-NSFW_PROMPT_SUFFIX = "child, underage, loli"
+DEFAULT_NEGATIVE_PROMPT = "lores, disfigured, bad anatomy, missing fingers, extra limbs, watermark, underage"
+NSFW_PROMPT_SUFFIX = " "
 SFW_PROMPT_SUFFIX = " "
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
