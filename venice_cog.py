@@ -22,7 +22,7 @@ SFW_CATEGORY_ID = 1416461717038170294
 VIP_ROLE_ID = 1377051179615522926
 SPECIAL_ROLE_ID = 1375147276413964408  # für High-Res Button
 
-DEFAULT_NEGATIVE_PROMPT = "lores, bad anatomy, missing fingers, extra limbs, watermark"
+DEFAULT_NEGATIVE_PROMPT = "lores, disfigured, bad anatomy, missing fingers, extra limbs, watermark"
 NSFW_PROMPT_SUFFIX = "child, underage, loli"
 SFW_PROMPT_SUFFIX = " "
 
@@ -41,13 +41,13 @@ CFG_REFERENCE = {
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
         {"label": "Lustify", "model": "lustify-sdxl"},
-        {"label": "Venice SD35", "model": "venice-sd35"},
+        {"label": "SD35", "model": "venice-sd35"},
         {"label": "FluxUnc", "model": "flux-dev-uncensored"},
         {"label": "Wai (Anime)", "model": "wai-Illustrious"},
         {"label": "HiDream", "model": "hidream"},
     ],
     SFW_CATEGORY_ID: [
-        {"label": "Venice SD35", "model": "venice-sd35"},
+        {"label": "SD35", "model": "venice-sd35"},
         {"label": "Flux", "model": "flux-dev"},
         {"label": "HiDream", "model": "hidream"},
     ]
