@@ -144,27 +144,7 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
 
-        # Hidden suffix – garantiert, dass nie ein leerer Wert an die API geht
-        prev_hidden = previous_inputs.get("hidden_suffix", None)
-
-        if prev_hidden and prev_hidden.strip():
-            # User hat wirklich etwas eingegeben
-            default_value = prev_hidden
-            placeholder_value = ""
-        else:
-            # Feld leer oder nur whitespace → Standard
-            default_value = ""
-            placeholder_value = hidden_suffix_default[:100] if hidden_suffix_default else ""
-
-        self.hidden_suffix = discord.ui.TextInput(
-            label="Hidden Suffix",
-            style=discord.TextStyle.paragraph,  # vorher: short
-            required=False,
-            placeholder=placeholder_value,
-            default=default_value,
-            max_length=800  # vorher: 500
-        )
-
+       
         # Add items
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
