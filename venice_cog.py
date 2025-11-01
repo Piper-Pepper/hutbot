@@ -43,7 +43,7 @@ VARIANT_MAP = {
         {"label": "Lustify", "model": "lustify-sdxl"},
         {"label": "SD35", "model": "venice-sd35"},
         {"label": "Flux", "model": "flux-dev-uncensored"},
-        {"label": "Wai (Anime)", "model": "wai-Illustrious"},
+        {"label": "Wai", "model": "wai-Illustrious"},
         {"label": "HiDream", "model": "hidream"},
     ],
     SFW_CATEGORY_ID: [
