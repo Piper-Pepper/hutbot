@@ -158,7 +158,7 @@ class VeniceModal(discord.ui.Modal):
 
         self.hidden_suffix = discord.ui.TextInput(
             label="Hidden Suffix",
-            style=discord.TextStyle.short,  # vorher: short
+            style=discord.TextStyle.paragraph,  # vorher: short
             required=False,
             placeholder=placeholder_value,
             default=default_value,
