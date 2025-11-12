@@ -30,12 +30,12 @@ pepper = "<a:01pepper_icon:1377636862847619213>"
 
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
-    "flux-dev-uncensored": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 30},
-    "venice-sd35": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 30},
-    "flux-dev": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 30},
-    "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
-    "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 25, "max_steps": 30},
+    "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 50},
+    "flux-dev-uncensored": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
+    "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
+    "flux-dev": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 30},
+    "hidream": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 50},
+    "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 20, "max_steps": 30},
 }
 
 VARIANT_MAP = {
