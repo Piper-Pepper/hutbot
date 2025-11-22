@@ -30,17 +30,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 synced_once = False
 
-
 # -----------------------------------------------------------
 # Bot Ready Event
 # -----------------------------------------------------------
 @bot.event
 async def on_ready():
     global synced_once
-
     print(f"✅ Bot connected as {bot.user}!")
 
-    # Sync only once after startup
     if not synced_once:
         try:
             if DEV_GUILD:
@@ -57,12 +54,10 @@ async def on_ready():
 
         synced_once = True
 
-
 # -----------------------------------------------------------
 # MAIN – load all extensions & start bot
 # -----------------------------------------------------------
 async def main():
-
     async with bot:
         extensions = [
             "pepper",
@@ -76,15 +71,19 @@ async def main():
             "gather",
             "reset",
             "riddle",
-            "hutvote",
-            "hutvote_new",
+            "hutvote_new",  # <- nur die neue Version laden
             "hutthreadvote",
             "riddle_post"
         ]
 
-        # Load extensions
         for ext in extensions:
             try:
+                # Unload alte Version falls schon geladen
+                if ext in bot.extensions:
+                    await bot.unload_extension(ext)
+                    print(f"♻️ Unloaded old extension: {ext}")
+
+                # Load neue Version
                 await bot.load_extension(ext)
                 print(f"✅ Loaded extension: {ext}")
             except Exception:
@@ -106,7 +105,6 @@ async def main():
         except Exception:
             print("❌ Error starting bot:")
             traceback.print_exc()
-
 
 # -----------------------------------------------------------
 # ENTRYPOINT
