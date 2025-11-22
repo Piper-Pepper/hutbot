@@ -5,31 +5,42 @@ from dotenv import load_dotenv
 import os
 import traceback
 
-# 🔐 Load environment variables
+# -----------------------------------------------------------
+# Load environment variables
+# -----------------------------------------------------------
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 
-# Optional: Dev guild for faster slash command sync
-DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # e.g., "123456789012345678"
 DEV_GUILD = discord.Object(id=int(DEV_GUILD_ID)) if DEV_GUILD_ID else None
 
+# -----------------------------------------------------------
+# Intents
+# -----------------------------------------------------------
 intents = discord.Intents.default()
-intents.messages = True
-intents.dm_messages = True
-intents.guilds = True
 intents.message_content = True
 intents.members = True
+intents.dm_messages = True
+intents.guilds = True
 
-# ⛓️ Create bot
+# -----------------------------------------------------------
+# Bot Setup
+# -----------------------------------------------------------
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 synced_once = False
 
+
+# -----------------------------------------------------------
+# Bot Ready Event
+# -----------------------------------------------------------
 @bot.event
 async def on_ready():
     global synced_once
+
     print(f"✅ Bot connected as {bot.user}!")
 
+    # Sync only once after startup
     if not synced_once:
         try:
             if DEV_GUILD:
@@ -40,13 +51,19 @@ async def on_ready():
                 synced = await tree.sync()
 
             print(f"✅ Synced {len(synced)} command(s).")
-            synced_once = True
-        except Exception as e:
-            print(f"❌ Failed to sync commands: {e}")
+        except Exception:
+            print("❌ Failed to sync commands:")
+            traceback.print_exc()
 
+        synced_once = True
+
+
+# -----------------------------------------------------------
+# MAIN – load all extensions & start bot
+# -----------------------------------------------------------
 async def main():
+
     async with bot:
-        # 📦 Load extensions
         extensions = [
             "pepper",
             "hutmember",
@@ -65,34 +82,40 @@ async def main():
             "riddle_post"
         ]
 
+        # Load extensions
         for ext in extensions:
             try:
                 await bot.load_extension(ext)
                 print(f"✅ Loaded extension: {ext}")
-            except Exception as e:
-                print(f"❌ Fehler beim Laden von {ext}: {e}")
+            except Exception:
+                print(f"❌ Fehler beim Laden von {ext}:")
                 traceback.print_exc()
 
-        # 🎂 Optional: persistent Birthday View
+        # Load persistent birthday view
         try:
             from birthday_cog import BirthdayButtonView
             bot.add_view(BirthdayButtonView(bot))
             print("🎂 Birthday view loaded.")
-        except Exception as e:
-            print(f"⚠️ Birthday view not loaded: {e}")
-
-        # 🚀 Start the bot
-        try:
-            await bot.start(TOKEN)
-        except Exception as e:
-            print(f"❌ Error starting bot: {e}")
+        except Exception:
+            print("⚠️ Birthday view not loaded:")
             traceback.print_exc()
 
+        # Start bot
+        try:
+            await bot.start(TOKEN)
+        except Exception:
+            print("❌ Error starting bot:")
+            traceback.print_exc()
+
+
+# -----------------------------------------------------------
+# ENTRYPOINT
+# -----------------------------------------------------------
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot manually stopped.")
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+    except Exception:
+        print("❌ Unexpected error:")
         traceback.print_exc()
