@@ -34,7 +34,7 @@ CFG_REFERENCE = {
     "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
     "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
     "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 20, "max_steps": 30},
-    "lustify-v7": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
+    "lustify-v7": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
 }
 
 VARIANT_MAP = {
