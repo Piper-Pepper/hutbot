@@ -31,19 +31,20 @@ pepper = "<a:01pepper_icon:1377636862847619213>"
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
-    "flux-dev-unc": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
     "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
     "flux-dev": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 30},
     "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
     "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 20, "max_steps": 30},
+    "lustify-v7": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 50},
 }
 
 VARIANT_MAP = {
     NSFW_CATEGORY_ID: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
         {"label": "SD35", "model": "venice-sd35"},
-        {"label": "Flux", "model": "flux-dev-unc"},
+        {"label": "Flux", "model": "flux-dev"},
         {"label": "Wai🔞", "model": "wai-Illustrious"},
+        {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
     ],
     SFW_CATEGORY_ID: [
