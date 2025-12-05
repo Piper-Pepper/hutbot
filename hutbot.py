@@ -73,6 +73,7 @@ async def main():
             "riddle",
             "hutvote_new",  # <- nur die neue Version laden
             "hutthreadvote",
+            "character_creator",
             "riddle_post"
         ]
 
