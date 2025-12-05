@@ -30,37 +30,37 @@ def build_negative_prompt(extra=""):
 class AgeModal(discord.ui.Modal, title="Enter Age"):
     age = discord.ui.TextInput(label="How old is the character?", required=True)
 
-    def __init__(self, parent):
+    def __init__(self, wizard):
         super().__init__()
-        self.parent = parent
+        self.wizard = wizard
 
     async def on_submit(self, interaction: discord.Interaction):
-        self.parent.data["age"] = str(self.age)
-        await self.parent.next_step(interaction)
+        self.wizard.data["age"] = str(self.age)
+        await self.wizard.next_step(interaction)
 
 
 class AppearanceModal(discord.ui.Modal, title="Appearance Details"):
     appearance = discord.ui.TextInput(label="Hair, skin, face, eyes etc.", style=discord.TextStyle.long, required=True)
 
-    def __init__(self, parent):
+    def __init__(self, wizard):
         super().__init__()
-        self.parent = parent
+        self.wizard = wizard
 
     async def on_submit(self, interaction: discord.Interaction):
-        self.parent.data["appearance"] = str(self.appearance)
-        await self.parent.next_step(interaction)
+        self.wizard.data["appearance"] = str(self.appearance)
+        await self.wizard.next_step(interaction)
 
 
 class StyleModal(discord.ui.Modal, title="Clothing / Style"):
     style = discord.ui.TextInput(label="Clothing, vibe, theme etc.", style=discord.TextStyle.long, required=True)
 
-    def __init__(self, parent):
+    def __init__(self, wizard):
         super().__init__()
-        self.parent = parent
+        self.wizard = wizard
 
     async def on_submit(self, interaction: discord.Interaction):
-        self.parent.data["style"] = str(self.style)
-        await self.parent.finish(interaction)
+        self.wizard.data["style"] = str(self.style)
+        await self.wizard.finish(interaction)
 
 
 # -----------------------------------------------------
@@ -68,8 +68,8 @@ class StyleModal(discord.ui.Modal, title="Clothing / Style"):
 # -----------------------------------------------------
 
 class BodyDropdown(discord.ui.Select):
-    def __init__(self, parent):
-        self.parent = parent
+    def __init__(self, wizard):
+        self.wizard = wizard
 
         options = [
             discord.SelectOption(label="Slim"),
@@ -82,14 +82,14 @@ class BodyDropdown(discord.ui.Select):
         super().__init__(placeholder="Choose body type...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        self.parent.data["body"] = self.values[0]
-        await self.parent.next_step(interaction)
+        self.wizard.data["body"] = self.values[0]
+        await self.wizard.next_step(interaction)
 
 
 class BodyDropdownView(discord.ui.View):
-    def __init__(self, parent):
+    def __init__(self, wizard):
         super().__init__()
-        self.add_item(BodyDropdown(parent))
+        self.add_item(BodyDropdown(wizard))
 
 
 # -----------------------------------------------------
@@ -97,24 +97,24 @@ class BodyDropdownView(discord.ui.View):
 # -----------------------------------------------------
 
 class GenderButtons(discord.ui.View):
-    def __init__(self, parent):
+    def __init__(self, wizard):
         super().__init__(timeout=None)
-        self.parent = parent
+        self.wizard = wizard
 
     @discord.ui.button(label="Male", style=discord.ButtonStyle.primary)
     async def male(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.parent.data["gender"] = "male"
-        await self.parent.next_step(interaction)
+        self.wizard.data["gender"] = "male"
+        await self.wizard.next_step(interaction)
 
     @discord.ui.button(label="Female", style=discord.ButtonStyle.primary)
     async def female(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.parent.data["gender"] = "female"
-        await self.parent.next_step(interaction)
+        self.wizard.data["gender"] = "female"
+        await self.wizard.next_step(interaction)
 
     @discord.ui.button(label="Other", style=discord.ButtonStyle.secondary)
     async def other(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.parent.data["gender"] = "other"
-        await self.parent.next_step(interaction)
+        self.wizard.data["gender"] = "other"
+        await self.wizard.next_step(interaction)
 
 
 # -----------------------------------------------------
@@ -137,9 +137,11 @@ class CharacterWizard:
     async def next_step(self, interaction: discord.Interaction):
         self.step += 1
 
+        # step == 1 after gender selected -> ask age
         if self.step == 1:
             await interaction.response.send_modal(AgeModal(self))
 
+        # step == 2 after age -> body dropdown
         elif self.step == 2:
             await interaction.response.send_message(
                 "Select body type:",
@@ -147,9 +149,11 @@ class CharacterWizard:
                 ephemeral=True
             )
 
+        # step == 3 after body -> appearance modal
         elif self.step == 3:
             await interaction.response.send_modal(AppearanceModal(self))
 
+        # step == 4 after appearance -> style modal
         elif self.step == 4:
             await interaction.response.send_modal(StyleModal(self))
 
