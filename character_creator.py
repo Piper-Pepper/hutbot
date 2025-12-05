@@ -2,208 +2,159 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+# ---------------- Helper Prompt Builder ----------------
+
 DEFAULT_NEGATIVE = "low quality, blurry, bad anatomy, extra limbs, distorted face"
 
-# -----------------------------------------------------
-# Helper functions
-# -----------------------------------------------------
-
 def build_positive_prompt(data: dict) -> str:
-    parts = [
-        f"{data.get('gender','')}",
-        f"{data.get('age','')} years old",
-        f"body: {data.get('body','')}",
-        f"appearance: {data.get('appearance','')}",
-        f"style: {data.get('style','')}"
-    ]
+    parts = []
+    parts.append(f"{data.get('gender', '')}")
+    parts.append(f"{data.get('age', '')} years old")
+    parts.append(f"body: {data.get('body', '')}")
+    parts.append(f"appearance: {data.get('appearance', '')}")
+    parts.append(f"style: {data.get('style', '')}")
+    # Remove empty tokens
     return ", ".join(p for p in parts if p.strip())
 
-def build_negative_prompt(data: dict) -> str:
+def build_negative_prompt(data: dict, user_neg: str = "") -> str:
     parts = [DEFAULT_NEGATIVE]
-    if "avoid" in data and data["avoid"].strip():
-        parts.append(data["avoid"])
+    if user_neg:
+        parts.append(user_neg)
+    # Include avoid traits
+    avoid = data.get("avoid", "").strip()
+    if avoid:
+        parts.append(f"avoid: {avoid}")
     return ", ".join(parts)
 
-# -----------------------------------------------------
-# Modals
-# -----------------------------------------------------
-
-class AgeModal(discord.ui.Modal, title="Character Age"):
-    age = discord.ui.TextInput(label="How old is your character?", style=discord.TextStyle.short, required=True)
-    def __init__(self, wizard):
-        super().__init__()
-        self.wizard = wizard
-    async def on_submit(self, interaction: discord.Interaction):
-        self.wizard.data["age"] = self.age.value.strip()
-        await self.wizard.next_step(interaction)
-
-class AppearanceModal(discord.ui.Modal, title="Appearance"):
-    appearance = discord.ui.TextInput(label="Hair, skin, face, eyes etc.", style=discord.TextStyle.paragraph, required=True)
-    def __init__(self, wizard):
-        super().__init__()
-        self.wizard = wizard
-    async def on_submit(self, interaction: discord.Interaction):
-        self.wizard.data["appearance"] = self.appearance.value.strip()
-        await self.wizard.next_step(interaction)
-
-class StyleModal(discord.ui.Modal, title="Clothing / Style"):
-    style = discord.ui.TextInput(label="Clothing, vibe, theme etc.", style=discord.TextStyle.paragraph, required=True)
-    def __init__(self, wizard):
-        super().__init__()
-        self.wizard = wizard
-    async def on_submit(self, interaction: discord.Interaction):
-        self.wizard.data["style"] = self.style.value.strip()
-        await self.wizard.next_step(interaction)
-
-class AvoidModal(discord.ui.Modal, title="Negative Traits"):
-    avoid = discord.ui.TextInput(label="What should the character NOT have? (tattoos, scars, etc.)", style=discord.TextStyle.paragraph, required=False)
-    def __init__(self, wizard):
-        super().__init__()
-        self.wizard = wizard
-    async def on_submit(self, interaction: discord.Interaction):
-        self.wizard.data["avoid"] = self.avoid.value.strip()
-        await self.wizard.next_step(interaction)
-
-# -----------------------------------------------------
-# Body Dropdown
-# -----------------------------------------------------
-
-class BodyDropdown(discord.ui.Select):
-    def __init__(self, wizard):
-        self.wizard = wizard
-        options = [
-            discord.SelectOption(label="Slim"),
-            discord.SelectOption(label="Athletic"),
-            discord.SelectOption(label="Curvy"),
-            discord.SelectOption(label="Bulky"),
-            discord.SelectOption(label="Average")
-        ]
-        super().__init__(placeholder="Choose body type...", options=options)
-    async def callback(self, interaction: discord.Interaction):
-        self.wizard.data["body"] = self.values[0]
-        await self.wizard.next_step(interaction)
-
-class BodyDropdownView(discord.ui.View):
-    def __init__(self, wizard):
-        super().__init__()
-        self.add_item(BodyDropdown(wizard))
-
-# -----------------------------------------------------
-# Gender Buttons
-# -----------------------------------------------------
-
-class GenderButtons(discord.ui.View):
-    def __init__(self, wizard):
-        super().__init__(timeout=None)
-        self.wizard = wizard
-
-    @discord.ui.button(label="Male", style=discord.ButtonStyle.primary)
-    async def male(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.wizard.data["gender"] = "male"
-        await self.wizard.next_step(interaction)
-
-    @discord.ui.button(label="Female", style=discord.ButtonStyle.primary)
-    async def female(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.wizard.data["gender"] = "female"
-        await self.wizard.next_step(interaction)
-
-    @discord.ui.button(label="Other", style=discord.ButtonStyle.secondary)
-    async def other(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.wizard.data["gender"] = "other"
-        await self.wizard.next_step(interaction)
-
-# -----------------------------------------------------
-# Final confirmation buttons
-# -----------------------------------------------------
-
-class ConfirmView(discord.ui.View):
-    def __init__(self, wizard):
-        super().__init__()
-        self.wizard = wizard
-
-    @discord.ui.button(label="✅ Yes, submit", style=discord.ButtonStyle.success)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Here you would send to your API, e.g. venice_generate(...)
-        positive = build_positive_prompt(self.wizard.data)
-        negative = build_negative_prompt(self.wizard.data)
-        await interaction.response.send_message(
-            f"✅ **Submitted!**\n\nPositive Prompt:\n```{positive}```\nNegative Prompt:\n```{negative}```",
-            ephemeral=True
-        )
-        self.wizard.finish_session()
-
-    @discord.ui.button(label="🔄 Restart", style=discord.ButtonStyle.red)
-    async def restart(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.wizard.step = 0
-        self.wizard.data = {}
-        await self.wizard.start(interaction)
-
-# -----------------------------------------------------
-# Wizard Controller
-# -----------------------------------------------------
-
-class CharacterWizard:
-    def __init__(self, user_id, bot, active_sessions):
-        self.user_id = user_id
-        self.bot = bot
-        self.data = {}
-        self.step = 0
-        self.active_sessions = active_sessions
-
-    async def start(self, interaction: discord.Interaction):
-        self.active_sessions[self.user_id] = self
-        await interaction.response.send_message(
-            "Let's create your character! Step 1: Select Gender",
-            view=GenderButtons(self),
-            ephemeral=True
-        )
-
-    async def next_step(self, interaction: discord.Interaction):
-        self.step += 1
-
-        if self.step == 1:
-            await interaction.response.send_modal(AgeModal(self))
-        elif self.step == 2:
-            await interaction.response.send_message("Select body type:", view=BodyDropdownView(self), ephemeral=True)
-        elif self.step == 3:
-            await interaction.response.send_modal(AppearanceModal(self))
-        elif self.step == 4:
-            await interaction.response.send_modal(StyleModal(self))
-        elif self.step == 5:
-            await interaction.response.send_modal(AvoidModal(self))
-        elif self.step == 6:
-            # Show final summary + confirm view
-            positive = build_positive_prompt(self.data)
-            negative = build_negative_prompt(self.data)
-            await interaction.response.send_message(
-                f"✨ **Character Summary**\n\n"
-                f"**Positive Prompt:**\n```{positive}```\n"
-                f"**Negative Prompt:**\n```{negative}```\n\n"
-                f"Is this okay?",
-                view=ConfirmView(self),
-                ephemeral=True
-            )
-
-    def finish_session(self):
-        # remove from active sessions
-        if self.user_id in self.active_sessions:
-            del self.active_sessions[self.user_id]
-
-# -----------------------------------------------------
-# Cog
-# -----------------------------------------------------
+# ---------------- Character Creator Cog ----------------
 
 class CharacterCreator(commands.Cog):
-    """6-Step Character Wizard with final confirmation"""
+    """6-Step Character Wizard for AI Image Bots"""
+    CHANNEL_ID = 1446497103391100990  # only in this channel
+
     def __init__(self, bot):
         self.bot = bot
-        self.active_sessions = {}  # user_id -> wizard
+        self.active_sessions = {}  # user_id -> data
+        self.user_step = {}        # user_id -> step index
+        self.steps = [
+            ("gender", "What's the **gender** of your character? (male/female/other)"),
+            ("age", "How **old** is the character?"),
+            ("body", "Describe **body type** (athletic, slim, curvy...)"),
+            ("appearance", "Describe **hair, skin, face, eyes** etc."),
+            ("style", "Describe **clothing / vibe / style**"),
+            ("avoid", "Anything the character should **not have**? (tattoos, scars...)")
+        ]
 
-    @app_commands.command(name="createcharacter", description="Start character creation wizard")
+    # ---------------- Slash Command ----------------
+    @app_commands.command(name="createcharacter", description="Start the 6-step character creation wizard")
     async def createcharacter(self, interaction: discord.Interaction):
-        wizard = CharacterWizard(interaction.user.id, self.bot, self.active_sessions)
-        await wizard.start(interaction)
+        if interaction.channel.id != self.CHANNEL_ID:
+            await interaction.response.send_message("❌ You can only use this command in the designated channel.", ephemeral=True)
+            return
 
+        user_id = interaction.user.id
+        self.active_sessions[user_id] = {}
+        self.user_step[user_id] = 0
 
+        first_question = self.steps[0][1]
+        await interaction.response.send_message(
+            f"🧪 Let's create your character!\n\n{first_question}",
+            ephemeral=True
+        )
+
+    # ---------------- Message Listener ----------------
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Ignore bots, DMs, wrong channel
+        if message.author.bot or not isinstance(message.channel, discord.abc.GuildChannel):
+            return
+        if message.channel.id != self.CHANNEL_ID:
+            return
+
+        user_id = message.author.id
+        if user_id not in self.active_sessions:
+            return
+
+        step_index = self.user_step.get(user_id, 0)
+        if step_index >= len(self.steps):
+            return
+
+        key, question = self.steps[step_index]
+        self.active_sessions[user_id][key] = message.content.strip()
+
+        step_index += 1
+        self.user_step[user_id] = step_index
+
+        if step_index >= len(self.steps):
+            data = self.active_sessions[user_id]
+            positive = build_positive_prompt(data)
+            negative = build_negative_prompt(data)
+
+            # Final confirmation embed
+            embed = discord.Embed(title="✅ Character Overview", color=discord.Color.green())
+            embed.add_field(name="Positive Prompt", value=f"```{positive}```", inline=False)
+            embed.add_field(name="Negative Prompt", value=f"```{negative}```", inline=False)
+            embed.set_footer(text="Do you want to submit or restart?")
+
+            # Buttons
+            view = ConfirmationView(self, message.author, data)
+            await message.reply(embed=embed, view=view)
+
+            # cleanup active session for now
+            del self.active_sessions[user_id]
+            del self.user_step[user_id]
+            return
+
+        # ask next question
+        next_question = self.steps[step_index][1]
+        await message.reply(next_question)
+
+# ---------------- Confirmation View ----------------
+
+class ConfirmationView(discord.ui.View):
+    def __init__(self, wizard, user, data):
+        super().__init__(timeout=None)
+        self.wizard = wizard
+        self.user = user
+        self.data = data
+
+        submit_btn = discord.ui.Button(label="Submit ✅", style=discord.ButtonStyle.success)
+        restart_btn = discord.ui.Button(label="Restart 🔄", style=discord.ButtonStyle.red)
+
+        submit_btn.callback = self.submit_callback
+        restart_btn.callback = self.restart_callback
+
+        self.add_item(submit_btn)
+        self.add_item(restart_btn)
+
+    async def submit_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ This is not your character session.", ephemeral=True)
+            return
+
+        positive = build_positive_prompt(self.data)
+        negative = build_negative_prompt(self.data)
+
+        # Call your AI API here
+        # image_bytes = await venice_generate(...)
+
+        await interaction.response.send_message(
+            f"🎨 Character submitted!\n\n**Positive Prompt:**\n```{positive}```\n**Negative Prompt:**\n```{negative}```\n(Insert API call here.)",
+            ephemeral=True
+        )
+
+    async def restart_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ This is not your character session.", ephemeral=True)
+            return
+
+        # start a new session
+        self.wizard.active_sessions[interaction.user.id] = {}
+        self.wizard.user_step[interaction.user.id] = 0
+
+        first_question = self.wizard.steps[0][1]
+        await interaction.response.send_message(f"🔄 Restarting character creation...\n\n{first_question}", ephemeral=True)
+
+# ---------------- Setup ----------------
 async def setup(bot):
     await bot.add_cog(CharacterCreator(bot))
