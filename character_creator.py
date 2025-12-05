@@ -2,141 +2,184 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-
-# -----------------------------------------------------
-# Helper prompt builder (positive + negative)
-# -----------------------------------------------------
-
 DEFAULT_NEGATIVE = "low quality, blurry, bad anatomy, extra limbs, distorted face"
 
+
+# -----------------------------------------------------
+# Helper functions
+# -----------------------------------------------------
+
 def build_positive_prompt(data: dict) -> str:
-    parts = []
-
-    parts.append(f"{data.get('gender', '')}")
-    parts.append(f"{data.get('age', '')} years old")
-    parts.append(f"body: {data.get('body', '')}")
-    parts.append(f"appearance: {data.get('appearance', '')}")
-    parts.append(f"style: {data.get('style', '')}")
-
-    # Remove empty tokens + join
-    return ", ".join(p for p in parts if p.strip())
+    return (
+        f"{data['gender']}, {data['age']} years old, "
+        f"body: {data['body']}, appearance: {data['appearance']}, "
+        f"style: {data['style']}"
+    )
 
 
-def build_negative_prompt(user_neg: str = "") -> str:
-    parts = [DEFAULT_NEGATIVE]
-
-    if user_neg:
-        parts.append(user_neg)
-
-    return ", ".join(parts)
+def build_negative_prompt(extra=""):
+    if extra:
+        return f"{DEFAULT_NEGATIVE}, {extra}"
+    return DEFAULT_NEGATIVE
 
 
 # -----------------------------------------------------
-# Character Creator Cog
+# Modal Inputs
 # -----------------------------------------------------
 
-class CharacterCreator(commands.Cog):
-    """5-Step Character Wizard for AI Image Bots"""
+class AgeModal(discord.ui.Modal, title="Enter Age"):
+    age = discord.ui.TextInput(label="How old is the character?", required=True)
 
-    def __init__(self, bot):
-        self.bot = bot
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
 
-        # user_id -> dict with data
-        self.active_sessions = {}
-        # user_id -> current step index
-        self.user_step = {}
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent.data["age"] = str(self.age)
+        await self.parent.next_step(interaction)
 
-        # Steps definition
-        self.steps = [
-            ("gender", "What's the **gender** of your character? (male / female / other)"),
-            ("age", "How **old** is the character?"),
-            ("body", "Describe the **body type** (athletic, slim, curvy, bulky...)"),
-            ("appearance", "Describe **hair, skin, face, eyes** etc."),
-            ("style", "What is the **clothing / vibe / style**?")
+
+class AppearanceModal(discord.ui.Modal, title="Appearance Details"):
+    appearance = discord.ui.TextInput(label="Hair, skin, face, eyes etc.", style=discord.TextStyle.long, required=True)
+
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent.data["appearance"] = str(self.appearance)
+        await self.parent.next_step(interaction)
+
+
+class StyleModal(discord.ui.Modal, title="Clothing / Style"):
+    style = discord.ui.TextInput(label="Clothing, vibe, theme etc.", style=discord.TextStyle.long, required=True)
+
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent.data["style"] = str(self.style)
+        await self.parent.finish(interaction)
+
+
+# -----------------------------------------------------
+# Dropdown for body type
+# -----------------------------------------------------
+
+class BodyDropdown(discord.ui.Select):
+    def __init__(self, parent):
+        self.parent = parent
+
+        options = [
+            discord.SelectOption(label="Slim"),
+            discord.SelectOption(label="Athletic"),
+            discord.SelectOption(label="Curvy"),
+            discord.SelectOption(label="Bulky"),
+            discord.SelectOption(label="Average"),
         ]
 
-    # -----------------------------------------------------
-    # Slash command: /createcharacter
-    # -----------------------------------------------------
+        super().__init__(placeholder="Choose body type...", options=options)
 
-    @app_commands.command(name="createcharacter", description="Start the 5-step character creation wizard")
-    async def createcharacter(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
+    async def callback(self, interaction: discord.Interaction):
+        self.parent.data["body"] = self.values[0]
+        await self.parent.next_step(interaction)
 
-        self.active_sessions[user_id] = {}
-        self.user_step[user_id] = 0
 
-        first_step = self.steps[0][1]
+class BodyDropdownView(discord.ui.View):
+    def __init__(self, parent):
+        super().__init__()
+        self.add_item(BodyDropdown(parent))
 
+
+# -----------------------------------------------------
+# Gender Buttons
+# -----------------------------------------------------
+
+class GenderButtons(discord.ui.View):
+    def __init__(self, parent):
+        super().__init__(timeout=None)
+        self.parent = parent
+
+    @discord.ui.button(label="Male", style=discord.ButtonStyle.primary)
+    async def male(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.parent.data["gender"] = "male"
+        await self.parent.next_step(interaction)
+
+    @discord.ui.button(label="Female", style=discord.ButtonStyle.primary)
+    async def female(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.parent.data["gender"] = "female"
+        await self.parent.next_step(interaction)
+
+    @discord.ui.button(label="Other", style=discord.ButtonStyle.secondary)
+    async def other(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.parent.data["gender"] = "other"
+        await self.parent.next_step(interaction)
+
+
+# -----------------------------------------------------
+# Wizard Controller
+# -----------------------------------------------------
+
+class CharacterWizard:
+    def __init__(self, user_id):
+        self.user_id = user_id
+        self.data = {}
+        self.step = 0
+
+    async def start(self, interaction: discord.Interaction):
         await interaction.response.send_message(
-            f"Alright, let's create a character! 🧪\n\n{first_step}",
+            "Let's create your character! Step 1: Select Gender",
+            view=GenderButtons(self),
             ephemeral=True
         )
 
-    # -----------------------------------------------------
-    # Message listener for the steps
-    # -----------------------------------------------------
+    async def next_step(self, interaction: discord.Interaction):
+        self.step += 1
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        # Ignore bot messages & DMs
-        if message.author.bot or not isinstance(message.channel, discord.abc.GuildChannel):
-            return
+        if self.step == 1:
+            await interaction.response.send_modal(AgeModal(self))
 
-        user_id = message.author.id
-
-        # Not in a session → ignore
-        if user_id not in self.active_sessions:
-            return
-
-        step_index = self.user_step.get(user_id, 0)
-
-        # Safety check
-        if step_index >= len(self.steps):
-            return
-
-        key, question = self.steps[step_index]
-
-        # Save the user's answer
-        self.active_sessions[user_id][key] = message.content.strip()
-
-        # Move to next step
-        step_index += 1
-        self.user_step[user_id] = step_index
-
-        # If wizard is finished
-        if step_index >= len(self.steps):
-            data = self.active_sessions[user_id]
-
-            # Build prompts
-            positive = build_positive_prompt(data)
-            negative = build_negative_prompt()
-
-            # Cleanup session
-            del self.active_sessions[user_id]
-            del self.user_step[user_id]
-
-            # Here you insert your real API call
-            # ---------------------------------------------------
-            # image_bytes = await venice_generate( ... )
-            # ---------------------------------------------------
-
-            await message.reply(
-                f"✨ **Character complete!**\n\n"
-                f"**Positive Prompt:**\n```{positive}```\n"
-                f"**Negative Prompt:**\n```{negative}```\n"
-                f"(Insert API call here.)"
+        elif self.step == 2:
+            await interaction.response.send_message(
+                "Select body type:",
+                view=BodyDropdownView(self),
+                ephemeral=True
             )
-            return
 
-        # Otherwise ask the next question
-        next_question = self.steps[step_index][1]
-        await message.reply(next_question)
+        elif self.step == 3:
+            await interaction.response.send_modal(AppearanceModal(self))
+
+        elif self.step == 4:
+            await interaction.response.send_modal(StyleModal(self))
+
+    async def finish(self, interaction: discord.Interaction):
+        positive = build_positive_prompt(self.data)
+        negative = build_negative_prompt()
+
+        await interaction.response.send_message(
+            f"✨ **Character Created!**\n\n"
+            f"**Positive Prompt:**\n```{positive}```\n"
+            f"**Negative Prompt:**\n```{negative}```",
+            ephemeral=True
+        )
 
 
 # -----------------------------------------------------
-# Setup
+# Cog
 # -----------------------------------------------------
+
+class CharacterCreator(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.active = {}  # user_id → CharacterWizard
+
+    @app_commands.command(name="createcharacter", description="Start character creation wizard")
+    async def createcharacter(self, interaction: discord.Interaction):
+        wizard = CharacterWizard(interaction.user.id)
+        self.active[interaction.user.id] = wizard
+        await wizard.start(interaction)
+
 
 async def setup(bot):
     await bot.add_cog(CharacterCreator(bot))
