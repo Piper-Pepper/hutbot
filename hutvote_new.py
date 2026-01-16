@@ -149,17 +149,28 @@ class HutVote(commands.Cog):
 
             return score, breakdown, zeroed
 
-        # SORT
-        top_msgs = sorted(
+        # SORT TOP-MESSAGES
+        top_msgs_all = sorted(
             matched_msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
-        )[:top_count]
+        )
+
+        # TOP 3 Eindeutige User auswählen
+        top_msgs_unique = []
+        seen_users = set()
+        for msg in top_msgs_all:
+            creator = msg.mentions[0] if msg.mentions else msg.author
+            if creator.id not in seen_users:
+                top_msgs_unique.append(msg)
+                seen_users.add(creator.id)
+            if len(top_msgs_unique) >= 3:
+                break
 
         # TOP 3 NAMES für Intro mit Medaillen
         medals = ["🥇", "🥈", "🥉"]
         top_names_text = ""
-        for idx, m in enumerate(top_msgs[:3]):
+        for idx, m in enumerate(top_msgs_unique):
             creator = m.mentions[0] if m.mentions else m.author
             top_names_text += f"{medals[idx]} {creator.display_name}\n"
 
@@ -184,7 +195,7 @@ class HutVote(commands.Cog):
         intro_msg = await interaction.followup.send(embed=intro_embed)
 
         # OUTPUT POST-EMBEDS
-        for idx, msg in enumerate(top_msgs, start=1):
+        for idx, msg in enumerate(top_msgs_all[:top_count], start=1):
             score, breakdown, zeroed = calc_ai_points(msg)
             creator = msg.mentions[0] if msg.mentions else msg.author
 
@@ -233,7 +244,7 @@ class HutVote(commands.Cog):
 
         # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
         final_lines = []
-        for idx, m in enumerate(top_msgs[:3]):
+        for idx, m in enumerate(top_msgs_unique):
             creator = m.mentions[0] if m.mentions else m.author
             score, _, _ = calc_ai_points(m)
             final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
