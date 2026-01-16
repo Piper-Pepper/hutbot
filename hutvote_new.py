@@ -16,6 +16,9 @@ SCAN_CHANNEL_IDS = [
     1416468498305126522,
 ]
 
+# Custom Emoji IDs
+CUSTOM_5_EMOJI_ID = 1346549711817146400  # 5-Punkte Emoji
+
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
     app_commands.Choice(name="Top 10", value="10"),
@@ -33,14 +36,12 @@ MONTH_CHOICES = [
     for i in range(1, 13)
 ]
 
-# -------------------------------------------------------------
-# EMOJI POINT SYSTEM
-# -------------------------------------------------------------
+# Emoji Punktesystem
 EMOJI_POINTS = {
     "1️⃣": 1,
     "2️⃣": 2,
     "3️⃣": 3,
-    1346549711817146400: 5,  # custom emoji ID
+    CUSTOM_5_EMOJI_ID: 5,
 }
 
 
@@ -51,13 +52,10 @@ def normalize_emoji(r):
 
 
 class HutVote(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(
-        name="ai_vote",
-        description="Shows AI image ranking by reactions"
-    )
+    @app_commands.command(name="ai_vote", description="Shows AI image ranking by reactions")
     @app_commands.describe(
         year="Select year",
         month="Select month",
@@ -69,7 +67,6 @@ class HutVote(commands.Cog):
         month=MONTH_CHOICES,
         topuser=TOPUSER_CHOICES
     )
-    @app_commands.checks.cooldown(1, 5)
     async def ai_vote(
         self,
         interaction: discord.Interaction,
@@ -79,9 +76,7 @@ class HutVote(commands.Cog):
         public: bool = False
     ):
 
-        # -------------------------------------------------------------
         # ROLE CHECK
-        # -------------------------------------------------------------
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             return await interaction.response.send_message(
                 "❌ You don't have permission.",
@@ -92,50 +87,26 @@ class HutVote(commands.Cog):
         ephemeral_flag = not public
         guild = interaction.guild
 
-        await interaction.response.defer(
-            thinking=True,
-            ephemeral=ephemeral_flag
-        )
+        await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
-        # -------------------------------------------------------------
         # DATE RANGE
-        # -------------------------------------------------------------
         year_v = int(year.value)
         month_v = int(month.value)
-
         start_dt = datetime(year_v, month_v, 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(year_v, month_v)[1]
-        end_dt = datetime(
-            year_v,
-            month_v,
-            last_day,
-            23,
-            59,
-            59,
-            tzinfo=timezone.utc
-        )
+        end_dt = datetime(year_v, month_v, last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-        # -------------------------------------------------------------
         # SCAN CHANNELS
-        # -------------------------------------------------------------
         matched_msgs = []
-
         for channel_id in SCAN_CHANNEL_IDS:
             channel = guild.get_channel(channel_id)
-
             if not isinstance(channel, discord.TextChannel):
                 continue
-
             perms = channel.permissions_for(guild.me)
             if not perms.view_channel or not perms.read_message_history:
                 continue
-
             try:
-                async for msg in channel.history(
-                    after=start_dt,
-                    before=end_dt,
-                    limit=None
-                ):
+                async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     if msg.author.id == BOT_ID:
                         matched_msgs.append(msg)
             except Exception:
@@ -147,50 +118,51 @@ class HutVote(commands.Cog):
                 ephemeral=ephemeral_flag
             )
 
-        # -------------------------------------------------------------
         # SCORING + BREAKDOWN
-        # -------------------------------------------------------------
         def calc_ai_points(msg: discord.Message):
             breakdown = {}
             score = 0
+            various_score = 0
+            various_count = 0
 
             for r in msg.reactions:
                 key = normalize_emoji(r)
-
-                if key not in EMOJI_POINTS:
-                    continue
 
                 extra_votes = max(r.count - 1, 0)
                 if extra_votes == 0:
                     continue
 
-                points = extra_votes * EMOJI_POINTS[key]
-                score += points
-
-                breakdown[key] = {
-                    "votes": extra_votes,
-                    "points": points
-                }
+                # Punktesystem
+                if key in EMOJI_POINTS:
+                    points = extra_votes * EMOJI_POINTS[key]
+                    breakdown[key] = {"votes": extra_votes, "points": points}
+                    score += points
+                else:
+                    # alle anderen emojis = 1 Punkt pro extra vote
+                    various_score += extra_votes
+                    various_count += extra_votes
 
             zeroed = False
+            # All four reaction types → score 0
             if len(breakdown) == 4:
                 score = 0
                 zeroed = True
 
+            # Füge "Various" hinzu, falls vorhanden
+            if various_count > 0:
+                breakdown["Various"] = {"votes": various_count, "points": various_score}
+                score += various_score
+
             return score, breakdown, zeroed
 
-        # -------------------------------------------------------------
         # SORT
-        # -------------------------------------------------------------
         top_msgs = sorted(
             matched_msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
         )[:top_count]
 
-        # -------------------------------------------------------------
         # INTRO EMBED
-        # -------------------------------------------------------------
         intro_embed = discord.Embed(
             title=f"🤖 AI Top {top_count} — {calendar.month_name[month_v]} {year_v}",
             description=(
@@ -198,55 +170,46 @@ class HutVote(commands.Cog):
                 "1️⃣ = 1 point\n"
                 "2️⃣ = 2 points\n"
                 "3️⃣ = 3 points\n"
-                "Custom Emoji = 5 points\n\n"
+                "Custom Emoji = 5 points\n"
+                "All other emojis = 1 point each\n"
                 "Bot reaction is ignored\n"
                 "All four emojis present → 0 points"
             ),
             color=discord.Color.blurple()
         )
-
         intro_embed.set_footer(
             text=f"{guild.name} AI Rankings",
             icon_url=guild.icon.url if guild.icon else None
         )
-
         intro_msg = await interaction.followup.send(embed=intro_embed)
 
-        # -------------------------------------------------------------
         # OUTPUT
-        # -------------------------------------------------------------
         for idx, msg in enumerate(top_msgs, start=1):
             score, breakdown, zeroed = calc_ai_points(msg)
             creator = msg.mentions[0] if msg.mentions else msg.author
 
             lines = []
-
             for key, data in breakdown.items():
-                if isinstance(key, str):
+                if key == "Various":
+                    emoji_disp = "🔀 Various"
+                elif isinstance(key, str):
                     emoji_disp = key
                 else:
-                    emoji = guild.get_emoji(key)
-                    emoji_disp = f"<:{emoji.name}:{emoji.id}>" if emoji else "<?>"
+                    emoji_obj = guild.get_emoji(key)
+                    emoji_disp = str(emoji_obj) if emoji_obj else "<?>"
 
-                lines.append(
-                    f"{emoji_disp} × {data['votes']} → {data['points']} pts"
-                )
-
-            if not lines:
-                lines.append("No extra reactions")
+                lines.append(f"{emoji_disp} × {data['votes']} → {data['points']} pts")
 
             if zeroed:
                 lines.append("⚠️ All four emojis present → score reset to 0")
+            if not lines:
+                lines.append("No extra reactions")
 
             embed = discord.Embed(
                 title=f"#{idx} — {creator.display_name} — {score} pts",
-                description=(
-                    f"[Jump to Post]({msg.jump_url})\n\n"
-                    "**Breakdown:**\n" + "\n".join(lines)
-                ),
+                description=f"[Jump to Post]({msg.jump_url})\n\n**Breakdown:**\n" + "\n".join(lines),
                 color=discord.Color.teal()
             )
-
             embed.set_thumbnail(url=creator.display_avatar.url)
 
             img_url = None
@@ -260,24 +223,14 @@ class HutVote(commands.Cog):
                     if e.thumbnail:
                         img_url = e.thumbnail.url
                         break
-
             if img_url:
                 embed.set_image(url=img_url)
 
             await intro_msg.channel.send(embed=embed)
 
-        # -------------------------------------------------------------
         # WINNER
-        # -------------------------------------------------------------
-        top_creator = (
-            top_msgs[0].mentions[0]
-            if top_msgs[0].mentions
-            else top_msgs[0].author
-        )
-
-        await intro_msg.channel.send(
-            f"🏅 **{top_creator.mention}** achieved the highest AI score!"
-        )
+        top_creator = top_msgs[0].mentions[0] if top_msgs[0].mentions else top_msgs[0].author
+        await intro_msg.channel.send(f"🏅 **{top_creator.mention}** achieved the highest AI score!")
 
 
 async def setup(bot: commands.Bot):
