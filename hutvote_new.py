@@ -179,7 +179,13 @@ class HutVote(commands.Cog):
         emoji_obj = guild.get_emoji(STARBOARD_IGNORE_ID)
         starboard_emoji = str(emoji_obj) if emoji_obj else f"<:{STARBOARD_IGNORE_ID}>"
 
+        # =====================
         # INTRO EMBED
+        # =====================
+        now = datetime.utcnow()
+        formatted_date = now.strftime("%d %b %Y")  # z.B. 16 Jan 2026
+        intro_logo_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1461800735506169857/hut_logo_new.gif"
+
         intro_embed = discord.Embed(
             title=f"🤖 AI Top {top_count} — {calendar.month_name[month_v]} {year_v}",
             description=(
@@ -189,13 +195,13 @@ class HutVote(commands.Cog):
             ),
             color=discord.Color.blurple()
         )
-        intro_embed.set_footer(
-            text=f"{guild.name} AI Rankings",
-            icon_url=guild.icon.url if guild.icon else None
-        )
+        intro_embed.set_thumbnail(url=intro_logo_url)
+        intro_embed.set_footer(text=f"(as of {formatted_date}) | {guild.name} AI Rankings")
         await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral_flag)
 
+        # =====================
         # OUTPUT POST-EMBEDS
+        # =====================
         for idx, msg in enumerate(top_msgs_all[:top_count], start=1):
             score, breakdown, _ = calc_ai_points(msg)
             creator = msg.mentions[0] if msg.mentions else msg.author
@@ -240,26 +246,26 @@ class HutVote(commands.Cog):
 
             await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
 
-        
+        # =====================
         # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
+        # =====================
         final_lines = []
         for idx, m in enumerate(top_msgs_unique):
             creator = m.mentions[0] if m.mentions else m.author
             score, _, _ = calc_ai_points(m)
             final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
 
-        # Mit Monat und Jahr im Titel
-        logo_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1461800828745552067/hut_logo_fire.gif"
+        final_logo_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1461800828745552067/hut_logo_fire.gif"
 
         await interaction.followup.send(
             embed=discord.Embed(
                 title=f"🏁 Top 3 AI Posts — {calendar.month_name[month_v]} {year_v}",
                 description="\n".join(final_lines),
                 color=discord.Color.gold()
-            ).set_thumbnail(url=logo_url),
+            ).set_thumbnail(url=final_logo_url)
+            .set_footer(text=f"(as of {formatted_date})"),
             ephemeral=ephemeral_flag
         )
-
 
 # =====================
 # SETUP COG
