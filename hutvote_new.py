@@ -249,15 +249,17 @@ class HutVote(commands.Cog):
             final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
 
         # Mit Monat und Jahr im Titel
-        pepper_icon_url = "https://cdn.discordapp.com/emojis/1377636862847619213.png?size=256"
+        logo_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1461800828745552067/hut_logo_fire.gif"
+
         await interaction.followup.send(
             embed=discord.Embed(
                 title=f"🏁 Top 3 AI Posts — {calendar.month_name[month_v]} {year_v}",
                 description="\n".join(final_lines),
                 color=discord.Color.gold()
-            ).set_thumbnail(url=pepper_icon_url),
+            ).set_thumbnail(url=logo_url),
             ephemeral=ephemeral_flag
         )
+
 
 # =====================
 # SETUP COG
