@@ -17,7 +17,7 @@ SCAN_CHANNEL_IDS = [
 ]
 
 CUSTOM_5_EMOJI_ID = 1346549711817146400  # 5-Punkte Emoji
-STARBOARD_IGNORE_ID = 1346549688836296787  # wird nicht mitgezählt
+STARBOARD_IGNORE_ID = 1346549688836296787  # wird nicht gezählt
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -124,7 +124,7 @@ class HutVote(commands.Cog):
             for r in msg.reactions:
                 key = normalize_emoji(r)
                 if key == STARBOARD_IGNORE_ID:
-                    continue  # Ignoriert dieses Emoji
+                    continue
 
                 extra_votes = max(r.count - 1, 0)
                 if extra_votes == 0:
@@ -156,25 +156,24 @@ class HutVote(commands.Cog):
             reverse=True
         )[:top_count]
 
-        # TOP 3 NAMES für Intro
-        top_names = []
-        for m in top_msgs[:3]:
+        # TOP 3 NAMES für Intro mit Medaillen
+        medals = ["🥇", "🥈", "🥉"]
+        top_names_text = ""
+        for idx, m in enumerate(top_msgs[:3]):
             creator = m.mentions[0] if m.mentions else m.author
-            if creator.display_name not in top_names:
-                top_names.append(creator.display_name)
-        top_names_text = ", ".join(top_names)
+            top_names_text += f"{medals[idx]} {creator.display_name}\n"
+
+        # Starboard Emoji anzeigen
+        emoji_obj = guild.get_emoji(STARBOARD_IGNORE_ID)
+        starboard_emoji = str(emoji_obj) if emoji_obj else f"<:{STARBOARD_IGNORE_ID}>"
 
         # INTRO EMBED
         intro_embed = discord.Embed(
             title=f"🤖 AI Top {top_count} — {calendar.month_name[month_v]} {year_v}",
             description=(
-                f"Top 3 Users: {top_names_text}\n\n"
-                f"⚠️ Note: The <:{STARBOARD_IGNORE_ID}> emoji is NOT counted here (used for normal starboard).\n\n"
-                "Scoring system:\n"
-                "1️⃣, 2️⃣, 3️⃣, Custom 5️⃣ = points\n"
-                "Various = 📝\n"
-                "Bot reaction ignored\n"
-                "All four present → 0 points"
+                f"Top 3 Users:\n{top_names_text}\n"
+                f"⚠️ Note: {starboard_emoji} emoji is NOT counted here (used for normal starboard).\n"
+                "Additional reactions each give 1 point."
             ),
             color=discord.Color.blurple()
         )
@@ -184,7 +183,7 @@ class HutVote(commands.Cog):
         )
         intro_msg = await interaction.followup.send(embed=intro_embed)
 
-        # OUTPUT
+        # OUTPUT POST-EMBEDS
         for idx, msg in enumerate(top_msgs, start=1):
             score, breakdown, zeroed = calc_ai_points(msg)
             creator = msg.mentions[0] if msg.mentions else msg.author
@@ -213,6 +212,9 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=creator.display_avatar.url)
 
+            # Fügt Datum als Fußnote hinzu
+            embed.set_footer(text=f"Posted on {msg.created_at.strftime('%d.%m.%Y %H:%M UTC')}")
+
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
@@ -229,12 +231,12 @@ class HutVote(commands.Cog):
 
             await intro_msg.channel.send(embed=embed)
 
-        # FINAL TOP 3 POST MIT MENTIONS
+        # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
         final_lines = []
-        for idx, msg in enumerate(top_msgs[:3], start=1):
-            creator = msg.mentions[0] if msg.mentions else msg.author
-            score, _, _ = calc_ai_points(msg)
-            final_lines.append(f"#{idx} — {creator.mention} — {score} pts")
+        for idx, m in enumerate(top_msgs[:3]):
+            creator = m.mentions[0] if m.mentions else m.author
+            score, _, _ = calc_ai_points(m)
+            final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
 
         await intro_msg.channel.send(
             "🏁 **Top 3 AI Posts:**\n" + "\n".join(final_lines)
