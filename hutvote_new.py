@@ -7,7 +7,15 @@ import traceback
 
 ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
-CATEGORY_ID = 1415769711052062820
+
+# ONLY THESE CHANNELS WILL BE SCANNED
+SCAN_CHANNEL_IDS = [
+    1415769909874524262,
+    1415769966573260970,
+    1416267309399670917,
+    1416267383160442901,
+    1416468498305126522,
+]
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -24,7 +32,6 @@ YEAR_CHOICES = [
 MONTH_CHOICES = [
     app_commands.Choice(name=calendar.month_name[i], value=str(i)) for i in range(1, 13)
 ]
-
 
 # -------------------------------------------------------------
 # SAFE EMOJI SYSTEM
@@ -48,14 +55,21 @@ class HutVote(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="ai_vote", description="Shows AI image ranking by reactions")
+    @app_commands.command(
+        name="ai_vote",
+        description="Shows AI image ranking by reactions"
+    )
     @app_commands.describe(
         year="Select year",
         month="Select month",
         topuser="Number of top posts to display",
         public="Whether the result is public or ephemeral"
     )
-    @app_commands.choices(year=YEAR_CHOICES, month=MONTH_CHOICES, topuser=TOPUSER_CHOICES)
+    @app_commands.choices(
+        year=YEAR_CHOICES,
+        month=MONTH_CHOICES,
+        topuser=TOPUSER_CHOICES
+    )
     @app_commands.checks.cooldown(1, 5)
     async def ai_vote(
         self,
@@ -71,22 +85,20 @@ class HutVote(commands.Cog):
         # -------------------------------------------------------------
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             return await interaction.response.send_message(
-                "❌ You don't have permission.", ephemeral=True
+                "❌ You don't have permission.",
+                ephemeral=True
             )
 
         top_count = int(topuser.value) if topuser else 5
         ephemeral_flag = not public
 
         guild = interaction.guild
-        category_obj = guild.get_channel(CATEGORY_ID)
-
-        if not isinstance(category_obj, discord.CategoryChannel):
-            return await interaction.response.send_message(
-                "❌ Category not found.", ephemeral=True
-            )
 
         # Start loading
-        await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
+        await interaction.response.defer(
+            thinking=True,
+            ephemeral=ephemeral_flag
+        )
 
         # -------------------------------------------------------------
         # DATE RANGE
@@ -96,14 +108,24 @@ class HutVote(commands.Cog):
 
         start_dt = datetime(year_v, month_v, 1, tzinfo=timezone.utc)
         last_day = calendar.monthrange(year_v, month_v)[1]
-        end_dt = datetime(year_v, month_v, last_day, 23, 59, 59, tzinfo=timezone.utc)
+        end_dt = datetime(
+            year_v,
+            month_v,
+            last_day,
+            23,
+            59,
+            59,
+            tzinfo=timezone.utc
+        )
 
         # -------------------------------------------------------------
-        # SCAN CATEGORY CHANNELS FOR BOT POSTS
+        # SCAN ONLY SPECIFIED CHANNELS
         # -------------------------------------------------------------
         matched_msgs = []
 
-        for channel in category_obj.channels:
+        for channel_id in SCAN_CHANNEL_IDS:
+            channel = guild.get_channel(channel_id)
+
             if not isinstance(channel, discord.TextChannel):
                 continue
 
@@ -112,7 +134,11 @@ class HutVote(commands.Cog):
                 continue
 
             try:
-                async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
+                async for msg in channel.history(
+                    after=start_dt,
+                    before=end_dt,
+                    limit=None
+                ):
                     if msg.author.id == BOT_ID:
                         matched_msgs.append(msg)
             except Exception:
@@ -120,8 +146,8 @@ class HutVote(commands.Cog):
 
         if not matched_msgs:
             return await interaction.followup.send(
-                f"No AI posts found in {calendar.month_name[month_v]} {year.value}.",
-                ephemeral=ephemeral_flag,
+                f"No AI posts found in {calendar.month_name[month_v]} {year_v}.",
+                ephemeral=ephemeral_flag
             )
 
         # -------------------------------------------------------------
@@ -135,7 +161,7 @@ class HutVote(commands.Cog):
                 if key in EMOJI_POINTS:
                     react_map[key] = r.count
 
-            # All 4 → 0 points
+            # All 4 reactions present → 0 points
             if len(react_map) == 4 and all(v > 0 for v in react_map.values()):
                 return 0
 
@@ -150,7 +176,9 @@ class HutVote(commands.Cog):
 
             return score
 
-        # Sort
+        # -------------------------------------------------------------
+        # SORT RESULTS
+        # -------------------------------------------------------------
         top_msgs = sorted(
             matched_msgs,
             key=lambda m: (calc_ai_points(m), m.created_at),
@@ -174,7 +202,7 @@ class HutVote(commands.Cog):
         )
 
         intro_embed.set_footer(
-            text=f"{guild.name} AI Rankings | {category_obj.name}",
+            text=f"{guild.name} AI Rankings",
             icon_url=guild.icon.url if guild.icon else None
         )
 
@@ -194,12 +222,10 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=creator.display_avatar.url)
 
-            # Find image
             img_url = None
 
             if msg.attachments:
                 img_url = msg.attachments[0].url
-
             else:
                 for e in msg.embeds:
                     if e.image:
@@ -214,9 +240,18 @@ class HutVote(commands.Cog):
 
             await intro_msg.channel.send(embed=embed)
 
-        # Final winner
-        top_creator = top_msgs[0].mentions[0] if top_msgs[0].mentions else top_msgs[0].author
-        await intro_msg.channel.send(f"🏅 **{top_creator.mention}** achieved the highest AI score!")
+        # -------------------------------------------------------------
+        # FINAL WINNER
+        # -------------------------------------------------------------
+        top_creator = (
+            top_msgs[0].mentions[0]
+            if top_msgs[0].mentions
+            else top_msgs[0].author
+        )
+
+        await intro_msg.channel.send(
+            f"🏅 **{top_creator.mention}** achieved the highest AI score!"
+        )
 
 
 async def setup(bot: commands.Bot):
