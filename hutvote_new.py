@@ -247,15 +247,20 @@ class HutVote(commands.Cog):
         # =====================
         # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
         # =====================
+        # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
         final_lines = []
+        mention_lines = []  # Damit sie gepingt werden
         for idx, m in enumerate(top_msgs_unique):
             creator = m.mentions[0] if m.mentions else m.author
             score, _, _ = calc_ai_points(m)
-            final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
+            final_lines.append(f"{medals[idx]} {creator.display_name} — {score} pts")
+            mention_lines.append(creator.mention)  # Mentions sammeln
 
         final_logo_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1461800828745552067/hut_logo_fire.gif"
 
+        # Embed + Mentions im selben Post
         await interaction.followup.send(
+            content=" ".join(mention_lines),  # pingen hier
             embed=discord.Embed(
                 title=f"🏁 Top 3 AI Posts — {calendar.month_name[month_v]} {year_v}",
                 description="\n".join(final_lines),
