@@ -8,7 +8,6 @@ import traceback
 ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
 
-# ONLY THESE CHANNELS WILL BE SCANNED
 SCAN_CHANNEL_IDS = [
     1415769909874524262,
     1415769966573260970,
@@ -30,22 +29,22 @@ YEAR_CHOICES = [
 ]
 
 MONTH_CHOICES = [
-    app_commands.Choice(name=calendar.month_name[i], value=str(i)) for i in range(1, 13)
+    app_commands.Choice(name=calendar.month_name[i], value=str(i))
+    for i in range(1, 13)
 ]
 
 # -------------------------------------------------------------
-# SAFE EMOJI SYSTEM
+# EMOJI POINT SYSTEM
 # -------------------------------------------------------------
 EMOJI_POINTS = {
     "1️⃣": 1,
     "2️⃣": 2,
     "3️⃣": 3,
-    1346549711817146400: 5,  # custom emoji ID ONLY
+    1346549711817146400: 5,  # custom emoji ID
 }
 
 
 def normalize_emoji(r):
-    """Return comparable emoji key: unicode → str, custom → ID."""
     if isinstance(r.emoji, (discord.PartialEmoji, discord.Emoji)):
         return r.emoji.id
     return str(r.emoji)
@@ -91,10 +90,8 @@ class HutVote(commands.Cog):
 
         top_count = int(topuser.value) if topuser else 5
         ephemeral_flag = not public
-
         guild = interaction.guild
 
-        # Start loading
         await interaction.response.defer(
             thinking=True,
             ephemeral=ephemeral_flag
@@ -119,7 +116,7 @@ class HutVote(commands.Cog):
         )
 
         # -------------------------------------------------------------
-        # SCAN ONLY SPECIFIED CHANNELS
+        # SCAN CHANNELS
         # -------------------------------------------------------------
         matched_msgs = []
 
@@ -151,37 +148,43 @@ class HutVote(commands.Cog):
             )
 
         # -------------------------------------------------------------
-        # SCORING SYSTEM
+        # SCORING + BREAKDOWN
         # -------------------------------------------------------------
         def calc_ai_points(msg: discord.Message):
-            react_map = {}
+            breakdown = {}
+            score = 0
 
             for r in msg.reactions:
                 key = normalize_emoji(r)
-                if key in EMOJI_POINTS:
-                    react_map[key] = r.count
 
-            # All 4 reactions present → 0 points
-            if len(react_map) == 4 and all(v > 0 for v in react_map.values()):
-                return 0
+                if key not in EMOJI_POINTS:
+                    continue
 
-            total = sum(react_map.values())
-            if total <= 1:
-                return 0
+                extra_votes = max(r.count - 1, 0)
+                if extra_votes == 0:
+                    continue
 
-            score = 0
-            for key, count in react_map.items():
-                if count > 1:
-                    score += (count - 1) * EMOJI_POINTS[key]
+                points = extra_votes * EMOJI_POINTS[key]
+                score += points
 
-            return score
+                breakdown[key] = {
+                    "votes": extra_votes,
+                    "points": points
+                }
+
+            zeroed = False
+            if len(breakdown) == 4:
+                score = 0
+                zeroed = True
+
+            return score, breakdown, zeroed
 
         # -------------------------------------------------------------
-        # SORT RESULTS
+        # SORT
         # -------------------------------------------------------------
         top_msgs = sorted(
             matched_msgs,
-            key=lambda m: (calc_ai_points(m), m.created_at),
+            key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
         )[:top_count]
 
@@ -196,7 +199,8 @@ class HutVote(commands.Cog):
                 "2️⃣ = 2 points\n"
                 "3️⃣ = 3 points\n"
                 "Custom Emoji = 5 points\n\n"
-                "All four present → 0 points"
+                "Bot reaction is ignored\n"
+                "All four emojis present → 0 points"
             ),
             color=discord.Color.blurple()
         )
@@ -209,21 +213,43 @@ class HutVote(commands.Cog):
         intro_msg = await interaction.followup.send(embed=intro_embed)
 
         # -------------------------------------------------------------
-        # OUTPUT EMBEDS
+        # OUTPUT
         # -------------------------------------------------------------
         for idx, msg in enumerate(top_msgs, start=1):
-            score = calc_ai_points(msg)
+            score, breakdown, zeroed = calc_ai_points(msg)
             creator = msg.mentions[0] if msg.mentions else msg.author
+
+            lines = []
+
+            for key, data in breakdown.items():
+                if isinstance(key, str):
+                    emoji_disp = key
+                else:
+                    emoji = guild.get_emoji(key)
+                    emoji_disp = f"<:{emoji.name}:{emoji.id}>" if emoji else "<?>"
+
+                lines.append(
+                    f"{emoji_disp} × {data['votes']} → {data['points']} pts"
+                )
+
+            if not lines:
+                lines.append("No extra reactions")
+
+            if zeroed:
+                lines.append("⚠️ All four emojis present → score reset to 0")
 
             embed = discord.Embed(
                 title=f"#{idx} — {creator.display_name} — {score} pts",
-                description=f"[Jump to Post]({msg.jump_url})",
+                description=(
+                    f"[Jump to Post]({msg.jump_url})\n\n"
+                    "**Breakdown:**\n" + "\n".join(lines)
+                ),
                 color=discord.Color.teal()
             )
+
             embed.set_thumbnail(url=creator.display_avatar.url)
 
             img_url = None
-
             if msg.attachments:
                 img_url = msg.attachments[0].url
             else:
@@ -241,7 +267,7 @@ class HutVote(commands.Cog):
             await intro_msg.channel.send(embed=embed)
 
         # -------------------------------------------------------------
-        # FINAL WINNER
+        # WINNER
         # -------------------------------------------------------------
         top_creator = (
             top_msgs[0].mentions[0]
