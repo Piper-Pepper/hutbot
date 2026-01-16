@@ -17,7 +17,7 @@ SCAN_CHANNEL_IDS = [
 ]
 
 CUSTOM_5_EMOJI_ID = 1346549711817146400  # 5-Punkte Emoji
-STARBOARD_IGNORE_ID = 1346549688836296787  # wird nicht gezählt
+STARBOARD_IGNORE_ID = 1346549688836296787  # wird komplett ignoriert
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -48,6 +48,42 @@ def normalize_emoji(r):
         return r.emoji.id
     return str(r.emoji)
 
+# =====================
+# SCORING-FUNKTION
+# =====================
+def calc_ai_points(msg: discord.Message):
+    breakdown = {}
+    score = 0
+
+    for r in msg.reactions:
+        key = normalize_emoji(r)
+
+        # Starboard-Emoji ignorieren
+        if key == STARBOARD_IGNORE_ID:
+            continue
+
+        # Pflicht-Emojis → zählen ab #2
+        if key in EMOJI_POINTS:
+            extra_votes = max(r.count - 1, 0)  # Bot-Set wird abgezogen
+            if extra_votes == 0:
+                continue
+            points = extra_votes * EMOJI_POINTS[key]
+            breakdown[key] = {"votes": extra_votes, "points": points}
+            score += points
+        # Zusätzliche Emojis → zählen ab #1
+        else:
+            if r.count <= 0:
+                continue
+            breakdown.setdefault("Various", {"votes": 0, "points": 0})
+            breakdown["Various"]["votes"] += r.count
+            breakdown["Various"]["points"] += r.count
+            score += r.count
+
+    return score, breakdown, False  # kein Reset mehr
+
+# =====================
+# HUTC-VOTE COG
+# =====================
 class HutVote(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -72,7 +108,7 @@ class HutVote(commands.Cog):
         topuser: app_commands.Choice[str] = None,
         public: bool = False
     ):
-
+        # Berechtigung prüfen
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             return await interaction.response.send_message(
                 "❌ You don't have permission.",
@@ -113,41 +149,6 @@ class HutVote(commands.Cog):
                 f"No AI posts found in {calendar.month_name[month_v]} {year_v}.",
                 ephemeral=ephemeral_flag
             )
-
-        # SCORING + BREAKDOWN
-        def calc_ai_points(msg: discord.Message):
-            breakdown = {}
-            score = 0
-            various_score = 0
-            various_count = 0
-
-            for r in msg.reactions:
-                key = normalize_emoji(r)
-                if key == STARBOARD_IGNORE_ID:
-                    continue
-
-                extra_votes = max(r.count - 1, 0)
-                if extra_votes == 0:
-                    continue
-
-                if key in EMOJI_POINTS:
-                    points = extra_votes * EMOJI_POINTS[key]
-                    breakdown[key] = {"votes": extra_votes, "points": points}
-                    score += points
-                else:
-                    various_score += extra_votes
-                    various_count += extra_votes
-
-            zeroed = False
-            if len(breakdown) == 4:
-                score = 0
-                zeroed = True
-
-            if various_count > 0:
-                breakdown["Various"] = {"votes": various_count, "points": various_score}
-                score += various_score
-
-            return score, breakdown, zeroed
 
         # SORT TOP-MESSAGES
         top_msgs_all = sorted(
@@ -196,7 +197,7 @@ class HutVote(commands.Cog):
 
         # OUTPUT POST-EMBEDS
         for idx, msg in enumerate(top_msgs_all[:top_count], start=1):
-            score, breakdown, zeroed = calc_ai_points(msg)
+            score, breakdown, _ = calc_ai_points(msg)
             creator = msg.mentions[0] if msg.mentions else msg.author
 
             lines = []
@@ -207,12 +208,10 @@ class HutVote(commands.Cog):
                     emoji_disp = key
                 else:
                     emoji_obj = guild.get_emoji(key)
-                    emoji_disp = str(emoji_obj) if emoji_obj else "<?>"
+                    emoji_disp = str(emoji_obj) if emoji_obj else "<?>" 
 
                 lines.append(f"{emoji_disp} × {data['votes']} → {data['points']} pts")
 
-            if zeroed:
-                lines.append("⚠️ All four emojis present → score reset to 0")
             if not lines:
                 lines.append("No extra reactions")
 
@@ -222,10 +221,9 @@ class HutVote(commands.Cog):
                 color=discord.Color.teal()
             )
             embed.set_thumbnail(url=creator.display_avatar.url)
-
-            # Fügt Datum als Fußnote hinzu
             embed.set_footer(text=f"Posted on {msg.created_at.strftime('%d.%m.%Y %H:%M UTC')}")
 
+            # Attachment / Embed Image
             img_url = None
             if msg.attachments:
                 img_url = msg.attachments[0].url
