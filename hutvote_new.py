@@ -189,9 +189,7 @@ class HutVote(commands.Cog):
         intro_embed = discord.Embed(
             title=f"🤖 AI Top {top_count} — {calendar.month_name[month_v]} {year_v}",
             description=(
-                f"Top 3 Users:\n{top_names_text}\n"
-                f"⚠️ Note: {starboard_emoji} emoji is NOT counted here (used for normal starboard).\n"
-                "Additional reactions each give 1 point."
+                f"\n**Top 3 Hut Dwellers:**\n{top_names_text}\n"            
             ),
             color=discord.Color.blurple()
         )
