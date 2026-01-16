@@ -240,6 +240,7 @@ class HutVote(commands.Cog):
 
             await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
 
+        
         # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
         final_lines = []
         for idx, m in enumerate(top_msgs_unique):
@@ -247,8 +248,14 @@ class HutVote(commands.Cog):
             score, _, _ = calc_ai_points(m)
             final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
 
+        # Mit Monat und Jahr im Titel
+        pepper_icon_url = "https://cdn.discordapp.com/emojis/1377636862847619213.png?size=256"
         await interaction.followup.send(
-            "🏁 **Top 3 AI Posts:**\n" + "\n".join(final_lines),
+            embed=discord.Embed(
+                title=f"🏁 Top 3 AI Posts — {calendar.month_name[month_v]} {year_v}",
+                description="\n".join(final_lines),
+                color=discord.Color.gold()
+            ).set_thumbnail(url=pepper_icon_url),
             ephemeral=ephemeral_flag
         )
 
