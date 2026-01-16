@@ -16,8 +16,8 @@ SCAN_CHANNEL_IDS = [
     1416468498305126522,
 ]
 
-# Custom Emoji IDs
 CUSTOM_5_EMOJI_ID = 1346549711817146400  # 5-Punkte Emoji
+STARBOARD_IGNORE_ID = 1346549688836296787  # wird nicht mitgezählt
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -36,7 +36,6 @@ MONTH_CHOICES = [
     for i in range(1, 13)
 ]
 
-# Emoji Punktesystem
 EMOJI_POINTS = {
     "1️⃣": 1,
     "2️⃣": 2,
@@ -44,12 +43,10 @@ EMOJI_POINTS = {
     CUSTOM_5_EMOJI_ID: 5,
 }
 
-
 def normalize_emoji(r):
     if isinstance(r.emoji, (discord.PartialEmoji, discord.Emoji)):
         return r.emoji.id
     return str(r.emoji)
-
 
 class HutVote(commands.Cog):
     def __init__(self, bot):
@@ -76,7 +73,6 @@ class HutVote(commands.Cog):
         public: bool = False
     ):
 
-        # ROLE CHECK
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             return await interaction.response.send_message(
                 "❌ You don't have permission.",
@@ -127,28 +123,26 @@ class HutVote(commands.Cog):
 
             for r in msg.reactions:
                 key = normalize_emoji(r)
+                if key == STARBOARD_IGNORE_ID:
+                    continue  # Ignoriert dieses Emoji
 
                 extra_votes = max(r.count - 1, 0)
                 if extra_votes == 0:
                     continue
 
-                # Punktesystem
                 if key in EMOJI_POINTS:
                     points = extra_votes * EMOJI_POINTS[key]
                     breakdown[key] = {"votes": extra_votes, "points": points}
                     score += points
                 else:
-                    # alle anderen emojis = 1 Punkt pro extra vote
                     various_score += extra_votes
                     various_count += extra_votes
 
             zeroed = False
-            # All four reaction types → score 0
             if len(breakdown) == 4:
                 score = 0
                 zeroed = True
 
-            # Füge "Various" hinzu, falls vorhanden
             if various_count > 0:
                 breakdown["Various"] = {"votes": various_count, "points": various_score}
                 score += various_score
@@ -162,18 +156,25 @@ class HutVote(commands.Cog):
             reverse=True
         )[:top_count]
 
+        # TOP 3 NAMES für Intro
+        top_names = []
+        for m in top_msgs[:3]:
+            creator = m.mentions[0] if m.mentions else m.author
+            if creator.display_name not in top_names:
+                top_names.append(creator.display_name)
+        top_names_text = ", ".join(top_names)
+
         # INTRO EMBED
         intro_embed = discord.Embed(
             title=f"🤖 AI Top {top_count} — {calendar.month_name[month_v]} {year_v}",
             description=(
+                f"Top 3 Users: {top_names_text}\n\n"
+                f"⚠️ Note: The <:{STARBOARD_IGNORE_ID}> emoji is NOT counted here (used for normal starboard).\n\n"
                 "Scoring system:\n"
-                "1️⃣ = 1 point\n"
-                "2️⃣ = 2 points\n"
-                "3️⃣ = 3 points\n"
-                "Custom Emoji = 5 points\n"
-                "All other emojis = 1 point each\n"
-                "Bot reaction is ignored\n"
-                "All four emojis present → 0 points"
+                "1️⃣, 2️⃣, 3️⃣, Custom 5️⃣ = points\n"
+                "Various = 📝\n"
+                "Bot reaction ignored\n"
+                "All four present → 0 points"
             ),
             color=discord.Color.blurple()
         )
@@ -191,7 +192,7 @@ class HutVote(commands.Cog):
             lines = []
             for key, data in breakdown.items():
                 if key == "Various":
-                    emoji_disp = "🔀 Various"
+                    emoji_disp = "📝"
                 elif isinstance(key, str):
                     emoji_disp = key
                 else:
@@ -228,9 +229,16 @@ class HutVote(commands.Cog):
 
             await intro_msg.channel.send(embed=embed)
 
-        # WINNER
-        top_creator = top_msgs[0].mentions[0] if top_msgs[0].mentions else top_msgs[0].author
-        await intro_msg.channel.send(f"🏅 **{top_creator.mention}** achieved the highest AI score!")
+        # FINAL TOP 3 POST MIT MENTIONS
+        final_lines = []
+        for idx, msg in enumerate(top_msgs[:3], start=1):
+            creator = msg.mentions[0] if msg.mentions else msg.author
+            score, _, _ = calc_ai_points(msg)
+            final_lines.append(f"#{idx} — {creator.mention} — {score} pts")
+
+        await intro_msg.channel.send(
+            "🏁 **Top 3 AI Posts:**\n" + "\n".join(final_lines)
+        )
 
 
 async def setup(bot: commands.Bot):
