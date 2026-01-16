@@ -62,9 +62,9 @@ def calc_ai_points(msg: discord.Message):
         if key == STARBOARD_IGNORE_ID:
             continue
 
-        # Pflicht-Emojis → zählen ab #2
+        # Pflicht-Emojis → zählen ab #2 (Bot-Reaction abziehen)
         if key in EMOJI_POINTS:
-            extra_votes = max(r.count - 1, 0)  # Bot-Set wird abgezogen
+            extra_votes = max(r.count - 1, 0)
             if extra_votes == 0:
                 continue
             points = extra_votes * EMOJI_POINTS[key]
@@ -193,7 +193,7 @@ class HutVote(commands.Cog):
             text=f"{guild.name} AI Rankings",
             icon_url=guild.icon.url if guild.icon else None
         )
-        intro_msg = await interaction.followup.send(embed=intro_embed)
+        await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral_flag)
 
         # OUTPUT POST-EMBEDS
         for idx, msg in enumerate(top_msgs_all[:top_count], start=1):
@@ -238,7 +238,7 @@ class HutVote(commands.Cog):
             if img_url:
                 embed.set_image(url=img_url)
 
-            await intro_msg.channel.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=ephemeral_flag)
 
         # FINAL TOP 3 POST MIT MENTIONS UND MEDAILLEN
         final_lines = []
@@ -247,10 +247,13 @@ class HutVote(commands.Cog):
             score, _, _ = calc_ai_points(m)
             final_lines.append(f"{medals[idx]} {creator.mention} — {score} pts")
 
-        await intro_msg.channel.send(
-            "🏁 **Top 3 AI Posts:**\n" + "\n".join(final_lines)
+        await interaction.followup.send(
+            "🏁 **Top 3 AI Posts:**\n" + "\n".join(final_lines),
+            ephemeral=ephemeral_flag
         )
 
-
+# =====================
+# SETUP COG
+# =====================
 async def setup(bot: commands.Bot):
     await bot.add_cog(HutVote(bot))
