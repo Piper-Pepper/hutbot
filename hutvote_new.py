@@ -246,8 +246,22 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=u.display_avatar.url)
 
+            # =====================
+            # BILD HANDLING (Attachments + Embed Images + Thumbnails)
+            # =====================
+            img_url = None
             if m.attachments:
-                embed.set_image(url=m.attachments[0].url)
+                img_url = m.attachments[0].url
+            else:
+                for e in m.embeds:
+                    if e.image and e.image.url:
+                        img_url = e.image.url
+                        break
+                    if e.thumbnail and e.thumbnail.url:
+                        img_url = e.thumbnail.url
+                        break
+            if img_url:
+                embed.set_image(url=img_url)
 
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
