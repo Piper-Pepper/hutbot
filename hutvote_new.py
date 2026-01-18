@@ -231,7 +231,7 @@ class HutVote(commands.Cog):
         now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")  # YYYY/MM/DD HH:MM UTC
         intro_embed = discord.Embed(
             title=title,
-            description=f"**Top 3 Hut Dwellers:**\n",
+            description=f"**Top 3 Hut Dwellers:**\n{intro}\n",
             color=discord.Color.blurple()
         )
         intro_embed.set_footer(text=f"Updated: {now_str} UTC")
