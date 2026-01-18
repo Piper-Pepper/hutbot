@@ -156,12 +156,15 @@ class HutVote(commands.Cog):
     @app_commands.command(name="ai_contest", description="Shows AI contest ranking for a single channel")
     @app_commands.describe(
         channel="Channel to scan (defaults to contest channel)",
+        topuser="Number of top posts to display",
         public="Whether the result is public or ephemeral"
     )
+    @app_commands.choices(topuser=TOPUSER_CHOICES)
     async def ai_contest(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel = None,
+        topuser: app_commands.Choice[str] = None,
         public: bool = False
     ):
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
@@ -190,9 +193,9 @@ class HutVote(commands.Cog):
         await self._render_ranking(
             interaction,
             matched_msgs,
-            title="🏁 AI Contest Ranking",
+            title=f"🏁 AI Contest Ranking — {target_channel.name}",
             ephemeral=ephemeral_flag,
-            limit=5
+            limit=int(topuser.value) if topuser else 5
         )
 
     # =====================
@@ -218,18 +221,25 @@ class HutVote(commands.Cog):
             if len(top_unique) == 3:
                 break
 
+        # ---------------------------
+        # Intro Embed
+        # ---------------------------
         intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
             intro += f"{medals[i]} {u.display_name}\n"
 
+        today = datetime.utcnow().strftime("%Y/%m/%d")  # Stand: YYYY/MM/DD
         intro_embed = discord.Embed(
             title=title,
-            description=f"**Top 3 Hut Dwellers:**\n{intro}",
+            description=f"**Top 3 Hut Dwellers:**\n{intro}\n\nStand: {today}",
             color=discord.Color.blurple()
         )
         await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral)
 
+        # ---------------------------
+        # Detail Embeds (per post)
+        # ---------------------------
         for idx, m in enumerate(msgs_sorted[:limit], start=1):
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
@@ -246,9 +256,7 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=u.display_avatar.url)
 
-            # =====================
-            # BILD HANDLING (Attachments + Embed Images + Thumbnails)
-            # =====================
+            # Bild Handling
             img_url = None
             if m.attachments:
                 img_url = m.attachments[0].url
@@ -265,6 +273,9 @@ class HutVote(commands.Cog):
 
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
+        # ---------------------------
+        # Final Top 3 Embed
+        # ---------------------------
         mentions = []
         final_lines = []
         for i, m in enumerate(top_unique):
@@ -273,10 +284,11 @@ class HutVote(commands.Cog):
             mentions.append(u.mention)
             final_lines.append(f"{medals[i]} {u.display_name} — {s} pts")
 
+        final_date = datetime.utcnow().strftime("%Y/%m/%d")  # as of YYYY/MM/DD
         await interaction.followup.send(
             content=" ".join(mentions),
             embed=discord.Embed(
-                title="🏆 Final Top 3",
+                title=f"🏆 Final Top 3 (as of {final_date})",
                 description="\n".join(final_lines),
                 color=discord.Color.gold()
             ),
