@@ -1,24 +1,28 @@
-# cogs/hutvote.py
 import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone
 import calendar
+import traceback
 
+# =====================
+# KONFIG
+# =====================
 ALLOWED_ROLE = 1346428405368750122
 BOT_ID = 1379906834588106883
 
-# CATEGORY_CHOICES nur ID + Name für Slash-Auswahl
-CATEGORY_CHOICES = [
-    app_commands.Choice(name="SFW", value="1416461717038170294"),
-    app_commands.Choice(name="NSFW", value="1415769711052062820"),
+SCAN_CHANNEL_IDS = [
+    1415769909874524262,
+    1415769966573260970,
+    1416267309399670917,
+    1416267383160442901,
+    1416468498305126522,
 ]
 
-# Map der Icons
-CATEGORY_ICONS = {
-    "1416461717038170294": "🟢",
-    "1415769711052062820": "🔞",
-}
+DEFAULT_CONTEST_CHANNEL_ID = 1461752750550552741
+
+CUSTOM_5_EMOJI_ID = 1346549711817146400
+STARBOARD_IGNORE_ID = 1346549688836296787
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -33,207 +37,232 @@ YEAR_CHOICES = [
 ]
 
 MONTH_CHOICES = [
-    app_commands.Choice(name=calendar.month_name[i], value=str(i)) for i in range(1, 13)
+    app_commands.Choice(name=calendar.month_name[i], value=str(i))
+    for i in range(1, 13)
 ]
 
-REACTION_CAPTIONS = {
-    "<:01sthumb:1387086056498921614>": "Great!",
-    "<:01smile_piper:1387083454575022213>": "LMFAO",
-    "<:02No:1347536448831754383>": "No... just... no",
-    "<:011:1346549711817146400>": "Better than 10",
-    "<:011pump:1346549688836296787>": "Pump that Puppet!",
+EMOJI_POINTS = {
+    "1️⃣": 1,
+    "2️⃣": 2,
+    "3️⃣": 3,
+    CUSTOM_5_EMOJI_ID: 5,
 }
 
+# =====================
+# HELPER
+# =====================
+def normalize_emoji(r):
+    if isinstance(r.emoji, (discord.PartialEmoji, discord.Emoji)):
+        return r.emoji.id
+    return str(r.emoji)
 
+def calc_ai_points(msg: discord.Message):
+    breakdown = {}
+    score = 0
+
+    for r in msg.reactions:
+        key = normalize_emoji(r)
+        if key == STARBOARD_IGNORE_ID:
+            continue
+
+        if key in EMOJI_POINTS:
+            extra_votes = max(r.count - 1, 0)
+            if extra_votes <= 0:
+                continue
+            points = extra_votes * EMOJI_POINTS[key]
+            breakdown[key] = {"votes": extra_votes, "points": points}
+            score += points
+        else:
+            if r.count <= 0:
+                continue
+            breakdown.setdefault("Various", {"votes": 0, "points": 0})
+            breakdown["Various"]["votes"] += r.count
+            breakdown["Various"]["points"] += r.count
+            score += r.count
+
+    return score, breakdown, False
+
+# =====================
+# COG
+# =====================
 class HutVote(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(
-        name="hut_vote",
-        description="Shows the top posts by reactions for a category/month/year"
-    )
-    @app_commands.describe(
-        year="Select year",
-        month="Select month",
-        category="Select category",
-        topuser="Number of top posts to display",
-        public="Whether the posts are public or ephemeral"
-    )
-    @app_commands.choices(
-        year=YEAR_CHOICES,
-        month=MONTH_CHOICES,
-        category=CATEGORY_CHOICES,
-        topuser=TOPUSER_CHOICES
-    )
-    @app_commands.checks.cooldown(1, 5)
-    async def hut_vote(
-        self,
-        interaction: discord.Interaction,
-        year: app_commands.Choice[str],
-        month: app_commands.Choice[str],
-        category: app_commands.Choice[str],
-        topuser: app_commands.Choice[str] = None,
-        public: bool = False
-    ):
-        top_count = int(topuser.value) if topuser else 5
-        ephemeral_flag = not public
-
-        # Permissions
+    # =====================
+    # /ai_vote
+    # =====================
+    @app_commands.command(name="ai_vote", description="Shows AI image ranking by reactions")
+    @app_commands.describe(year="Select year", month="Select month", topuser="Top entries", public="Public output")
+    @app_commands.choices(year=YEAR_CHOICES, month=MONTH_CHOICES, topuser=TOPUSER_CHOICES)
+    async def ai_vote(self, interaction, year, month, topuser=None, public=False):
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
-            await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ No permission.", ephemeral=True)
 
-        guild = interaction.guild
-        category_obj = guild.get_channel(int(category.value))
-        if not category_obj or not isinstance(category_obj, discord.CategoryChannel):
-            await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
-            return
+        ephemeral = not public
+        await interaction.response.defer(thinking=True, ephemeral=ephemeral)
 
-        # Kategorie-Icon aus Map
-        category_icon = CATEGORY_ICONS.get(category.value, "🎨")
-        # Kategorie-Name dynamisch aus Discord
-        category_name = category_obj.name
+        year_v = int(year.value)
+        month_v = int(month.value)
 
-        await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
+        start_dt = datetime(year_v, month_v, 1, tzinfo=timezone.utc)
+        end_dt = datetime(
+            year_v, month_v,
+            calendar.monthrange(year_v, month_v)[1],
+            23, 59, 59,
+            tzinfo=timezone.utc
+        )
 
-        # Zeitspanne
-        start_dt = datetime(int(year.value), int(month.value), 1, tzinfo=timezone.utc)
-        last_day = calendar.monthrange(int(year.value), int(month.value))[1]
-        end_dt = datetime(int(year.value), int(month.value), last_day, 23, 59, 59, tzinfo=timezone.utc)
-
-        matched_msgs = []
-        for channel in category_obj.channels:
+        matched = []
+        for cid in SCAN_CHANNEL_IDS:
+            channel = interaction.guild.get_channel(cid)
             if not isinstance(channel, discord.TextChannel):
-                continue
-            overwrites = channel.overwrites_for(guild.default_role)
-            if overwrites.view_channel is False:
-                continue
-            perms = channel.permissions_for(guild.me)
-            if not perms.view_channel or not perms.read_message_history:
                 continue
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
-                    if msg.author.id != BOT_ID:
-                        continue
-                    matched_msgs.append(msg)
+                    if msg.author.id == BOT_ID:
+                        matched.append(msg)
             except Exception:
-                continue
+                traceback.print_exc()
 
-        if not matched_msgs:
-            await interaction.followup.send(
-                f"No posts found in {calendar.month_name[int(month.value)]} {year.value}.",
-                ephemeral=ephemeral_flag
-            )
-            return
+        if not matched:
+            return await interaction.followup.send("No AI posts found.", ephemeral=ephemeral)
 
-        # Sortierfunktion
-        def sort_key(msg: discord.Message):
-            sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
-            top5_sum = sum(r.count for r in sorted_reacts[:5])
-            extra_sum = sum(r.count for r in sorted_reacts[5:])
-            return (top5_sum, extra_sum, msg.created_at)
+        await self._render_ranking(
+            interaction,
+            matched,
+            f"🤖 AI Top — {calendar.month_name[month_v]} {year_v}",
+            ephemeral,
+            int(topuser.value) if topuser else 5
+        )
 
-        top_msgs = sorted(matched_msgs, key=sort_key, reverse=True)[:top_count]
+    # =====================
+    # /ai_contest
+    # =====================
+    @app_commands.command(name="ai_contest", description="Shows AI contest ranking for a channel")
+    @app_commands.choices(topuser=TOPUSER_CHOICES)
+    async def ai_contest(self, interaction, channel=None, topuser=None, public=False):
+        if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
+            return await interaction.response.send_message("❌ No permission.", ephemeral=True)
 
-        # Intro-Embed
+        ephemeral = not public
+        await interaction.response.defer(thinking=True, ephemeral=ephemeral)
+
+        target = channel or interaction.guild.get_channel(DEFAULT_CONTEST_CHANNEL_ID)
+        if not isinstance(target, discord.TextChannel):
+            return await interaction.followup.send("Invalid channel.", ephemeral=ephemeral)
+
+        matched = []
+        async for msg in target.history(limit=None):
+            if msg.author.id == BOT_ID:
+                matched.append(msg)
+
+        await self._render_ranking(
+            interaction,
+            matched,
+            f"🏁 AI Contest Ranking — {target.name}",
+            ephemeral,
+            int(topuser.value) if topuser else 5
+        )
+
+    # =====================
+    # SHARED OUTPUT
+    # =====================
+    async def _render_ranking(self, interaction, msgs, title, ephemeral, limit):
+        guild = interaction.guild
+        medals = ["🥇", "🥈", "🥉"]
+
+        msgs_sorted = sorted(
+            msgs,
+            key=lambda m: (calc_ai_points(m)[0], m.created_at),
+            reverse=True
+        )
+
+        # ---------- INTRO ----------
+        top_unique = []
+        seen = set()
+        for m in msgs_sorted:
+            u = m.mentions[0] if m.mentions else m.author
+            if u.id not in seen:
+                top_unique.append(m)
+                seen.add(u.id)
+            if len(top_unique) == 3:
+                break
+
+        intro_txt = ""
+        for i, m in enumerate(top_unique):
+            u = m.mentions[0] if m.mentions else m.author
+            intro_txt += f"{medals[i]} {u.display_name}\n"
+
+        now = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         intro_embed = discord.Embed(
-            title=f"🏆 Top {top_count} in {category_icon} {category_name} "
-                  f"({calendar.month_name[int(month.value)]} {year.value})",
-            description=(f"This is the **Top {top_count}** in **{category_icon} {category_name}** "
-                         f"for {calendar.month_name[int(month.value)]} {year.value}."),
-            color=discord.Color.gold()
+            title=title,
+            description=f"**Top 3 Hut Dwellers:**\n{intro_txt}",
+            color=discord.Color.blurple()
         )
+        intro_embed.set_footer(text=f"Updated: {now} UTC")
+        await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral)
 
-        intro_embed.set_footer(
-            text=f"{guild.name} Rankings | {category_icon} {category_name} | #{interaction.channel.name}",
-            icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
-        )
+        # ---------- DETAIL EMBEDS ----------
+        for idx, m in enumerate(msgs_sorted[:limit], start=1):
+            score, breakdown, _ = calc_ai_points(m)
+            u = m.mentions[0] if m.mentions else m.author
 
-        intro_msg = await interaction.followup.send(embed=intro_embed, wait=True)
+            channel_url = f"https://discord.com/channels/{guild.id}/{m.channel.id}"
 
-        # Sub-Messages Embeds
-        for idx, msg in enumerate(top_msgs, start=1):
-            sorted_reacts = sorted(msg.reactions, key=lambda r: r.count, reverse=True)
+            lines = []
+            for k, d in breakdown.items():
+                emoji = "📝" if k == "Various" else str(guild.get_emoji(k) or k)
+                lines.append(f"{emoji} × {d['votes']} → {d['points']} pts")
 
-            # Top-5 Emojis nebeneinander
-            reaction_parts = []
-            used_emojis = set()
-            for emoji_key in REACTION_CAPTIONS:
-                r = next(
-                    (r for r in sorted_reacts if (
-                        str(r.emoji) if not isinstance(r.emoji, discord.Emoji)
-                        else f"<:{r.emoji.name}:{r.emoji.id}>"
-                    ) == emoji_key),
-                    None
-                )
-                if r:
-                    count = r.count - 1
-                    used_emojis.add(r.emoji)
-                    if count > 0:
-                        reaction_parts.append(f"{str(r.emoji)} {count}")
-
-            reaction_line = " ".join(reaction_parts)
-
-            # Additional Reactions
-            extra_parts = []
-            extra_reacts = [r for r in sorted_reacts if r.emoji not in used_emojis]
-            for r in extra_reacts:
-                if r.count > 0:
-                    extra_parts.append(f"{str(r.emoji)} {r.count}")
-            extra_text = " ".join(extra_parts) if extra_parts else ""
-
-            # Embed-Titel
-            creator = msg.mentions[0] if msg.mentions else msg.author
-            creator_name = creator.display_name
-            creator_avatar = creator.display_avatar.url
-            title = f"{category_icon} #{idx} by {creator_name}\n{'─'*14}"
-
-            # Beschreibung
-            description_text = ""
-            if reaction_line:
-                description_text += f"{reaction_line}\n\n"
-            if extra_text:
-                description_text += f"{extra_text}\n\n"
-            description_text += f"[◀️ Jump / Vote 📈]({msg.jump_url})"
-
-            # Bildquelle
-            img_url = None
-            if msg.attachments:
-                img_url = msg.attachments[0].url
-            elif msg.embeds:
-                for e in msg.embeds:
-                    if e.image:
-                        img_url = e.image.url
-                        break
-                    elif e.thumbnail:
-                        img_url = e.thumbnail.url
-                        break
-
-            # Embed bauen
             embed = discord.Embed(
-                title=title,
-                description=description_text,
-                color=discord.Color.green()
+                title=f"#{idx} — {u.display_name} — {score} pts",
+                description=(
+                    f"**Channel:** [{m.channel.name}]({channel_url})\n"
+                    f"[Jump to Post]({m.jump_url})\n\n"
+                    + "\n".join(lines)
+                ),
+                color=discord.Color.teal()
             )
-            embed.set_thumbnail(url=creator_avatar)
-            embed.set_footer(
-                text=f"{category_icon} {category_name} | #{msg.channel.name}",
-                icon_url=guild.icon.url if guild.icon else discord.Embed.Empty
-            )
-            if img_url:
-                embed.set_image(url=img_url)
 
-            await intro_msg.channel.send(embed=embed)
+            embed.set_thumbnail(url=u.display_avatar.url)
 
-        # Top1 Creator Announcement
-        top1_msg = top_msgs[0]
-        top1_creator_mention = top1_msg.mentions[0].mention if top1_msg.mentions else top1_msg.author.mention
-        await intro_msg.channel.send(
-            f"In {calendar.month_name[int(month.value)]}/{year.value}, the user {top1_creator_mention} "
-            f"has created the image with most total votes in {category_icon} {category_name}! 🎉"
+            if m.attachments:
+                embed.set_image(url=m.attachments[0].url)
+            else:
+                for e in m.embeds:
+                    if e.image and e.image.url:
+                        embed.set_image(url=e.image.url)
+                        break
+                    if e.thumbnail and e.thumbnail.url:
+                        embed.set_image(url=e.thumbnail.url)
+                        break
+
+            embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
+            await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+
+        # ---------- FINAL ----------
+        mentions = []
+        final_lines = []
+        for i, m in enumerate(top_unique):
+            u = m.mentions[0] if m.mentions else m.author
+            s, _, _ = calc_ai_points(m)
+            mentions.append(u.mention)
+            final_lines.append(f"{medals[i]} {u.display_name} — {s} pts")
+
+        final_time = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
+        await interaction.followup.send(
+            content=" ".join(mentions),
+            embed=discord.Embed(
+                title=f"🏆 Final Top 3 (as of {final_time} UTC)",
+                description="\n".join(final_lines),
+                color=discord.Color.gold()
+            ).set_footer(text=f"Timestamp: {final_time} UTC"),
+            ephemeral=ephemeral
         )
 
-
-async def setup(bot: commands.Bot):
+# =====================
+# SETUP
+# =====================
+async def setup(bot):
     await bot.add_cog(HutVote(bot))

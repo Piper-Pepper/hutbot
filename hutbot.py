@@ -71,7 +71,7 @@ async def main():
             "gather",
             "reset",
             "riddle",
-            "hutvote_new",  # <- nur die neue Version laden
+            "hutvote",  # <- nur die neue Version laden
             "hutthreadvote",
             "character_creator",
             "riddle_post"
