@@ -17,8 +17,16 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
-NSFW_CATEGORY_ID = 1415769711052062820
-SFW_CATEGORY_ID = 1416461717038170294
+# ---------------- Channels & Roles ----------------
+NSFW_CHANNELS = [
+    1415769909874524262,
+    1415769966573260970,
+    1416267309399670917,
+    1416267383160442901,
+    1416468498305126522
+]
+SFW_CHANNEL = 1461752750550552741
+
 VIP_ROLE_ID = 1377051179615522926
 SPECIAL_ROLE_ID = 1375147276413964408  # für High-Res Button
 
@@ -38,14 +46,14 @@ CFG_REFERENCE = {
 }
 
 VARIANT_MAP = {
-    NSFW_CATEGORY_ID: [
+    **{ch: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
         {"label": "SD35", "model": "venice-sd35"},
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
-    ],
-    SFW_CATEGORY_ID: [
+    ] for ch in NSFW_CHANNELS},
+    SFW_CHANNEL: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
         {"label": "SD35", "model": "venice-sd35"},
         {"label": "Wai🔞", "model": "wai-Illustrious"},
@@ -147,23 +155,20 @@ class VeniceModal(discord.ui.Modal):
 
         # Hidden suffix – garantiert, dass nie ein leerer Wert an die API geht
         prev_hidden = previous_inputs.get("hidden_suffix", None)
-
         if prev_hidden and prev_hidden.strip():
-            # User hat wirklich etwas eingegeben
             default_value = prev_hidden
             placeholder_value = ""
         else:
-            # Feld leer oder nur whitespace → Standard
             default_value = ""
             placeholder_value = hidden_suffix_default[:100] if hidden_suffix_default else ""
 
         self.hidden_suffix = discord.ui.TextInput(
             label="Hidden Suffix",
-            style=discord.TextStyle.paragraph,  # vorher: short
+            style=discord.TextStyle.paragraph,
             required=False,
             placeholder=placeholder_value,
             default=default_value,
-            max_length=800  # vorher: 500
+            max_length=800
         )
 
         # Add items
@@ -173,12 +178,9 @@ class VeniceModal(discord.ui.Modal):
         self.add_item(self.steps_value)
         self.add_item(self.hidden_suffix)
 
-
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            cfg_val = float(self.cfg_value.value)
-        except:
-            cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
+        try: cfg_val = float(self.cfg_value.value)
+        except: cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
 
         try:
             steps_val = int(self.steps_value.value)
@@ -190,16 +192,14 @@ class VeniceModal(discord.ui.Modal):
         if not negative_prompt:
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
 
-        # -------- Hidden Suffix Logic --------
         user_hidden = (self.hidden_suffix.value or "").strip()
         if user_hidden:
             hidden_to_use = user_hidden
             stored_hidden_for_reuse = user_hidden
         else:
-            hidden_to_use = self.hidden_suffix_value  # NSFW/SFW Standard
+            hidden_to_use = self.hidden_suffix_value
             stored_hidden_for_reuse = None
 
-        # -------- Prepare variant dict --------
         variant = {
             **self.variant,
             "cfg_scale": cfg_val,
@@ -215,7 +215,8 @@ class VeniceModal(discord.ui.Modal):
             "hidden_suffix": stored_hidden_for_reuse
         }
 
-        category_id = interaction.channel.category.id if interaction.channel and interaction.channel.category else None
+        channel_id = interaction.channel.id if interaction.channel else None
+        hidden_suffix_default = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
 
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
@@ -226,7 +227,7 @@ class VeniceModal(discord.ui.Modal):
                 hidden_to_use,
                 interaction.user,
                 self.is_vip,
-                category_id=category_id,
+                channel_id=channel_id,
                 previous_inputs=self.previous_inputs
             ),
             ephemeral=True
@@ -234,7 +235,7 @@ class VeniceModal(discord.ui.Modal):
 
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip, category_id=None, previous_inputs=None):
+    def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip, channel_id=None, previous_inputs=None):
         super().__init__(timeout=None)
         self.session = session
         self.variant = variant
@@ -242,7 +243,7 @@ class AspectRatioView(discord.ui.View):
         self.hidden_suffix = hidden_suffix
         self.author = author
         self.is_vip = is_vip
-        self.category_id = category_id
+        self.channel_id = channel_id
         self.previous_inputs = previous_inputs or {}
 
         btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
@@ -261,10 +262,7 @@ class AspectRatioView(discord.ui.View):
     def make_callback(self, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
             if not self.is_vip and ratio_name in ["16:9", "9:16"]:
-                await interaction.response.send_message(
-                    f"❌ You need <@&{VIP_ROLE_ID}> to use this option",
-                    ephemeral=True
-                )
+                await interaction.response.send_message(f"❌ You need <@&{VIP_ROLE_ID}> to use this option", ephemeral=True)
                 return
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
@@ -287,14 +285,9 @@ class AspectRatioView(discord.ui.View):
         for i in range(1, 11):
             await asyncio.sleep(0.9 + steps * 0.08 + cfg * 0.38 + prompt_factor * 0.9)
             try:
-                progress_text = (
-                    f"{pepper} Generating image for **{self.author.display_name}** "
-                    f"with **{self.variant['label']}** "
-                    f" ... {i*10}%"
-                )
+                progress_text = f"{pepper} Generating image for **{self.author.display_name}** with **{self.variant['label']}** ... {i*10}%"
                 await progress_msg.edit(content=progress_text)
-            except:
-                pass
+            except: pass
 
         full_prompt = (self.prompt_text or "") + (self.hidden_suffix or "")
         if full_prompt and not full_prompt[0].isalnum():
@@ -321,11 +314,10 @@ class AspectRatioView(discord.ui.View):
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
         truncated_prompt = (self.prompt_text or "").replace("\n\n", "\n")
-        if len(truncated_prompt) > 600:
-            truncated_prompt = truncated_prompt[:600] + " [...]"
+        if len(truncated_prompt) > 600: truncated_prompt = truncated_prompt[:600] + " [...]"
         embed.description = f"🔮 Prompt:\n{truncated_prompt}"
 
-        default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+        default_hidden_suffix = NSFW_PROMPT_SUFFIX if self.channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
         prev_hidden_marker = self.previous_inputs.get("hidden_suffix", None)
         if isinstance(prev_hidden_marker, str) and prev_hidden_marker != "" and prev_hidden_marker != default_hidden_suffix:
             embed.description += "\n\n🔒 Hidden Prompt"
@@ -336,7 +328,6 @@ class AspectRatioView(discord.ui.View):
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-
         MODEL_SHORT = {
             "lustify-sdxl": "lustify",
             "flux-dev-uncensored": "flux-unc",
@@ -349,15 +340,8 @@ class AspectRatioView(discord.ui.View):
         tech_info = f"{short_model_name} | {width}x{height} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
-        # --- Hier neue Reaktionen ---
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
-        reactions = [
-            "1️⃣",
-            "2️⃣",
-            "3️⃣",
-            "<:011:1346549711817146400>",
-            "<:011pump:1346549688836296787>"
-        ]
+        reactions = ["1️⃣","2️⃣","3️⃣","<:011:1346549711817146400>","<:011pump:1346549688836296787>"]
         for emoji in reactions:
             try: await msg.add_reaction(emoji)
             except: pass
@@ -370,9 +354,7 @@ class AspectRatioView(discord.ui.View):
 
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
-
         self.stop()
-
 # ---------------- Post Generation View ----------------
 class PostGenerationView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, message, previous_inputs=None):
@@ -380,11 +362,12 @@ class PostGenerationView(discord.ui.View):
         self.session = session
         self.variant = variant
         self.prompt_text = prompt_text
-        self.hidden_suffix = hidden_suffix  # value actually used for generation (may be default)
+        self.hidden_suffix = hidden_suffix
         self.author = author
         self.message = message
         self.previous_inputs = previous_inputs or {}
 
+        # Buttons
         reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
         reuse_btn.callback = self.reuse_callback
         self.add_item(reuse_btn)
@@ -397,16 +380,16 @@ class PostGenerationView(discord.ui.View):
         del_reuse_btn.callback = self.delete_reuse_callback
         self.add_item(del_reuse_btn)
 
-        if message.channel.category and message.channel.category.id == SFW_CATEGORY_ID:
+        # SFW only: submit to gallery
+        if isinstance(message.channel, discord.TextChannel) and message.channel.id == SFW_CHANNEL:
             submit_btn = discord.ui.Button(
-                label="Submit image to contest🏆",
+                label="Submit Character",
                 style=discord.ButtonStyle.blurple,
                 row=1,
                 emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")
             )
             submit_btn.callback = self.post_gallery_callback
             self.add_item(submit_btn)
-
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
@@ -425,7 +408,7 @@ class PostGenerationView(discord.ui.View):
         await self.show_reuse_models(interaction)
 
     async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320
+        channel_id = 1418956422086922320  # example gallery
         role_id = 1419024270201454684
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
@@ -438,7 +421,7 @@ class PostGenerationView(discord.ui.View):
             embed = discord.Embed.from_dict(original_embed.to_dict())
             embed.description = f"[View original post]({self.message.jump_url})"
             if original_embed.footer:
-                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.footer.icon_url)
+                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.icon_url)
 
         mention_text = f"🎖️<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
         contest_msg = await channel.send(content=mention_text, embed=embed)
@@ -447,6 +430,7 @@ class PostGenerationView(discord.ui.View):
             try: await contest_msg.add_reaction(emoji)
             except: pass
 
+        # disable submit button
         for child in self.children:
             if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
                 child.disabled = True
@@ -455,8 +439,7 @@ class PostGenerationView(discord.ui.View):
         except:
             try:
                 await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except:
-                pass
+            except: pass
 
     async def show_reuse_models(self, interaction: discord.Interaction):
         member = interaction.user
@@ -471,8 +454,8 @@ class PostGenerationView(discord.ui.View):
                 self.hidden_suffix_marker = hidden_suffix_marker
                 self.variant = variant
 
-                category_id = interaction.channel.category.id if interaction.channel.category else None
-                variants = VARIANT_MAP.get(category_id, [])
+                channel_id = interaction.channel.id if interaction.channel else None
+                variants = VARIANT_MAP.get(channel_id, [])
 
                 for idx, v in enumerate(variants):
                     btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.danger)
@@ -483,15 +466,14 @@ class PostGenerationView(discord.ui.View):
                 async def callback(inner_interaction: discord.Interaction):
                     member = inner_interaction.user
                     is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-                    category_id = inner_interaction.channel.category.id if inner_interaction.channel.category else None
-                    variants = VARIANT_MAP.get(category_id, [])
-                    if variants:
-                        if variant != variants[0] and not is_vip:
-                            await inner_interaction.response.send_message(
-                                f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic model is for all)",
-                                ephemeral=True
-                            )
-                            return
+                    channel_id = inner_interaction.channel.id if inner_interaction.channel else None
+                    variants = VARIANT_MAP.get(channel_id, [])
+                    if variants and variant != variants[0] and not is_vip:
+                        await inner_interaction.response.send_message(
+                            f"❌ You need <@&{VIP_ROLE_ID}> to use this model!",
+                            ephemeral=True
+                        )
+                        return
 
                     prev_inputs = {
                         "prompt": self.prompt_text,
@@ -500,10 +482,11 @@ class PostGenerationView(discord.ui.View):
                         "hidden_suffix": self.hidden_suffix_marker
                     }
 
+                    hidden_suffix_default = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
                     await inner_interaction.response.send_modal(VeniceModal(
                         self.session,
                         variant,
-                        self.hidden_suffix_marker if self.hidden_suffix_marker is not None else (NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX),
+                        self.hidden_suffix_marker or hidden_suffix_default,
                         is_vip=is_vip,
                         previous_inputs=prev_inputs
                     ))
@@ -521,8 +504,8 @@ class VeniceView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
         super().__init__(timeout=None)
         self.session = session
-        self.category_id = channel.category.id if channel.category else None
-        variants = VARIANT_MAP.get(self.category_id, [])
+        self.channel_id = channel.id
+        variants = VARIANT_MAP.get(self.channel_id, [])
         for variant in variants:
             btn = discord.ui.Button(label=variant["label"], style=discord.ButtonStyle.blurple,
                                    custom_id=f"model_{variant['model']}_{uuid.uuid4().hex}")
@@ -533,21 +516,16 @@ class VeniceView(discord.ui.View):
         async def callback(interaction: discord.Interaction):
             member = interaction.user
             is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-            category_id = interaction.channel.category.id if interaction.channel.category else None
+            channel_id = interaction.channel.id if interaction.channel else None
+            variants = VARIANT_MAP.get(channel_id, [])
+            if variants and variant != variants[0] and not is_vip:
+                await interaction.response.send_message(f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True)
+                return
 
-            variants = VARIANT_MAP.get(category_id, [])
-            if variants:
-                if variant != variants[0] and not is_vip:
-                    await interaction.response.send_message(
-                        f"❌ You need <@&{VIP_ROLE_ID}> to use this model! (Basic model is for all)",
-                        ephemeral=True
-                    )
-                    return
-
-            hidden_suffix = NSFW_PROMPT_SUFFIX if category_id == NSFW_CATEGORY_ID else SFW_PROMPT_SUFFIX
+            hidden_suffix = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
             await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip))
         return callback
-    
+
 # ---------------- Cog ----------------
 class VeniceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -578,7 +556,7 @@ class VeniceCog(commands.Cog):
     async def on_ready(self):
         for guild in self.bot.guilds:
             for channel in guild.text_channels:
-                if channel.category and channel.category.id in VARIANT_MAP:
+                if channel.id in VARIANT_MAP:
                     await self.ensure_button_message(channel)
 
 # ---------------- Setup ----------------
