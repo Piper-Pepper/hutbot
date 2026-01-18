@@ -93,18 +93,29 @@ class HutVote(commands.Cog):
     # /ai_vote
     # =====================
     @app_commands.command(name="ai_vote", description="Shows AI image ranking by reactions")
-    @app_commands.describe(year="Select year", month="Select month", topuser="Top entries", public="Public output")
+    @app_commands.describe(
+        year="Select year",
+        month="Select month",
+        topuser="Number of top posts to display",
+        public="Whether the result is public or ephemeral"
+    )
     @app_commands.choices(year=YEAR_CHOICES, month=MONTH_CHOICES, topuser=TOPUSER_CHOICES)
-    async def ai_vote(self, interaction, year, month, topuser=None, public=False):
+    async def ai_vote(
+        self,
+        interaction: discord.Interaction,
+        year: app_commands.Choice[str],
+        month: app_commands.Choice[str],
+        topuser: app_commands.Choice[str] = None,
+        public: bool = False
+    ):
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             return await interaction.response.send_message("❌ No permission.", ephemeral=True)
 
-        ephemeral = not public
-        await interaction.response.defer(thinking=True, ephemeral=ephemeral)
+        ephemeral_flag = not public
+        await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
         year_v = int(year.value)
         month_v = int(month.value)
-
         start_dt = datetime(year_v, month_v, 1, tzinfo=timezone.utc)
         end_dt = datetime(
             year_v, month_v,
@@ -113,56 +124,77 @@ class HutVote(commands.Cog):
             tzinfo=timezone.utc
         )
 
-        matched = []
+        matched_msgs = []
+        guild = interaction.guild
+
         for cid in SCAN_CHANNEL_IDS:
-            channel = interaction.guild.get_channel(cid)
+            channel = guild.get_channel(cid)
             if not isinstance(channel, discord.TextChannel):
                 continue
             try:
                 async for msg in channel.history(after=start_dt, before=end_dt, limit=None):
                     if msg.author.id == BOT_ID:
-                        matched.append(msg)
+                        matched_msgs.append(msg)
             except Exception:
                 traceback.print_exc()
 
-        if not matched:
-            return await interaction.followup.send("No AI posts found.", ephemeral=ephemeral)
+        if not matched_msgs:
+            return await interaction.followup.send("No AI posts found.", ephemeral=ephemeral_flag)
 
         await self._render_ranking(
             interaction,
-            matched,
-            f"🤖 AI Top — {calendar.month_name[month_v]} {year_v}",
-            ephemeral,
-            int(topuser.value) if topuser else 5
+            matched_msgs,
+            title=f"🤖 AI Top — {calendar.month_name[month_v]} {year_v}",
+            ephemeral=ephemeral_flag,
+            limit=int(topuser.value) if topuser else 5
         )
 
     # =====================
     # /ai_contest
     # =====================
-    @app_commands.command(name="ai_contest", description="Shows AI contest ranking for a channel")
+    @app_commands.command(name="ai_contest", description="Shows AI contest ranking for a single channel")
+    @app_commands.describe(
+        channel="Channel to scan (defaults to contest channel)",
+        topuser="Number of top posts to display",
+        public="Whether the result is public or ephemeral"
+    )
     @app_commands.choices(topuser=TOPUSER_CHOICES)
-    async def ai_contest(self, interaction, channel=None, topuser=None, public=False):
+    async def ai_contest(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel = None,
+        topuser: app_commands.Choice[str] = None,
+        public: bool = False
+    ):
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
             return await interaction.response.send_message("❌ No permission.", ephemeral=True)
 
-        ephemeral = not public
-        await interaction.response.defer(thinking=True, ephemeral=ephemeral)
+        ephemeral_flag = not public
+        await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
 
-        target = channel or interaction.guild.get_channel(DEFAULT_CONTEST_CHANNEL_ID)
-        if not isinstance(target, discord.TextChannel):
-            return await interaction.followup.send("Invalid channel.", ephemeral=ephemeral)
+        guild = interaction.guild
+        target_channel = channel or guild.get_channel(DEFAULT_CONTEST_CHANNEL_ID)
 
-        matched = []
-        async for msg in target.history(limit=None):
-            if msg.author.id == BOT_ID:
-                matched.append(msg)
+        if not isinstance(target_channel, discord.TextChannel):
+            return await interaction.followup.send("Invalid channel.", ephemeral=ephemeral_flag)
+
+        matched_msgs = []
+        try:
+            async for msg in target_channel.history(limit=None):
+                if msg.author.id == BOT_ID:
+                    matched_msgs.append(msg)
+        except Exception:
+            traceback.print_exc()
+
+        if not matched_msgs:
+            return await interaction.followup.send("No AI posts found.", ephemeral=ephemeral_flag)
 
         await self._render_ranking(
             interaction,
-            matched,
-            f"🏁 AI Contest Ranking — {target.name}",
-            ephemeral,
-            int(topuser.value) if topuser else 5
+            matched_msgs,
+            title=f"🏁 AI Contest Ranking — {target_channel.name}",
+            ephemeral=ephemeral_flag,
+            limit=int(topuser.value) if topuser else 5
         )
 
     # =====================
@@ -178,7 +210,6 @@ class HutVote(commands.Cog):
             reverse=True
         )
 
-        # ---------- INTRO ----------
         top_unique = []
         seen = set()
         for m in msgs_sorted:
@@ -189,26 +220,29 @@ class HutVote(commands.Cog):
             if len(top_unique) == 3:
                 break
 
-        intro_txt = ""
+        # ---------------------------
+        # Intro Embed
+        # ---------------------------
+        intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
-            intro_txt += f"{medals[i]} {u.display_name}\n"
+            intro += f"{medals[i]} {u.display_name}\n"
 
-        now = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
+        now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")  # YYYY/MM/DD HH:MM UTC
         intro_embed = discord.Embed(
             title=title,
-            description=f"**Top 3 Hut Dwellers:**\n{intro_txt}",
+            description=f"**Top 3 Hut Dwellers:**\n{intro}\n",
             color=discord.Color.blurple()
         )
-        intro_embed.set_footer(text=f"Updated: {now} UTC")
+        intro_embed.set_footer(text=f"Updated: {now_str} UTC")
         await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral)
 
-        # ---------- DETAIL EMBEDS ----------
+        # ---------------------------
+        # Detail Embeds (per post)
+        # ---------------------------
         for idx, m in enumerate(msgs_sorted[:limit], start=1):
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
-
-            channel_url = f"https://discord.com/channels/{guild.id}/{m.channel.id}"
 
             lines = []
             for k, d in breakdown.items():
@@ -217,31 +251,33 @@ class HutVote(commands.Cog):
 
             embed = discord.Embed(
                 title=f"#{idx} — {u.display_name} — {score} pts",
-                description=(
-                    f"**Channel:** [{m.channel.name}]({channel_url})\n"
-                    f"[Jump to Post]({m.jump_url})\n\n"
-                    + "\n".join(lines)
-                ),
+                description=f"[Jump to Post]({m.jump_url})\n\n" + "\n".join(lines),
                 color=discord.Color.teal()
             )
-
             embed.set_thumbnail(url=u.display_avatar.url)
 
+            # Bild Handling
+            img_url = None
             if m.attachments:
-                embed.set_image(url=m.attachments[0].url)
+                img_url = m.attachments[0].url
             else:
                 for e in m.embeds:
                     if e.image and e.image.url:
-                        embed.set_image(url=e.image.url)
+                        img_url = e.image.url
                         break
                     if e.thumbnail and e.thumbnail.url:
-                        embed.set_image(url=e.thumbnail.url)
+                        img_url = e.thumbnail.url
                         break
+            if img_url:
+                embed.set_image(url=img_url)
 
-            embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
+            post_time_str = m.created_at.strftime("%Y/%m/%d %H:%M")
+            embed.set_footer(text=f"Posted: {post_time_str} UTC")
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-        # ---------- FINAL ----------
+        # ---------------------------
+        # Final Top 3 Embed
+        # ---------------------------
         mentions = []
         final_lines = []
         for i, m in enumerate(top_unique):
@@ -250,19 +286,19 @@ class HutVote(commands.Cog):
             mentions.append(u.mention)
             final_lines.append(f"{medals[i]} {u.display_name} — {s} pts")
 
-        final_time = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
+        final_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         await interaction.followup.send(
             content=" ".join(mentions),
             embed=discord.Embed(
-                title=f"🏆 Final Top 3 (as of {final_time} UTC)",
+                title=f"🏆 Final Top 3 (as of {final_str} UTC)",
                 description="\n".join(final_lines),
                 color=discord.Color.gold()
-            ).set_footer(text=f"Timestamp: {final_time} UTC"),
+            ).set_footer(text=f"Timestamp: {final_str} UTC"),
             ephemeral=ephemeral
         )
 
 # =====================
 # SETUP
 # =====================
-async def setup(bot):
+async def setup(bot: commands.Bot):
     await bot.add_cog(HutVote(bot))
