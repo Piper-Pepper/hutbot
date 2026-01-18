@@ -315,7 +315,7 @@ class RiddleEditor(commands.Cog):
 
 
         # 👉 View vorbereiten
-        image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
+        image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
         view = ChampionsView(
             interaction,
             percent_entries,
