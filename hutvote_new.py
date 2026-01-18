@@ -62,7 +62,6 @@ def calc_ai_points(msg: discord.Message):
 
     for r in msg.reactions:
         key = normalize_emoji(r)
-
         if key == STARBOARD_IGNORE_ID:
             continue
 
@@ -229,12 +228,13 @@ class HutVote(commands.Cog):
             u = m.mentions[0] if m.mentions else m.author
             intro += f"{medals[i]} {u.display_name}\n"
 
-        today = datetime.utcnow().strftime("%Y/%m/%d")  # Stand: YYYY/MM/DD
+        now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")  # YYYY/MM/DD HH:MM UTC
         intro_embed = discord.Embed(
             title=title,
-            description=f"**Top 3 Hut Dwellers:**\n{intro}\n\nUpdated: {today}",
+            description=f"**Top 3 Hut Dwellers:**\n{intro}\n\nUpdated: {now_str} UTC",
             color=discord.Color.blurple()
         )
+        intro_embed.set_footer(text=f"Timestamp: {now_str} UTC")
         await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral)
 
         # ---------------------------
@@ -271,6 +271,8 @@ class HutVote(commands.Cog):
             if img_url:
                 embed.set_image(url=img_url)
 
+            post_time_str = m.created_at.strftime("%Y/%m/%d %H:%M")
+            embed.set_footer(text=f"Posted: {post_time_str} UTC")
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
         # ---------------------------
@@ -284,14 +286,14 @@ class HutVote(commands.Cog):
             mentions.append(u.mention)
             final_lines.append(f"{medals[i]} {u.display_name} — {s} pts")
 
-        final_date = datetime.utcnow().strftime("%Y/%m/%d")  # as of YYYY/MM/DD
+        final_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         await interaction.followup.send(
             content=" ".join(mentions),
             embed=discord.Embed(
-                title=f"🏆 Final Top 3 (as of {final_date})",
+                title=f"🏆 Final Top 3 (as of {final_str} UTC)",
                 description="\n".join(final_lines),
                 color=discord.Color.gold()
-            ),
+            ).set_footer(text=f"Timestamp: {final_str} UTC"),
             ephemeral=ephemeral
         )
 
