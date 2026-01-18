@@ -8,7 +8,7 @@ import aiohttp
 import logging
 from typing import Optional
 
-# 🔐 Load secrets first
+# 🔐 Load secrets
 load_dotenv()
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 
@@ -23,24 +23,30 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# =====================
+# CHAMPIONS VIEW (Persistent)
+# =====================
 class ChampionsView(View):
     def __init__(
         self,
-        interaction: discord.Interaction,
+        interaction: Optional[discord.Interaction],
         entries,
         page=0,
         guild: Optional[discord.Guild] = None,
         image_url: Optional[str] = None,
-        total: Optional[int] = None
+        total: Optional[int] = None,
+        persistent: bool = True
     ):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None if persistent else 180)
         self.interaction = interaction
-        self.entries = entries  # Jetzt: (user_id, solved, percent, xp)
+        self.entries = entries
         self.page = page
         self.guild = guild
         self.entries_per_page = 6
         self.max_page = (len(entries) - 1) // self.entries_per_page
-
         self.total_solved = total or sum(e[1] for e in entries)
         self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
         self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058755633772554/riddle_crown.jpg"
@@ -62,11 +68,9 @@ class ChampionsView(View):
         if not page_entries:
             embed.description = "No data available."
         else:
-            # 👑 Top User mit Thumbnail
-            if self.page == 0:
+            if self.page == 0 and page_entries:
                 top_user_id = page_entries[0][0]
                 top_user = None
-
                 if self.guild:
                     try:
                         top_user = await self.guild.fetch_member(top_user_id)
@@ -87,22 +91,19 @@ class ChampionsView(View):
                 else:
                     embed.set_author(name="Top: Unknown User", icon_url=None)
 
-            # 🧾 Formatierte Platzierungen mit Prozent
             for i, (user_id, solved, percent, xp) in enumerate(page_entries, start=start + 1):
                 display_name = "<Unknown>"
                 username = "<Unknown>"
+                user = None
 
-                member = None
                 if self.guild:
                     try:
-                        member = await self.guild.fetch_member(user_id)
+                        user = await self.guild.fetch_member(user_id)
                     except discord.NotFound:
                         try:
-                            member = await self.interaction.client.fetch_user(user_id)
+                            user = await self.interaction.client.fetch_user(user_id)
                         except discord.HTTPException:
                             pass
-
-                user = member or None
 
                 if not user:
                     try:
@@ -112,10 +113,7 @@ class ChampionsView(View):
 
                 if user:
                     display_name = getattr(user, "display_name", user.name)
-                    if user.discriminator == "0":
-                        username = user.name
-                    else:
-                        username = f"{user.name}#{user.discriminator}"
+                    username = user.name if user.discriminator == "0" else f"{user.name}#{user.discriminator}"
 
                 embed.add_field(
                     name=f"🎖️**{i}.** {display_name} *({username})*",
@@ -133,56 +131,51 @@ class ChampionsView(View):
 
         return embed
 
-
-
-
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
     async def prev(self, interaction: Interaction, button: Button):
-        if self.page > 0:
-            self.page -= 1
-            self.prev.disabled = self.page <= 0
-            self.next.disabled = False
-            embed = await self.get_page_embed()
-            await interaction.response.edit_message(embed=embed, view=self)
+        try:
+            if self.page > 0:
+                self.page -= 1
+                self.prev.disabled = self.page <= 0
+                self.next.disabled = False
+                embed = await self.get_page_embed()
+                await interaction.response.edit_message(embed=embed, view=self)
+        except Exception as e:
+            await interaction.followup.send(f"Error navigating: {e}", ephemeral=True)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
     async def next(self, interaction: Interaction, button: Button):
-        if self.page < self.max_page:
-            self.page += 1
-            self.next.disabled = self.page >= self.max_page
-            self.prev.disabled = False
-            embed = await self.get_page_embed()
-            await interaction.response.edit_message(embed=embed, view=self)
+        try:
+            if self.page < self.max_page:
+                self.page += 1
+                self.next.disabled = self.page >= self.max_page
+                self.prev.disabled = False
+                embed = await self.get_page_embed()
+                await interaction.response.edit_message(embed=embed, view=self)
+        except Exception as e:
+            await interaction.followup.send(f"Error navigating: {e}", ephemeral=True)
 
-
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# 📤 Modal for Riddle Editing
+# =====================
+# RIDDLE EDIT MODAL
+# =====================
 class RiddleEditModal(Modal, title="Edit Riddle"):
     def __init__(self, data, guild: discord.Guild):
         super().__init__()
         self.guild = guild
-
         self.text = TextInput(label="Text", default=data.get("text", ""), required=True, style=discord.TextStyle.paragraph)
         self.solution = TextInput(label="Solution", default=data.get("solution", ""), required=True, style=discord.TextStyle.paragraph)
         self.award = TextInput(label="Award", default=data.get("award", ""), required=False)
         self.image_url = TextInput(label="Image URL", default=data.get("image-url", ""), required=False)
         self.solution_url = TextInput(label="Solution Image URL", default=data.get("solution-url", ""), required=False)
-
         self.add_item(self.text)
         self.add_item(self.solution)
         self.add_item(self.award)
         self.add_item(self.image_url)
         self.add_item(self.solution_url)
-
-        self.button_id = data.get("button-id", "")  # 👈 merken für später
+        self.button_id = data.get("button-id", "")
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ⏳ Tell Discord "hold on"
         await interaction.response.defer(ephemeral=True)
-
         updated_data = {
             "text": self.text.value,
             "solution": self.solution.value,
@@ -192,7 +185,6 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
             "button-id": self.button_id,
             "riddler": str(interaction.user.id)
         }
-
         logger.info(f"[Modal Submit] New Data: {updated_data}")
 
         async with aiohttp.ClientSession() as session:
@@ -208,22 +200,22 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
                 logger.exception("Network error while saving:")
                 await interaction.followup.send(f"❌ Network error: {e}", ephemeral=True)
 
-
+# =====================
+# RIDDLE EDITOR COG
+# =====================
 class RiddleEditor(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # ---------------------
+    # /riddle command
+    # ---------------------
     @app_commands.command(name="riddle", description="Load and edit the current riddle.")
     @app_commands.describe(mention="Optional group to tag (will be stored)")
     async def riddle(self, interaction: discord.Interaction, mention: Optional[discord.Role] = None):
-        required_role_id = 1393762463861702787  # ✅ Richtige Rolle
-
-        # Prüfen, ob User die Rolle besitzt
+        required_role_id = 1393762463861702787
         if not any(role.id == required_role_id for role in interaction.user.roles):
-            await interaction.response.send_message(
-                "🚫 You don’t have permission to use this command.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("🚫 You don’t have permission to use this command.", ephemeral=True)
             return
 
         logger.info(f"[Slash Command] /riddle by {interaction.user}")
@@ -235,31 +227,29 @@ class RiddleEditor(commands.Cog):
                         logger.error(f"Error loading: {response.status} – {await response.text()}")
                         await interaction.response.send_message("❌ Error loading the riddle.", ephemeral=True)
                         return
-
                     data = await response.json()
                     record = data.get("record", {})
-
                     if not record:
                         await interaction.response.send_message("❌ No riddle data found.", ephemeral=True)
                         return
 
                     # Optional: Rolle speichern
                     if mention:
-                        logger.info(f"Saving mention role {mention.name} ({mention.id}) as button-id")
                         record["button-id"] = str(mention.id)
                         async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=record) as update_response:
                             if update_response.status != 200:
                                 await interaction.response.send_message("❌ Failed to store role mention.", ephemeral=True)
                                 return
 
-                    # Modal zeigen
                     modal = RiddleEditModal(data=record, guild=interaction.guild)
                     await interaction.response.send_modal(modal)
-
             except aiohttp.ClientError as e:
                 logger.exception("Network error while loading:")
                 await interaction.response.send_message(f"❌ Network error while loading: {e}", ephemeral=True)
 
+    # ---------------------
+    # /riddle_champ command
+    # ---------------------
     @app_commands.command(name="riddle_champ", description="Show the top users by solved riddles.")
     @app_commands.describe(
         visible="Show publicly in channel or only to you (default: False)",
@@ -273,7 +263,6 @@ class RiddleEditor(commands.Cog):
         image: Optional[str] = None,
         mention: Optional[discord.Role] = None,
     ):
-        """Show leaderboard of top users by solved riddles."""
         await interaction.response.defer(ephemeral=not visible)
 
         async with aiohttp.ClientSession() as session:
@@ -287,7 +276,6 @@ class RiddleEditor(commands.Cog):
                 await interaction.followup.send(f"❌ Network error: {e}", ephemeral=True)
                 return
 
-        # 🔍 Daten vorbereiten
         raw_data = data.get("record", data)
         entries = []
         for uid, stats in raw_data.items():
@@ -295,39 +283,17 @@ class RiddleEditor(commands.Cog):
             xp = stats.get("xp", 0)
             entries.append((int(uid), solved, xp))
 
-        # Sortierung: zuerst solved (absteigend), bei Gleichstand dann xp (auch absteigend)
         entries.sort(key=lambda x: (x[1], x[2]), reverse=True)
-
         if not entries:
             await interaction.followup.send("No champions yet!", ephemeral=True)
             return
 
-        # ✅ Neue Info: Gesamtsumme
         total_solved = sum(solved for _, solved, _ in entries)
+        percent_entries = [(uid, solved, (solved / total_solved * 100 if total_solved else 0), xp) for uid, solved, xp in entries]
 
-
-        # Prozentanteile berechnen
-        percent_entries = []
-        for uid, solved, xp in entries:
-            percent = (solved / total_solved * 100) if total_solved > 0 else 0
-            percent_entries.append((uid, solved, percent, xp))
-
-
-
-        # 👉 View vorbereiten
-        image_url = image or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
-        view = ChampionsView(
-            interaction,
-            percent_entries,
-            guild=interaction.guild,
-            image_url=image_url,
-            total=total_solved
-        )
-
-        # Embed vorbereiten (noch ohne Detail)
+        view = ChampionsView(interaction, percent_entries, guild=interaction.guild, image_url=image, total=total_solved)
         embed = await view.get_page_embed()
 
-        # 📣 Optionale Pings kombinieren
         mention_text = ""
         if visible:
             mentions = [f"<@&1380610400416043089>"]
@@ -335,15 +301,13 @@ class RiddleEditor(commands.Cog):
                 mentions.append(mention.mention)
             mention_text = " ".join(mentions)
 
-        # 📨 Abschicken
-        await interaction.followup.send(
-            content=mention_text or None,
-            embed=embed,
-            view=view,
-            ephemeral=not visible
-        )
+        await interaction.followup.send(content=mention_text or None, embed=embed, view=view, ephemeral=not visible)
 
-
-# 🚀 Setup
+# =====================
+# SETUP
+# =====================
 async def setup(bot: commands.Bot):
+    # Persistent view registrieren
+    bot.add_view(ChampionsView(interaction=None, entries=[], guild=None))
     await bot.add_cog(RiddleEditor(bot))
+    print(f"RiddleEditor loaded and persistent views registered")
