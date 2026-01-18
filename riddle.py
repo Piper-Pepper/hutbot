@@ -42,8 +42,8 @@ class ChampionsView(View):
         self.max_page = (len(entries) - 1) // self.entries_per_page
 
         self.total_solved = total or sum(e[1] for e in entries)
-        self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1391058634099785892/riddle_sexy.jpg"
-        self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1391058755633772554/riddle_crown.jpg"
+        self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
+        self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1462484539128680715/riddle_porn01.gif"
 
         self.prev.disabled = self.page <= 0
         self.next.disabled = self.page >= self.max_page
