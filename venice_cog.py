@@ -381,15 +381,15 @@ class PostGenerationView(discord.ui.View):
         self.add_item(del_reuse_btn)
 
         # SFW only: submit to gallery
-        if isinstance(message.channel, discord.TextChannel) and message.channel.id == SFW_CHANNEL:
-            submit_btn = discord.ui.Button(
-                label="Submit Character",
-                style=discord.ButtonStyle.blurple,
-                row=1,
-                emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")
-            )
-            submit_btn.callback = self.post_gallery_callback
-            self.add_item(submit_btn)
+        # if isinstance(message.channel, discord.TextChannel) and message.channel.id == SFW_CHANNEL:
+        #     submit_btn = discord.ui.Button(
+        #         label="Submit Character",
+        #         style=discord.ButtonStyle.blurple,
+        #         row=1,
+        #         emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")
+        #     )
+        #     submit_btn.callback = self.post_gallery_callback
+        #     self.add_item(submit_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
