@@ -48,6 +48,8 @@ EMOJI_POINTS = {
     CUSTOM_5_EMOJI_ID: 5,
 }
 
+IGNORE_IDS = {1292194320786522223}  # ID, die überall ignoriert wird
+
 # =====================
 # HELPER
 # =====================
@@ -57,6 +59,7 @@ def normalize_emoji(r):
     return str(r.emoji)
 
 def calc_ai_points(msg: discord.Message):
+    """Berechnet Punkte für eine Nachricht basierend auf Reaktionen."""
     breakdown = {}
     score = 0
 
@@ -204,15 +207,30 @@ class HutVote(commands.Cog):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
 
+        # Sortieren nach Punkten
         msgs_sorted = sorted(
             msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
         )
 
+        # Filter ignorierte User komplett
+        filtered_msgs = []
+        for m in msgs_sorted:
+            u = m.mentions[0] if m.mentions else m.author
+            if u.id in IGNORE_IDS or u.name == "Deleted User":
+                continue
+            filtered_msgs.append(m)
+
+        if not filtered_msgs:
+            return await interaction.followup.send("No AI posts found after filtering.", ephemeral=ephemeral)
+
+        # ---------------------------
+        # Top 3 Unique User
+        # ---------------------------
         top_unique = []
         seen = set()
-        for m in msgs_sorted:
+        for m in filtered_msgs:
             u = m.mentions[0] if m.mentions else m.author
             if u.id not in seen:
                 top_unique.append(m)
@@ -228,7 +246,7 @@ class HutVote(commands.Cog):
             u = m.mentions[0] if m.mentions else m.author
             intro += f"{medals[i]} {u.display_name}\n"
 
-        now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")  # YYYY/MM/DD HH:MM UTC
+        now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         intro_embed = discord.Embed(
             title=title,
             description=f"**Top 3 Hut Dwellers:**\n{intro}\n",
@@ -240,7 +258,7 @@ class HutVote(commands.Cog):
         # ---------------------------
         # Detail Embeds (per post)
         # ---------------------------
-        for idx, m in enumerate(msgs_sorted[:limit], start=1):
+        for idx, m in enumerate(filtered_msgs[:limit], start=1):
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
 
