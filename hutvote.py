@@ -48,7 +48,7 @@ EMOJI_POINTS = {
     CUSTOM_5_EMOJI_ID: 5,
 }
 
-IGNORE_IDS = {1292194320786522223}  # ID, die überall ignoriert wird
+IGNORE_IDS = {1292194320786522223}  # IDs, die aus Top 3 und Mentions ignoriert werden
 
 # =====================
 # HELPER
@@ -214,24 +214,15 @@ class HutVote(commands.Cog):
             reverse=True
         )
 
-        # Filter ignorierte User komplett
-        filtered_msgs = []
+        # ---------------------------
+        # Top 3 Unique User (nur für Mentions / Top 3)
+        # ---------------------------
+        top_unique = []
+        seen = set()
         for m in msgs_sorted:
             u = m.mentions[0] if m.mentions else m.author
             if u.id in IGNORE_IDS or u.name == "Deleted User":
                 continue
-            filtered_msgs.append(m)
-
-        if not filtered_msgs:
-            return await interaction.followup.send("No AI posts found after filtering.", ephemeral=ephemeral)
-
-        # ---------------------------
-        # Top 3 Unique User
-        # ---------------------------
-        top_unique = []
-        seen = set()
-        for m in filtered_msgs:
-            u = m.mentions[0] if m.mentions else m.author
             if u.id not in seen:
                 top_unique.append(m)
                 seen.add(u.id)
@@ -239,7 +230,7 @@ class HutVote(commands.Cog):
                 break
 
         # ---------------------------
-        # Intro Embed
+        # Intro Embed (Top 3)
         # ---------------------------
         intro = ""
         for i, m in enumerate(top_unique):
@@ -256,9 +247,9 @@ class HutVote(commands.Cog):
         await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral)
 
         # ---------------------------
-        # Detail Embeds (per post)
+        # Detail Embeds (alle Posts inklusive Bilder)
         # ---------------------------
-        for idx, m in enumerate(filtered_msgs[:limit], start=1):
+        for idx, m in enumerate(msgs_sorted[:limit], start=1):
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
 
@@ -274,7 +265,7 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=u.display_avatar.url)
 
-            # Bild Handling
+            # Bild Handling – **alle Bilder werden gepostet**
             img_url = None
             if m.attachments:
                 img_url = m.attachments[0].url
