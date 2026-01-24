@@ -254,7 +254,7 @@ class HutVote(commands.Cog):
         intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
-            intro += f"{u.display_name} ({medals[i]})\n"
+            intro += f"{medals[i]} {u.display_name}\n"
 
         now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         await interaction.followup.send(
@@ -293,7 +293,7 @@ class HutVote(commands.Cog):
                 lines.append(f"{emoji} × {d['votes']} → {d['points']} pts")
 
             embed = discord.Embed(
-                title=f"#{number}{medal} — {u.display_name} — {score} pts",
+                title=f"#{number} — {u.display_name} {medal} — {score} pts",
                 description=f"[Jump to Post 🎖️(**VOTE**🎖️)]({m.jump_url})\n\n" + "\n".join(lines),
                 color=discord.Color.gold() if medal else discord.Color.teal()
             )
