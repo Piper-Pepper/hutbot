@@ -237,7 +237,7 @@ class HutVote(commands.Cog):
         # --- Anzeige-Reihenfolge
         display_msgs = top_msgs if sort_order == "desc" else list(reversed(top_msgs))
 
-        # -------- Top 3 Unique --------
+        # -------- Top 3 Unique, bereinigt ----------
         top_unique = []
         seen = set()
         for m in ranked_msgs:
@@ -267,20 +267,25 @@ class HutVote(commands.Cog):
         )
 
         # -------- Detail Embeds --------
-        for display_index, m in enumerate(display_msgs):
-            global_rank = ranked_msgs.index(m)  # 0 = bestes Bild weltweit
+        top_user_ids = [m.mentions[0].id if m.mentions else m.author.id for m in top_unique]
 
-            # Nummerierung: immer 1 = bestes Bild
+        for display_index, m in enumerate(display_msgs):
+            u = m.mentions[0] if m.mentions else m.author
+
+            # Nummerierung: immer 1 = bestes Bild in der Anzeige
             if sort_order == "desc":
                 number = display_index + 1
-            else:  # asc
+            else:
                 number = limit - display_index
 
-            # Medaille nach globalem Rang
-            medal = medals[global_rank] if global_rank < 3 else ""
+            # Medaille nur, wenn dieser User in Top-3 Unique ist
+            if u.id in top_user_ids:
+                medal_index = top_user_ids.index(u.id)
+                medal = medals[medal_index]
+            else:
+                medal = ""
 
             score, breakdown, _ = calc_ai_points(m)
-            u = m.mentions[0] if m.mentions else m.author
 
             lines = []
             for k, d in breakdown.items():
