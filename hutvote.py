@@ -254,7 +254,7 @@ class HutVote(commands.Cog):
         intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
-            intro += f"{medals[i]} {u.display_name}\n"
+            intro += f"{u.display_name} ({medals[i]})\n"
 
         now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         await interaction.followup.send(
