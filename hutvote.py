@@ -28,6 +28,12 @@ TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
     app_commands.Choice(name="Top 10", value="10"),
     app_commands.Choice(name="Top 20", value="20"),
+    app_commands.Choice(name="Top 40", value="40"),
+]
+
+SORT_CHOICES = [
+    app_commands.Choice(name="Ascending (1 → X)", value="asc"),
+    app_commands.Choice(name="Descending (X → 1)", value="desc"),
 ]
 
 current_year = datetime.utcnow().year
@@ -48,7 +54,7 @@ EMOJI_POINTS = {
     CUSTOM_5_EMOJI_ID: 5,
 }
 
-IGNORE_IDS = {1292194320786522223}  # IDs, die aus Top 3 und Mentions ignoriert werden
+IGNORE_IDS = {1292194320786522223}
 
 # =====================
 # HELPER
@@ -59,7 +65,6 @@ def normalize_emoji(r):
     return str(r.emoji)
 
 def calc_ai_points(msg: discord.Message):
-    """Berechnet Punkte für eine Nachricht basierend auf Reaktionen."""
     breakdown = {}
     score = 0
 
@@ -100,15 +105,22 @@ class HutVote(commands.Cog):
         year="Select year",
         month="Select month",
         topuser="Number of top posts to display",
+        sort="Sort order",
         public="Whether the result is public or ephemeral"
     )
-    @app_commands.choices(year=YEAR_CHOICES, month=MONTH_CHOICES, topuser=TOPUSER_CHOICES)
+    @app_commands.choices(
+        year=YEAR_CHOICES,
+        month=MONTH_CHOICES,
+        topuser=TOPUSER_CHOICES,
+        sort=SORT_CHOICES
+    )
     async def ai_vote(
         self,
         interaction: discord.Interaction,
         year: app_commands.Choice[str],
         month: app_commands.Choice[str],
         topuser: app_commands.Choice[str] = None,
+        sort: app_commands.Choice[str] = None,
         public: bool = False
     ):
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
@@ -119,6 +131,7 @@ class HutVote(commands.Cog):
 
         year_v = int(year.value)
         month_v = int(month.value)
+
         start_dt = datetime(year_v, month_v, 1, tzinfo=timezone.utc)
         end_dt = datetime(
             year_v, month_v,
@@ -149,7 +162,8 @@ class HutVote(commands.Cog):
             matched_msgs,
             title=f"🤖 AI Top — {calendar.month_name[month_v]} {year_v}",
             ephemeral=ephemeral_flag,
-            limit=int(topuser.value) if topuser else 5
+            limit=int(topuser.value) if topuser else 5,
+            sort_order=sort.value if sort else "asc"
         )
 
     # =====================
@@ -157,16 +171,18 @@ class HutVote(commands.Cog):
     # =====================
     @app_commands.command(name="ai_contest", description="Shows AI contest ranking for a single channel")
     @app_commands.describe(
-        channel="Channel to scan (defaults to contest channel)",
+        channel="Channel to scan",
         topuser="Number of top posts to display",
+        sort="Sort order",
         public="Whether the result is public or ephemeral"
     )
-    @app_commands.choices(topuser=TOPUSER_CHOICES)
+    @app_commands.choices(topuser=TOPUSER_CHOICES, sort=SORT_CHOICES)
     async def ai_contest(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel = None,
         topuser: app_commands.Choice[str] = None,
+        sort: app_commands.Choice[str] = None,
         public: bool = False
     ):
         if not any(r.id == ALLOWED_ROLE for r in getattr(interaction.user, "roles", [])):
@@ -197,26 +213,28 @@ class HutVote(commands.Cog):
             matched_msgs,
             title=f"🏁 AI Contest Ranking — {target_channel.name}",
             ephemeral=ephemeral_flag,
-            limit=int(topuser.value) if topuser else 5
+            limit=int(topuser.value) if topuser else 5,
+            sort_order=sort.value if sort else "asc"
         )
 
     # =====================
     # SHARED OUTPUT
     # =====================
-    async def _render_ranking(self, interaction, msgs, title, ephemeral, limit):
+    async def _render_ranking(self, interaction, msgs, title, ephemeral, limit, sort_order):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
 
-        # Sortieren nach Punkten
         msgs_sorted = sorted(
             msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
         )
 
-        # ---------------------------
-        # Top 3 Unique User (nur für Mentions / Top 3)
-        # ---------------------------
+        display_msgs = msgs_sorted[:limit]
+        if sort_order == "desc":
+            display_msgs = list(reversed(display_msgs))
+
+        # -------- Top 3 Unique --------
         top_unique = []
         seen = set()
         for m in msgs_sorted:
@@ -229,27 +247,23 @@ class HutVote(commands.Cog):
             if len(top_unique) == 3:
                 break
 
-        # ---------------------------
-        # Intro Embed (Top 3)
-        # ---------------------------
         intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
             intro += f"{medals[i]} {u.display_name}\n"
 
         now_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
-        intro_embed = discord.Embed(
-            title=title,
-            description=f"**Top 3 Hut Dwellers:**\n{intro}\n",
-            color=discord.Color.blurple()
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title=title,
+                description=f"**Top 3 Hut Dwellers:**\n{intro}",
+                color=discord.Color.blurple()
+            ).set_footer(text=f"Updated: {now_str} UTC"),
+            ephemeral=ephemeral
         )
-        intro_embed.set_footer(text=f"Updated: {now_str} UTC")
-        await interaction.followup.send(embed=intro_embed, ephemeral=ephemeral)
 
-        # ---------------------------
-        # Detail Embeds (alle Posts inklusive Bilder)
-        # ---------------------------
-        for idx, m in enumerate(msgs_sorted[:limit], start=1):
+        # -------- Detail Embeds --------
+        for idx, m in enumerate(display_msgs, start=1):
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
 
@@ -265,46 +279,16 @@ class HutVote(commands.Cog):
             )
             embed.set_thumbnail(url=u.display_avatar.url)
 
-            # Bild Handling – **alle Bilder werden gepostet**
-            img_url = None
             if m.attachments:
-                img_url = m.attachments[0].url
+                embed.set_image(url=m.attachments[0].url)
             else:
                 for e in m.embeds:
                     if e.image and e.image.url:
-                        img_url = e.image.url
+                        embed.set_image(url=e.image.url)
                         break
-                    if e.thumbnail and e.thumbnail.url:
-                        img_url = e.thumbnail.url
-                        break
-            if img_url:
-                embed.set_image(url=img_url)
 
-            post_time_str = m.created_at.strftime("%Y/%m/%d %H:%M")
-            embed.set_footer(text=f"Posted: {post_time_str} UTC")
+            embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
-
-        # ---------------------------
-        # Final Top 3 Embed
-        # ---------------------------
-        mentions = []
-        final_lines = []
-        for i, m in enumerate(top_unique):
-            u = m.mentions[0] if m.mentions else m.author
-            s, _, _ = calc_ai_points(m)
-            mentions.append(u.mention)
-            final_lines.append(f"{medals[i]} {u.display_name} — {s} pts")
-
-        final_str = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
-        await interaction.followup.send(
-            content=" ".join(mentions),
-            embed=discord.Embed(
-                title=f"🏆 Final Top 3 (as of {final_str} UTC)",
-                description="\n".join(final_lines),
-                color=discord.Color.gold()
-            ).set_footer(text=f"Timestamp: {final_str} UTC"),
-            ephemeral=ephemeral
-        )
 
 # =====================
 # SETUP
