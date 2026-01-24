@@ -224,20 +224,34 @@ class HutVote(commands.Cog):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
 
-        msgs_sorted = sorted(
+        # --- echtes Ranking (bestes Bild = Index 0)
+        ranked_msgs = sorted(
             msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
         )
 
-        display_msgs = msgs_sorted[:limit]
-        if sort_order == "desc":
-            display_msgs = list(reversed(display_msgs))
+        top_msgs = ranked_msgs[:limit]
+
+        # --- Anzeige-Reihenfolge
+        if sort_order == "asc":
+            display_msgs = list(reversed(top_msgs))
+        else:
+            display_msgs = top_msgs
+
+        # --- Hilfsfunktionen
+        def get_medal(real_rank: int) -> str:
+            return medals[real_rank] if real_rank < 3 else ""
+
+        def get_display_number(real_rank: int) -> int:
+            if sort_order == "desc":
+                return limit - real_rank
+            return real_rank + 1
 
         # -------- Top 3 Unique --------
         top_unique = []
         seen = set()
-        for m in msgs_sorted:
+        for m in ranked_msgs:
             u = m.mentions[0] if m.mentions else m.author
             if u.id in IGNORE_IDS or u.name == "Deleted User":
                 continue
@@ -263,7 +277,11 @@ class HutVote(commands.Cog):
         )
 
         # -------- Detail Embeds --------
-        for idx, m in enumerate(display_msgs, start=1):
+        for m in display_msgs:
+            real_rank = ranked_msgs.index(m)
+            number = get_display_number(real_rank)
+            medal = get_medal(real_rank)
+
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
 
@@ -273,9 +291,9 @@ class HutVote(commands.Cog):
                 lines.append(f"{emoji} × {d['votes']} → {d['points']} pts")
 
             embed = discord.Embed(
-                title=f"#{idx} — {u.display_name} — {score} pts",
-                description=f"[Jump to Post🎖️(**VOTE**🎖️)]({m.jump_url})\n\n" + "\n".join(lines),
-                color=discord.Color.teal()
+                title=f"#{number}{medal} — {u.display_name} — {score} pts",
+                description=f"[Jump to Post 🎖️(**VOTE**🎖️)]({m.jump_url})\n\n" + "\n".join(lines),
+                color=discord.Color.gold() if medal else discord.Color.teal()
             )
             embed.set_thumbnail(url=u.display_avatar.url)
 
