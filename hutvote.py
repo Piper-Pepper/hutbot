@@ -224,7 +224,7 @@ class HutVote(commands.Cog):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
 
-        # --- globales Ranking (bestes Bild zuerst)
+        # --- globales Ranking (bestes Bild = Index 0)
         ranked_msgs = sorted(
             msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
@@ -250,6 +250,7 @@ class HutVote(commands.Cog):
             if len(top_unique) == 3:
                 break
 
+        # --- Intro Embed (Top 3) ---
         intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
@@ -268,15 +269,14 @@ class HutVote(commands.Cog):
         # -------- Detail Embeds --------
         for display_index, m in enumerate(display_msgs):
             global_rank = ranked_msgs.index(m)  # 0 = bestes Bild weltweit
-            local_rank = display_index          # 0…limit-1 innerhalb Top X
 
-            # Nummerierung
+            # Nummerierung: immer 1 = bestes Bild
             if sort_order == "desc":
-                number = local_rank + 1
-            else:
-                number = limit - local_rank
+                number = display_index + 1
+            else:  # asc
+                number = limit - display_index
 
-            # Medaille nur nach globalem Rang
+            # Medaille nach globalem Rang
             medal = medals[global_rank] if global_rank < 3 else ""
 
             score, breakdown, _ = calc_ai_points(m)
@@ -305,6 +305,25 @@ class HutVote(commands.Cog):
             embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
+        # -------- Final Top 3 Mentions --------
+        final_mentions = []
+        final_lines = []
+        for i, m in enumerate(top_unique):
+            u = m.mentions[0] if m.mentions else m.author
+            score, _, _ = calc_ai_points(m)
+            final_mentions.append(u.mention)
+            final_lines.append(f"{medals[i]} {u.display_name} — {score} pts")
+
+        final_time = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
+        await interaction.followup.send(
+            content=" ".join(final_mentions),
+            embed=discord.Embed(
+                title=f"🏆 Final Top 3 (as of {final_time} UTC)",
+                description="\n".join(final_lines),
+                color=discord.Color.gold()
+            ).set_footer(text=f"Timestamp: {final_time} UTC"),
+            ephemeral=ephemeral
+        )
 
 # =====================
 # SETUP
