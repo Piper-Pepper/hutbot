@@ -260,7 +260,7 @@ class HutVote(commands.Cog):
 
             embed = discord.Embed(
                 title=f"#{idx} — {u.display_name} — {score} pts",
-                description=f"[Jump to Post]({m.jump_url})\n\n" + "\n".join(lines),
+                description=f"[Jump to Post🎖️(**VOTE**🎖️)]({m.jump_url})\n\n" + "\n".join(lines),
                 color=discord.Color.teal()
             )
             embed.set_thumbnail(url=u.display_avatar.url)
