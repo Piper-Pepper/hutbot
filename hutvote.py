@@ -224,29 +224,18 @@ class HutVote(commands.Cog):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
 
-        # --- echtes Ranking (bestes Bild = Index 0)
+        # --- globales Ranking (bestes Bild zuerst)
         ranked_msgs = sorted(
             msgs,
             key=lambda m: (calc_ai_points(m)[0], m.created_at),
             reverse=True
         )
 
+        # --- Top X
         top_msgs = ranked_msgs[:limit]
 
         # --- Anzeige-Reihenfolge
-        if sort_order == "asc":
-            display_msgs = list(reversed(top_msgs))
-        else:
-            display_msgs = top_msgs
-
-        # --- Hilfsfunktionen
-        def get_medal(real_rank: int) -> str:
-            return medals[real_rank] if real_rank < 3 else ""
-
-        def get_display_number(real_rank: int) -> int:
-            if sort_order == "desc":
-                return limit - real_rank
-            return real_rank + 1
+        display_msgs = top_msgs if sort_order == "desc" else list(reversed(top_msgs))
 
         # -------- Top 3 Unique --------
         top_unique = []
@@ -277,10 +266,18 @@ class HutVote(commands.Cog):
         )
 
         # -------- Detail Embeds --------
-        for m in display_msgs:
-            real_rank = ranked_msgs.index(m)
-            number = get_display_number(real_rank)
-            medal = get_medal(real_rank)
+        for display_index, m in enumerate(display_msgs):
+            global_rank = ranked_msgs.index(m)  # 0 = bestes Bild weltweit
+            local_rank = display_index          # 0…limit-1 innerhalb Top X
+
+            # Nummerierung
+            if sort_order == "desc":
+                number = local_rank + 1
+            else:
+                number = limit - local_rank
+
+            # Medaille nur nach globalem Rang
+            medal = medals[global_rank] if global_rank < 3 else ""
 
             score, breakdown, _ = calc_ai_points(m)
             u = m.mentions[0] if m.mentions else m.author
@@ -307,6 +304,7 @@ class HutVote(commands.Cog):
 
             embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+
 
 # =====================
 # SETUP
