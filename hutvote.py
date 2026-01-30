@@ -64,41 +64,45 @@ def normalize_emoji(r):
         return r.emoji.id
     return str(r.emoji)
 
+
 def calc_ai_points(msg: discord.Message):
     """
-    Berechnet Punkte für einen AI-Post.
-    - Bot-Emojis (1,2,3,CUSTOM_5) zählen erst ab dem 2. Vote.
-    - Alle anderen Reaktionen zählen ab dem ersten Vote.
+    Punkte + Emoji-Gesamtanzahl.
+    - Bot-Emojis zählen erst ab Vote #2
+    - Andere Emojis zählen ab Vote #1
     """
     breakdown = {}
     score = 0
+    emoji_total = 0
 
     for r in msg.reactions:
         key = normalize_emoji(r)
 
-        # Ignore Starboard-Emoji
         if str(key) == str(STARBOARD_IGNORE_ID):
             continue
 
         votes = r.count
 
         if key in EMOJI_POINTS:
-            # automatische Emojis: der erste Vote vom Bot zählt nicht
             extra_votes = max(votes - 1, 0)
             if extra_votes <= 0:
                 continue
+
             points = extra_votes * EMOJI_POINTS[key]
             breakdown[key] = {"votes": extra_votes, "points": points}
             score += points
+            emoji_total += extra_votes
+
         else:
-            # alle anderen Emojis zählen ab 1
             points = votes
             breakdown.setdefault("Various", {"votes": 0, "points": 0})
             breakdown["Various"]["votes"] += votes
             breakdown["Various"]["points"] += points
             score += points
+            emoji_total += votes
 
-    return score, breakdown, False
+    return score, breakdown, emoji_total
+
 
 # =====================
 # COG
@@ -228,26 +232,21 @@ class HutVote(commands.Cog):
         )
 
     # =====================
-    # SHARED OUTPUT
+    # RANKING CORE
     # =====================
     async def _render_ranking(self, interaction, msgs, title, ephemeral, limit, sort_order):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
 
-        # --- globales Ranking (bestes Bild = Index 0)
-        ranked_msgs = sorted(
-            msgs,
-            key=lambda m: (calc_ai_points(m)[0], m.created_at),
-            reverse=True
-        )
+        def sort_key(m):
+            score, _, emoji_total = calc_ai_points(m)
+            return (score, emoji_total, m.created_at)
 
-        # --- Top X
+        ranked_msgs = sorted(msgs, key=sort_key, reverse=True)
         top_msgs = ranked_msgs[:limit]
-
-        # --- Anzeige-Reihenfolge
         display_msgs = top_msgs if sort_order == "desc" else list(reversed(top_msgs))
 
-        # -------- Top 3 Unique, bereinigt ----------
+        # -------- Top 3 Unique ----------
         top_unique = []
         seen = set()
         for m in ranked_msgs:
@@ -260,7 +259,6 @@ class HutVote(commands.Cog):
             if len(top_unique) == 3:
                 break
 
-        # --- Intro Embed (Top 3) ---
         intro = ""
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
@@ -276,26 +274,35 @@ class HutVote(commands.Cog):
             ephemeral=ephemeral
         )
 
-        # -------- Detail Embeds --------
+        # -------- Rank Numbers with Tie Handling ----------
+        rank_map = {}
+        last_score = None
+        last_emoji = None
+        current_rank = 0
+
+        for idx, m in enumerate(ranked_msgs, start=1):
+            score, _, emoji_total = calc_ai_points(m)
+
+            if score == last_score and emoji_total == last_emoji:
+                rank_map[m.id] = current_rank
+            else:
+                current_rank = idx
+                rank_map[m.id] = current_rank
+                last_score = score
+                last_emoji = emoji_total
+
         top_user_ids = [m.mentions[0].id if m.mentions else m.author.id for m in top_unique]
 
-        for display_index, m in enumerate(display_msgs):
+        # -------- Detail Embeds ----------
+        for m in display_msgs:
             u = m.mentions[0] if m.mentions else m.author
+            score, breakdown, emoji_total = calc_ai_points(m)
 
-            # Nummerierung: immer 1 = bestes Bild in der Anzeige
-            if sort_order == "desc":
-                number = display_index + 1
-            else:
-                number = limit - display_index
+            rank_number = rank_map[m.id]
 
-            # Medaille nur, wenn dieser User in Top-3 Unique ist
+            medal = ""
             if u.id in top_user_ids:
-                medal_index = top_user_ids.index(u.id)
-                medal = medals[medal_index]
-            else:
-                medal = ""
-
-            score, breakdown, _ = calc_ai_points(m)
+                medal = medals[top_user_ids.index(u.id)]
 
             lines = []
             for k, d in breakdown.items():
@@ -303,10 +310,11 @@ class HutVote(commands.Cog):
                 lines.append(f"{emoji} × {d['votes']} → {d['points']} pts")
 
             embed = discord.Embed(
-                title=f"#{number} — {u.display_name} {medal} — {score} pts",
+                title=f"#{rank_number} — {u.display_name} {medal} — {score} pts ({emoji_total} 😀)",
                 description=f"[Jump to Post 🎖️(**VOTE**🎖️)]({m.jump_url})\n\n" + "\n".join(lines),
                 color=discord.Color.gold() if medal else discord.Color.teal()
             )
+
             embed.set_thumbnail(url=u.display_avatar.url)
 
             if m.attachments:
@@ -320,14 +328,14 @@ class HutVote(commands.Cog):
             embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
             await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-        # -------- Final Top 3 Mentions --------
+        # -------- Final Top 3 ----------
         final_mentions = []
         final_lines = []
         for i, m in enumerate(top_unique):
             u = m.mentions[0] if m.mentions else m.author
-            score, _, _ = calc_ai_points(m)
+            score, _, emoji_total = calc_ai_points(m)
             final_mentions.append(u.mention)
-            final_lines.append(f"{medals[i]} {u.display_name} — {score} pts")
+            final_lines.append(f"{medals[i]} {u.display_name} — {score} pts ({emoji_total} 😀)")
 
         final_time = datetime.utcnow().strftime("%Y/%m/%d %H:%M")
         await interaction.followup.send(
@@ -336,9 +344,10 @@ class HutVote(commands.Cog):
                 title=f"🏆 Final Top 3 (as of {final_time} UTC)",
                 description="\n".join(final_lines),
                 color=discord.Color.gold()
-            ).set_footer(text=f"Timestamp: {final_time} UTC"),
+            ),
             ephemeral=ephemeral
         )
+
 
 # =====================
 # SETUP
