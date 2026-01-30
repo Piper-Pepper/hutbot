@@ -53,6 +53,9 @@ VARIANT_MAP = {
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
+        # NEU HINZUGEFÜGT
+        {"label": "Nano Banana Pro🍌", "model": "nano-banana-pro"},
+        {"label": "Seedream v4.5✨", "model": "seedream-v4.5"},
     ] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
@@ -60,8 +63,12 @@ VARIANT_MAP = {
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
+        # NEU HINZUGEFÜGT
+        {"label": "Nano Banana Pro🍌", "model": "nano-banana-pro"},
+        {"label": "Seedream v4.5✨", "model": "seedream-v4.5"},
     ]
 }
+
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
