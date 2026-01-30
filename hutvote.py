@@ -65,28 +65,38 @@ def normalize_emoji(r):
     return str(r.emoji)
 
 def calc_ai_points(msg: discord.Message):
+    """
+    Berechnet Punkte für einen AI-Post.
+    - Bot-Emojis (1,2,3,CUSTOM_5) zählen erst ab dem 2. Vote.
+    - Alle anderen Reaktionen zählen ab dem ersten Vote.
+    """
     breakdown = {}
     score = 0
 
     for r in msg.reactions:
         key = normalize_emoji(r)
-        if key == STARBOARD_IGNORE_ID:
+
+        # Ignore Starboard-Emoji
+        if str(key) == str(STARBOARD_IGNORE_ID):
             continue
 
+        votes = r.count
+
         if key in EMOJI_POINTS:
-            extra_votes = max(r.count - 1, 0)
+            # automatische Emojis: der erste Vote vom Bot zählt nicht
+            extra_votes = max(votes - 1, 0)
             if extra_votes <= 0:
                 continue
             points = extra_votes * EMOJI_POINTS[key]
             breakdown[key] = {"votes": extra_votes, "points": points}
             score += points
         else:
-            if r.count <= 0:
-                continue
+            # alle anderen Emojis zählen ab 1
+            points = votes
             breakdown.setdefault("Various", {"votes": 0, "points": 0})
-            breakdown["Various"]["votes"] += r.count
-            breakdown["Various"]["points"] += r.count
-            score += r.count
+            breakdown["Various"]["votes"] += votes
+            breakdown["Various"]["points"] += points
+            score += points
 
     return score, breakdown, False
 
