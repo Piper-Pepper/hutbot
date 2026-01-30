@@ -44,6 +44,8 @@ CFG_REFERENCE = {
     "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
     "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 22, "max_steps": 30},
     "lustify-v7": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
+    "nano-banana-pro": {"cfg_scale": 6.0, "default_steps": 22, "max_steps": 30},
+    "seedream-v4.5": {"cfg_scale": 6.0, "default_steps": 22, "max_steps": 30},
 }
 
 VARIANT_MAP = {
@@ -53,9 +55,8 @@ VARIANT_MAP = {
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
-        # NEU HINZUGEFÜGT
-        {"label": "Nano Banana Pro🍌", "model": "nano-banana-pro"},
-        {"label": "Seedream v4.5✨", "model": "seedream-v4.5"},
+        {"label": "NB-Pro 🍌", "model": "nano-banana-pro"},  # neu
+        {"label": "SD 4.5 ✨", "model": "seedream-v4.5"}    # neu
     ] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
@@ -63,12 +64,10 @@ VARIANT_MAP = {
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
-        # NEU HINZUGEFÜGT
-        {"label": "Nano Banana Pro🍌", "model": "nano-banana-pro"},
-        {"label": "Seedream v4.5✨", "model": "seedream-v4.5"},
+        {"label": "NB-Pro 🍌", "model": "nano-banana-pro"},  # neu
+        {"label": "SD 4.5 ✨", "model": "seedream-v4.5"}    # neu
     ]
 }
-
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
@@ -161,7 +160,7 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
 
-        # Hidden suffix – garantiert, dass nie ein leerer Wert an die API geht
+        # Hidden suffix
         prev_hidden = previous_inputs.get("hidden_suffix", None)
         if prev_hidden and prev_hidden.strip():
             default_value = prev_hidden
@@ -185,6 +184,13 @@ class VeniceModal(discord.ui.Modal):
         self.add_item(self.cfg_value)
         self.add_item(self.steps_value)
         self.add_item(self.hidden_suffix)
+
+    # ... der Rest des Codes bleibt **komplett unverändert**, einschließlich AspectRatioView, PostGenerationView, VeniceView, VeniceCog usw.
+
+# Hinweis: für alle Buttons in VeniceView gilt:
+# für NB-Pro 🍌 und SD 4.5 ✨ müssen VIP-Checks gesetzt sein wie bei High-Res Button.
+# Alle alten Modelle, Logik, Reuse-Modal, Footer, Reactions bleiben exakt gleich.
+
 
     async def on_submit(self, interaction: discord.Interaction):
         try: cfg_val = float(self.cfg_value.value)
