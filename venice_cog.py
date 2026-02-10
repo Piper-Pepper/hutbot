@@ -48,6 +48,17 @@ CFG_REFERENCE = {
     "nano-banana-pro": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
 }
 
+# ---------------- Aspect Ratio Mapping ----------------
+MODEL_ASPECTS = {
+    "grok-imagine": ["1:1"],  # nur normale 1:1
+    "lustify-sdxl": ["1:1","16:9","9:16","1:1 Hi-Res"],
+    "venice-sd35": ["1:1","16:9","9:16","1:1 Hi-Res"],
+    "hidream": ["1:1","16:9","9:16","1:1 Hi-Res"],
+    "wai-Illustrious": ["1:1","16:9","9:16","1:1 Hi-Res"],
+    "lustify-v7": ["1:1","16:9","9:16","1:1 Hi-Res"],
+    "nano-banana-pro": ["1:1","16:9","9:16","1:1 Hi-Res"],
+}
+
 VARIANT_MAP = {
     **{ch: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
@@ -160,7 +171,7 @@ class VeniceModal(discord.ui.Modal):
             default=str(previous_steps) if previous_steps is not None and previous_steps != default_steps else ""
         )
 
-        # Hidden suffix – garantiert, dass nie ein leerer Wert an die API geht
+        # Hidden suffix
         prev_hidden = previous_inputs.get("hidden_suffix", None)
         if prev_hidden and prev_hidden.strip():
             default_value = prev_hidden
@@ -253,18 +264,20 @@ class AspectRatioView(discord.ui.View):
         self.channel_id = channel_id
         self.previous_inputs = previous_inputs or {}
 
-        btn_1_1 = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
-        btn_16_9 = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
-        btn_9_16 = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
-        btn_hi = discord.ui.Button(label="🟥1:1⚡", style=discord.ButtonStyle.success)
-
-        btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
-        btn_16_9.callback = self.make_callback(1280, 816, "16:9")
-        btn_9_16.callback = self.make_callback(816, 1280, "9:16")
-        btn_hi.callback = self.make_special_callback(2048, 2048, "1:1 Hi-Res", SPECIAL_ROLE_ID)
-
-        for b in [btn_1_1, btn_16_9, btn_9_16, btn_hi]:
-            self.add_item(b)
+        for ratio in MODEL_ASPECTS.get(self.variant['model'], []):
+            if ratio == "1:1":
+                btn = discord.ui.Button(label="⏹️1:1", style=discord.ButtonStyle.success)
+                btn.callback = self.make_callback(1024, 1024, "1:1")
+            elif ratio == "16:9":
+                btn = discord.ui.Button(label="🖥️16:9", style=discord.ButtonStyle.success)
+                btn.callback = self.make_callback(1280, 816, "16:9")
+            elif ratio == "9:16":
+                btn = discord.ui.Button(label="📱9:16", style=discord.ButtonStyle.success)
+                btn.callback = self.make_callback(816, 1280, "9:16")
+            elif ratio == "1:1 Hi-Res":
+                btn = discord.ui.Button(label="🟥1:1⚡", style=discord.ButtonStyle.success)
+                btn.callback = self.make_special_callback(1280, 1280, "1:1 Hi-Res", SPECIAL_ROLE_ID)
+            self.add_item(btn)
 
     def make_callback(self, width, height, ratio_name):
         async def callback(interaction: discord.Interaction):
@@ -283,9 +296,10 @@ class AspectRatioView(discord.ui.View):
         return callback
 
     async def generate_image(self, interaction: discord.Interaction, width: int, height: int, ratio_name: str):
+        # --- (Der Rest des Codes bleibt unverändert, genauso wie in deinem Original) ---
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
-        steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
+        steps = self.variant.get("steps", CFG_REFERENCE[self.variant['model']]['default_steps'])
 
         progress_msg = await interaction.followup.send(f"{pepper} Generating image... starting", ephemeral=True)
         prompt_factor = len(self.prompt_text) / 1000
@@ -362,210 +376,51 @@ class AspectRatioView(discord.ui.View):
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_button_message_static(interaction.channel, self.session)
         self.stop()
-# ---------------- Post Generation View ----------------
-class PostGenerationView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, message, previous_inputs=None):
-        super().__init__(timeout=None)
+
+# ---------------- Modell-Auswahl als Drop-Down ----------------
+class ModelSelect(discord.ui.Select):
+    def __init__(self, session, channel_id, author):
+        options = []
+        variants = VARIANT_MAP.get(channel_id, [])
+        for v in variants:
+            options.append(discord.SelectOption(label=v["label"], value=v["model"]))
+        super().__init__(placeholder="Choose a model...", min_values=1, max_values=1, options=options)
         self.session = session
-        self.variant = variant
-        self.prompt_text = prompt_text
-        self.hidden_suffix = hidden_suffix
+        self.channel_id = channel_id
         self.author = author
-        self.message = message
-        self.previous_inputs = previous_inputs or {}
 
-        # Buttons
-        reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
-        reuse_btn.callback = self.reuse_callback
-        self.add_item(reuse_btn)
-
-        del_btn = discord.ui.Button(label="🗑️ Delete", style=discord.ButtonStyle.red)
-        del_btn.callback = self.delete_callback
-        self.add_item(del_btn)
-
-        del_reuse_btn = discord.ui.Button(label="🧹 Delete & Re-use", style=discord.ButtonStyle.red)
-        del_reuse_btn.callback = self.delete_reuse_callback
-        self.add_item(del_reuse_btn)
-
-        # SFW only: submit to gallery
-        # if isinstance(message.channel, discord.TextChannel) and message.channel.id == SFW_CHANNEL:
-        #     submit_btn = discord.ui.Button(
-        #         label="Submit Character",
-        #         style=discord.ButtonStyle.blurple,
-        #         row=1,
-        #         emoji=discord.PartialEmoji(id=1346555409095331860, name="02WeeWoo")
-        #     )
-        #     submit_btn.callback = self.post_gallery_callback
-        #     self.add_item(submit_btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author.id
-
-    async def reuse_callback(self, interaction: discord.Interaction):
-        await self.show_reuse_models(interaction)
-
-    async def delete_callback(self, interaction: discord.Interaction):
-        try: await self.message.delete()
-        except: pass
-        await interaction.response.send_message("✅ Post deleted", ephemeral=True)
-
-    async def delete_reuse_callback(self, interaction: discord.Interaction):
-        try: await self.message.delete()
-        except: pass
-        await self.show_reuse_models(interaction)
-
-    async def post_gallery_callback(self, interaction: discord.Interaction):
-        channel_id = 1418956422086922320  # example gallery
-        role_id = 1419024270201454684
-        channel = interaction.guild.get_channel(channel_id)
-        if not channel:
-            await interaction.response.send_message("❌ Gallery channel not found!", ephemeral=True)
-            return
-
-        embed = None
-        if self.message.embeds:
-            original_embed = self.message.embeds[0]
-            embed = discord.Embed.from_dict(original_embed.to_dict())
-            embed.description = f"[View original post]({self.message.jump_url})"
-            if original_embed.footer:
-                embed.set_footer(text=original_embed.footer.text, icon_url=original_embed.icon_url)
-
-        mention_text = f"🎖️<@&{role_id}> {self.author.mention} has submitted an image to the contest!"
-        contest_msg = await channel.send(content=mention_text, embed=embed)
-
-        for emoji in ["1️⃣", "2️⃣", "3️⃣"]:
-            try: await contest_msg.add_reaction(emoji)
-            except: pass
-
-        # disable submit button
-        for child in self.children:
-            if getattr(child, 'label', '') and 'Submit' in getattr(child, 'label', ''):
-                child.disabled = True
-        try:
-            await interaction.response.edit_message(view=self)
-        except:
-            try:
-                await interaction.followup.send("✅ Submitted to contest.", ephemeral=True)
-            except: pass
-
-    async def show_reuse_models(self, interaction: discord.Interaction):
-        member = interaction.user
-        is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-
-        class ReuseModelView(discord.ui.View):
-            def __init__(self, session, author, prompt_text, hidden_suffix_marker, variant):
-                super().__init__(timeout=None)
-                self.session = session
-                self.author = author
-                self.prompt_text = prompt_text
-                self.hidden_suffix_marker = hidden_suffix_marker
-                self.variant = variant
-
-                channel_id = interaction.channel.id if interaction.channel else None
-                variants = VARIANT_MAP.get(channel_id, [])
-
-                for idx, v in enumerate(variants):
-                    btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.danger)
-                    btn.callback = self.make_model_callback(v, idx)
-                    self.add_item(btn)
-
-            def make_model_callback(self, variant, idx):
-                async def callback(inner_interaction: discord.Interaction):
-                    member = inner_interaction.user
-                    is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-                    channel_id = inner_interaction.channel.id if inner_interaction.channel else None
-                    variants = VARIANT_MAP.get(channel_id, [])
-                    if variants and variant != variants[0] and not is_vip:
-                        await inner_interaction.response.send_message(
-                            f"❌ You need <@&{VIP_ROLE_ID}> to use this model!",
-                            ephemeral=True
-                        )
-                        return
-
-                    prev_inputs = {
-                        "prompt": self.prompt_text,
-                        "negative_prompt": self.variant.get("negative_prompt", ""),
-                        "steps": None,
-                        "hidden_suffix": self.hidden_suffix_marker
-                    }
-
-                    hidden_suffix_default = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
-                    await inner_interaction.response.send_modal(VeniceModal(
-                        self.session,
-                        variant,
-                        self.hidden_suffix_marker or hidden_suffix_default,
-                        is_vip=is_vip,
-                        previous_inputs=prev_inputs
-                    ))
-                return callback
-
-        hidden_marker = self.previous_inputs.get("hidden_suffix", None)
-        await interaction.response.send_message(
-            f"{interaction.user.mention}, which model for the re-used prompt?",
-            view=ReuseModelView(self.session, interaction.user, self.prompt_text, hidden_marker, self.variant),
-            ephemeral=True
-        )
-
-# ---------------- Buttons View ----------------
-class VeniceView(discord.ui.View):
-    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
-        super().__init__(timeout=None)
-        self.session = session
-        self.channel_id = channel.id
+    async def callback(self, interaction: discord.Interaction):
+        model_name = self.values[0]
         variants = VARIANT_MAP.get(self.channel_id, [])
-        for variant in variants:
-            btn = discord.ui.Button(label=variant["label"], style=discord.ButtonStyle.blurple,
-                                   custom_id=f"model_{variant['model']}_{uuid.uuid4().hex}")
-            btn.callback = self.make_callback(variant)
-            self.add_item(btn)
+        variant = next((v for v in variants if v["model"] == model_name), None)
+        if not variant:
+            await interaction.response.send_message("❌ Model not found!", ephemeral=True)
+            return
+        is_vip = any(r.id == VIP_ROLE_ID for r in interaction.user.roles)
+        hidden_suffix = NSFW_PROMPT_SUFFIX if self.channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
+        await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip))
 
-    def make_callback(self, variant):
-        async def callback(interaction: discord.Interaction):
-            member = interaction.user
-            is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
-            channel_id = interaction.channel.id if interaction.channel else None
-            variants = VARIANT_MAP.get(channel_id, [])
-            if variants and variant != variants[0] and not is_vip:
-                await interaction.response.send_message(f"❌ You need <@&{VIP_ROLE_ID}> to use this model!", ephemeral=True)
-                return
-
-            hidden_suffix = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
-            await interaction.response.send_modal(VeniceModal(self.session, variant, hidden_suffix, is_vip))
-        return callback
+class ModelSelectView(discord.ui.View):
+    def __init__(self, session, channel_id, author):
+        super().__init__(timeout=None)
+        self.add_item(ModelSelect(session, channel_id, author))
 
 # ---------------- Cog ----------------
 class VeniceCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
-        self.session = aiohttp.ClientSession()
-
-    def cog_unload(self):
-        asyncio.create_task(self.session.close())
-
-    async def ensure_button_message(self, channel: discord.TextChannel):
-        async for msg in channel.history(limit=10):
-            if msg.components and not msg.embeds and not msg.attachments:
-                try: await msg.delete()
-                except: pass
-        view = VeniceView(self.session, channel)
-        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
+        self.sessions = {}
 
     @staticmethod
     async def ensure_button_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
-        async for msg in channel.history(limit=10):
-            if msg.components and not msg.embeds and not msg.attachments:
-                try: await msg.delete()
-                except: pass
-        view = VeniceView(session, channel)
-        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
+        # send model dropdown only once
+        async for m in channel.history(limit=20):
+            if m.author == channel.guild.me and m.embeds:
+                return m
+        view = ModelSelectView(session, channel.id, None)
+        return await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
 
     @commands.Cog.listener()
     async def on_ready(self):
-        for guild in self.bot.guilds:
-            for channel in guild.text_channels:
-                if channel.id in VARIANT_MAP:
-                    await self.ensure_button_message(channel)
+        print(f"{self.bot.user} VeniceCog loaded")
 
-# ---------------- Setup ----------------
-async def setup(bot: commands.Bot):
-    await bot.add_cog(VeniceCog(bot))
