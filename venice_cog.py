@@ -71,13 +71,13 @@ VARIANT_MAP = {
 
 # ---------------- Model Aspect Ratios & Role Requirements ----------------
 MODEL_ASPECTS = {
-    "lustify-sdxl": {"ratios": ["1:1", "16:9", "9:16", "1:1 Hi-Res"], "role_id": None},
-    "venice-sd35": {"ratios": ["1:1", "16:9", "9:16", "1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "hidream": {"ratios": ["1:1", "16:9", "9:16", "1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["1:1", "16:9", "9:16", "1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "lustify-v7": {"ratios": ["1:1", "16:9", "9:16", "1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "grok-imagine": {"ratios": ["1:1"], "role_id": VIP_ROLE_ID},
-    "nano-banana-pro": {"ratios": ["1:1"], "role_id": VIP_ROLE_ID},
+    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": None},
+    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "grok-imagine": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
+    "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
 
 # ---------------- Helper ----------------
@@ -227,10 +227,10 @@ class AspectRatioView(discord.ui.View):
 
         # Buttons based on allowed ratios
         aspect_map = {
-            "1:1": (1024, 1024),
-            "16:9": (1280, 816),
-            "9:16": (816, 1280),
-            "1:1 Hi-Res": (1280, 1280)
+            "🟦1:1": (1024, 1024),
+            "📺16:9": (1280, 816),
+            "📱9:16": (816, 1280),
+            "🖼️1:1 Hi-Res": (1280, 1280)
         }
 
         for ratio_name, (w, h) in aspect_map.items():
