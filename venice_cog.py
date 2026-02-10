@@ -45,6 +45,7 @@ CFG_REFERENCE = {
     "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 22, "max_steps": 30},
     "lustify-v7": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
     "grok-imagine": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
+    "nano-banana-pro": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
 }
 
 VARIANT_MAP = {
@@ -55,6 +56,7 @@ VARIANT_MAP = {
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
         {"label": "Grok", "model": "grok-imagine"},
+        {"label": "NB Pro", "model": "nano-banana-pro"},
     ] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [
         {"label": "Lustify🔞", "model": "lustify-sdxl"},
@@ -63,6 +65,7 @@ VARIANT_MAP = {
         {"label": "Lustify V7🔞", "model": "lustify-v7"},
         {"label": "HiDream", "model": "hidream"},
         {"label": "Grok", "model": "grok-imagine"},
+        {"label": "NB Pro", "model": "nano-banana-pro"},
     ]
 }
 
