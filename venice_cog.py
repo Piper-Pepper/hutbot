@@ -71,13 +71,18 @@ VARIANT_MAP = {
 
 # ---------------- Model Aspect Ratios & Role Requirements ----------------
 MODEL_ASPECTS = {
-    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": None},
-    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "grok-imagine": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
-    "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
+    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
+                     "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
+    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
+                     "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
+    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
+                "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
+                        "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
+    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
+                   "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
+    "grok-imagine": {"ratios": ["🟦1:1"], "roles": {}},
+    "nano-banana-pro": {"ratios": ["🟦1:1"], "roles": {}},
 }
 
 # ---------------- Helper ----------------
@@ -213,6 +218,7 @@ class VeniceModal(discord.ui.Modal):
         )
 
 # ---------------- AspectRatioView ----------------
+# ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip, channel_id=None, previous_inputs=None):
         super().__init__(timeout=None)
@@ -225,29 +231,30 @@ class AspectRatioView(discord.ui.View):
         self.channel_id = channel_id
         self.previous_inputs = previous_inputs or {}
 
-        # Buttons based on allowed ratios
-        aspect_map = {
+        self.aspect_map = {
             "🟦1:1": (1024, 1024),
             "📺16:9": (1280, 816),
             "📱9:16": (816, 1280),
             "🖼️1:1 Hi-Res": (1280, 1280)
         }
 
-        for ratio_name, (w, h) in aspect_map.items():
-            if ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
-                role_needed = MODEL_ASPECTS[self.variant["model"]]["role_id"]
-                btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
-                btn.callback = self.make_callback(w, h, ratio_name, role_needed)
-                self.add_item(btn)
+        for ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
+            width, height = self.aspect_map[ratio_name]
+            role_needed = MODEL_ASPECTS[self.variant["model"]]["roles"].get(ratio_name)
+            btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
+            btn.callback = self.make_callback(width, height, ratio_name, role_needed)
+            self.add_item(btn)
 
     def make_callback(self, width, height, ratio_name, role_id=None):
         async def callback(interaction: discord.Interaction):
             if role_id and not any(r.id == role_id for r in interaction.user.roles):
-                await interaction.response.send_message(f"❌ You need <@&{role_id}> to use this aspect ratio!", ephemeral=True)
+                await interaction.response.send_message(
+                    f"❌ You need <@&{role_id}> to use this aspect ratio!", ephemeral=True
+                )
                 return
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
-
+    
     async def generate_image(self, interaction: discord.Interaction, width, height, ratio_name: str):
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
