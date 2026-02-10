@@ -424,15 +424,22 @@ class VeniceCog(commands.Cog):
 
     @staticmethod
     async def ensure_dropdown_message_static(channel, session):
-        # Lösche alte Dropdown-Nachrichten
+        # Alte Dropdowns löschen
         async for msg in channel.history(limit=15):
             if msg.components and not msg.embeds:
-                try: await msg.delete()
-                except: pass
+                try: 
+                    await msg.delete()
+                except: 
+                    pass
 
-        # Neue Dropdown Nachricht
+        # Neue Dropdown Nachricht sofort posten
+        variants = VARIANT_MAP.get(channel.id, [])
+        if not variants:
+            return  # kein Modell für diesen Channel
+
         view = ReuseModelDropdownView(session, None, "", None)
-        await channel.send("💡 Choose Model for 🖼️**NEW** image!", view=view)
+        await channel.send("💡 Choose Model for 🖼️ **NEW** image!", view=view)
+
 
     @commands.Cog.listener()
     async def on_ready(self):
