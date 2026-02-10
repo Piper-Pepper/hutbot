@@ -71,18 +71,13 @@ VARIANT_MAP = {
 
 # ---------------- Model Aspect Ratios & Role Requirements ----------------
 MODEL_ASPECTS = {
-    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
-                     "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
-    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
-                     "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
-    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
-                "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
-    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
-                        "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
-    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"],
-                   "roles": {"16:9": VIP_ROLE_ID, "9:16": VIP_ROLE_ID, "1:1 Hi-Res": SPECIAL_ROLE_ID}},
-    "grok-imagine": {"ratios": ["🟦1:1"], "roles": {}},
-    "nano-banana-pro": {"ratios": ["🟦1:1"], "roles": {}},
+    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": None},
+    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "grok-imagine": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
+    "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
 
 # ---------------- Helper ----------------
@@ -134,7 +129,6 @@ class VeniceModal(discord.ui.Modal):
             max_length=1500,
             default=previous_inputs.get("prompt", "")
         )
-
         neg_value = previous_inputs.get("negative_prompt", "") or DEFAULT_NEGATIVE_PROMPT
         self.negative_prompt = discord.ui.TextInput(
             label="Negative Prompt (optional)",
@@ -143,7 +137,6 @@ class VeniceModal(discord.ui.Modal):
             max_length=500,
             default=neg_value
         )
-
         cfg_default = str(CFG_REFERENCE[variant["model"]]["cfg_scale"])
         self.cfg_value = discord.ui.TextInput(
             label="CFG (> stricter AI adherence)",
@@ -153,7 +146,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=cfg_default,
             default=previous_inputs.get("cfg_value", "")
         )
-
         max_steps = CFG_REFERENCE[variant["model"]]["max_steps"]
         default_steps = CFG_REFERENCE[variant["model"]]["default_steps"]
         prev_steps = previous_inputs.get("steps")
@@ -165,7 +157,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=str(default_steps),
             default=str(prev_steps) if prev_steps else ""
         )
-
         prev_hidden = previous_inputs.get("hidden_suffix", "")
         self.hidden_suffix = discord.ui.TextInput(
             label="Hidden Suffix",
@@ -175,7 +166,6 @@ class VeniceModal(discord.ui.Modal):
             default=prev_hidden,
             max_length=800
         )
-
         self.add_item(self.prompt)
         self.add_item(self.negative_prompt)
         self.add_item(self.cfg_value)
@@ -185,18 +175,15 @@ class VeniceModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try: cfg_val = float(self.cfg_value.value)
         except: cfg_val = CFG_REFERENCE[self.variant["model"]]["cfg_scale"]
-
         try:
             steps_val = int(self.steps_value.value)
             steps_val = max(1, min(steps_val, CFG_REFERENCE[self.variant["model"]]["max_steps"]))
         except:
             steps_val = CFG_REFERENCE[self.variant['model']]['default_steps']
-
         negative_prompt = self.negative_prompt.value.strip() or DEFAULT_NEGATIVE_PROMPT
         user_hidden = self.hidden_suffix.value.strip() or self.hidden_suffix_value
 
         variant = {**self.variant, "cfg_scale": cfg_val, "negative_prompt": negative_prompt, "steps": steps_val}
-
         self.previous_inputs = {
             "prompt": self.prompt.value,
             "negative_prompt": negative_prompt,
@@ -207,7 +194,6 @@ class VeniceModal(discord.ui.Modal):
 
         channel_id = interaction.channel.id if interaction.channel else None
         hidden_suffix_default = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
-
         await interaction.response.send_message(
             f"🎨 {variant['label']} ready! Choose an aspect ratio:",
             view=AspectRatioView(
@@ -217,7 +203,6 @@ class VeniceModal(discord.ui.Modal):
             ephemeral=True
         )
 
-# ---------------- AspectRatioView ----------------
 # ---------------- AspectRatioView ----------------
 class AspectRatioView(discord.ui.View):
     def __init__(self, session, variant, prompt_text, hidden_suffix, author, is_vip, channel_id=None, previous_inputs=None):
@@ -231,30 +216,28 @@ class AspectRatioView(discord.ui.View):
         self.channel_id = channel_id
         self.previous_inputs = previous_inputs or {}
 
-        self.aspect_map = {
+        aspect_map = {
             "🟦1:1": (1024, 1024),
             "📺16:9": (1280, 816),
             "📱9:16": (816, 1280),
             "🖼️1:1 Hi-Res": (1280, 1280)
         }
 
-        for ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
-            width, height = self.aspect_map[ratio_name]
-            role_needed = MODEL_ASPECTS[self.variant["model"]]["roles"].get(ratio_name)
-            btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
-            btn.callback = self.make_callback(width, height, ratio_name, role_needed)
-            self.add_item(btn)
+        for ratio_name, (w, h) in aspect_map.items():
+            if ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
+                role_needed = MODEL_ASPECTS[self.variant["model"]].get("role_id")
+                btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
+                btn.callback = self.make_callback(w, h, ratio_name, role_needed)
+                self.add_item(btn)
 
     def make_callback(self, width, height, ratio_name, role_id=None):
         async def callback(interaction: discord.Interaction):
             if role_id and not any(r.id == role_id for r in interaction.user.roles):
-                await interaction.response.send_message(
-                    f"❌ You need <@&{role_id}> to use this aspect ratio!", ephemeral=True
-                )
+                await interaction.response.send_message(f"❌ You need <@&{role_id}> to use this aspect ratio!", ephemeral=True)
                 return
             await self.generate_image(interaction, width, height, ratio_name)
         return callback
-    
+
     async def generate_image(self, interaction: discord.Interaction, width, height, ratio_name: str):
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
@@ -412,7 +395,7 @@ class VeniceView(discord.ui.View):
     def make_callback(self, variant):
         async def callback(interaction: discord.Interaction):
             is_vip = any(r.id == VIP_ROLE_ID for r in interaction.user.roles)
-            role_needed = MODEL_ASPECTS[variant["model"]]["role_id"]
+            role_needed = MODEL_ASPECTS[variant["model"]].get("role_id")
             if role_needed and not any(r.id == role_needed for r in interaction.user.roles):
                 await interaction.response.send_message(f"❌ You need <@&{role_needed}> to use this model!", ephemeral=True)
                 return
