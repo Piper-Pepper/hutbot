@@ -261,7 +261,7 @@ class AspectRatioView(discord.ui.View):
         btn_1_1.callback = self.make_callback(1024, 1024, "1:1")
         btn_16_9.callback = self.make_callback(1280, 816, "16:9")
         btn_9_16.callback = self.make_callback(816, 1280, "9:16")
-        btn_hi.callback = self.make_special_callback(1280, 1280, "1:1 Hi-Res", SPECIAL_ROLE_ID)
+        btn_hi.callback = self.make_special_callback(2048, 2048, "1:1 Hi-Res", SPECIAL_ROLE_ID)
 
         for b in [btn_1_1, btn_16_9, btn_9_16, btn_hi]:
             self.add_item(b)
