@@ -379,42 +379,46 @@ class PostGenerationView(discord.ui.View):
         member = interaction.user
         is_vip = any(r.id == VIP_ROLE_ID for r in member.roles)
         hidden_marker = self.previous_inputs.get("hidden_suffix", None)
-        view = ReuseModelDropdownView(self.session, interaction.user, self.prompt_text, hidden_marker)
+        view = ReuseModelDropdownView(self.session, interaction.user, self.prompt_text, hidden_marker, interaction.channel)
         await interaction.response.send_message(f"{interaction.user.mention}, choose model for reuse:", view=view, ephemeral=True)
 
 # ---------------- Dropdown View ----------------
 class ReuseModelDropdownView(discord.ui.View):
-    def __init__(self, session, user, prompt_text, hidden_suffix):
+    def __init__(self, session, user, prompt_text, hidden_suffix, channel):
         super().__init__(timeout=None)
         self.session = session
         self.user = user
         self.prompt_text = prompt_text
         self.hidden_suffix = hidden_suffix
-        options = []
-        channel_id = SFW_CHANNEL  # default, wird beim Callback geprüft
-        variants = VARIANT_MAP.get(channel_id, [])
+        self.channel = channel
 
-        for v in variants:
-            options.append(discord.SelectOption(label=v["label"], value=v["model"]))
+        variants = VARIANT_MAP.get(channel.id, [])
 
-        self.add_item(discord.ui.Select(
-            placeholder="Select Model",
-            options=options,
-            min_values=1,
-            max_values=1,
-            callback=self.dropdown_callback
-        ))
+        class DynamicDropdown(discord.ui.Select):
+            def __init__(self_inner):
+                options = []
+                for v in variants:
+                    # Rollenprüfung
+                    if v["model"] == "lustify-sdxl":
+                        allowed = True
+                    elif v["model"] in ["flux-dev-uncensored","flux-dev","venice-sd35","hidream","grok-imagine","nano-banana-pro","wai-Illustrious","lustify-v7"]:
+                        allowed = True
+                    else:
+                        allowed = False
+                    if allowed:
+                        options.append(discord.SelectOption(label=v["label"], value=v["model"]))
+                super().__init__(placeholder="Select Model", options=options, min_values=1, max_values=1)
 
-    async def dropdown_callback(self, interaction: discord.Interaction):
-        model_name = interaction.data["values"][0]
-        variant = next((v for vlist in VARIANT_MAP.values() for v in vlist if v["model"] == model_name), None)
-        if not variant: 
-            await interaction.response.send_message("❌ Model not found", ephemeral=True)
-            return
+            async def callback(self_inner, interaction: discord.Interaction):
+                model_name = self_inner.values[0]
+                variant = next((v for vlist in VARIANT_MAP.values() for v in vlist if v["model"] == model_name), None)
+                if not variant:
+                    await interaction.response.send_message("❌ Model not found", ephemeral=True)
+                    return
+                hidden_suffix_to_use = self.hidden_suffix or (NSFW_PROMPT_SUFFIX if channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX)
+                await interaction.response.send_modal(VeniceModal(session, variant, hidden_suffix_to_use, False))
 
-        hidden_suffix = self.hidden_suffix or (NSFW_PROMPT_SUFFIX if interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX)
-        modal = VeniceModal(self.session, variant, hidden_suffix, False)
-        await interaction.response.send_modal(modal)
+        self.add_item(DynamicDropdown())
 
 # ---------------- Cog ----------------
 class VeniceCog(commands.Cog):
@@ -435,11 +439,10 @@ class VeniceCog(commands.Cog):
         # Neue Dropdown Nachricht sofort posten
         variants = VARIANT_MAP.get(channel.id, [])
         if not variants:
-            return  # kein Modell für diesen Channel
+            return
 
-        view = ReuseModelDropdownView(session, None, "", None)
+        view = ReuseModelDropdownView(session, None, "", None, channel)
         await channel.send("💡 Choose Model for 🖼️ **NEW** image!", view=view)
-
 
     @commands.Cog.listener()
     async def on_ready(self):
