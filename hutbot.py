@@ -102,6 +102,9 @@ async def main():
 
         # Start bot
         try:
+            # ---- HIER WARTEN, bevor wir einloggen ----
+            await asyncio.sleep(10)  # 10 Sekunden warten, damit Pterodactyl + Cloudflare sich beruhigen
+
             await bot.start(TOKEN)
         except Exception:
             print("❌ Error starting bot:")
