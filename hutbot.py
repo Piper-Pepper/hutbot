@@ -55,10 +55,11 @@ async def on_ready():
         synced_once = True
 
 # -----------------------------------------------------------
-# MAIN – load all extensions & start bot
+# MAIN – load all extensions & start bot with rate-limit handling
 # -----------------------------------------------------------
 async def main():
     async with bot:
+        # Load extensions
         extensions = [
             "pepper",
             "hutmember",
@@ -71,7 +72,7 @@ async def main():
             "gather",
             "reset",
             "riddle",
-            "hutvote",  # <- nur die neue Version laden
+            "hutvote",
             "hutthreadvote",
             "character_creator",
             "riddle_post"
@@ -79,12 +80,9 @@ async def main():
 
         for ext in extensions:
             try:
-                # Unload alte Version falls schon geladen
                 if ext in bot.extensions:
                     await bot.unload_extension(ext)
                     print(f"♻️ Unloaded old extension: {ext}")
-
-                # Load neue Version
                 await bot.load_extension(ext)
                 print(f"✅ Loaded extension: {ext}")
             except Exception:
@@ -100,28 +98,34 @@ async def main():
             print("⚠️ Birthday view not loaded:")
             traceback.print_exc()
 
-        # Start bot
-        try:
-            wait_time = 10  # Sekunden
-            print(f"⏳ Waiting {wait_time}s before connecting to Discord...")
-            await asyncio.sleep(wait_time)  # Warten, damit Cloudflare/Container ready ist
+        # Initial wait (Container, Cloudflare, etc.)
+        initial_wait = 10  # Sekunden, kann auch 30 oder 60 sein
+        print(f"⏳ Waiting {initial_wait}s before first connection attempt...")
+        await asyncio.sleep(initial_wait)
 
-            reconnect_attempts = 3
-            for attempt in range(1, reconnect_attempts + 1):
-                try:
-                    print(f"🔌 Attempt {attempt} to connect...")
-                    await bot.start(TOKEN)
-                    break  # Connected erfolgreich, raus aus loop
-                except discord.errors.HTTPException as e:
-                    if "429" in str(e):
-                        print(f"⚠️ Rate limited by Discord. Waiting 15s before retry...")
-                        await asyncio.sleep(15)
-                    else:
-                        raise
-        except Exception:
-            print("❌ Error starting bot:")
-            traceback.print_exc()
+        # Retry loop für Rate-Limits
+        max_attempts = 10
+        sleep_on_rate_limit = 60  # Sekunden warten bei 429, kann länger sein
 
+        for attempt in range(1, max_attempts + 1):
+            try:
+                print(f"🔌 Attempt {attempt} to connect...")
+                await bot.start(TOKEN)
+                break  # Erfolgreich verbunden
+            except discord.errors.HTTPException as e:
+                if "429" in str(e):
+                    print(f"⚠️ Rate limited by Discord. Waiting {sleep_on_rate_limit}s before retry...")
+                    await asyncio.sleep(sleep_on_rate_limit)
+                else:
+                    print("❌ Other HTTPException occurred:")
+                    traceback.print_exc()
+                    break
+            except Exception:
+                print("❌ Unexpected error occurred during start:")
+                traceback.print_exc()
+                break
+        else:
+            print("🛑 Could not connect after multiple attempts. Exiting.")
 
 # -----------------------------------------------------------
 # ENTRYPOINT
@@ -132,5 +136,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("🛑 Bot manually stopped.")
     except Exception:
-        print("❌ Unexpected error:")
+        print("❌ Unexpected error in main loop:")
         traceback.print_exc()
