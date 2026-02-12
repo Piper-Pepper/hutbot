@@ -102,13 +102,26 @@ async def main():
 
         # Start bot
         try:
-            # ---- HIER WARTEN, bevor wir einloggen ----
-            await asyncio.sleep(10)  # 10 Sekunden warten, damit Pterodactyl + Cloudflare sich beruhigen
+            wait_time = 10  # Sekunden
+            print(f"⏳ Waiting {wait_time}s before connecting to Discord...")
+            await asyncio.sleep(wait_time)  # Warten, damit Cloudflare/Container ready ist
 
-            await bot.start(TOKEN)
+            reconnect_attempts = 3
+            for attempt in range(1, reconnect_attempts + 1):
+                try:
+                    print(f"🔌 Attempt {attempt} to connect...")
+                    await bot.start(TOKEN)
+                    break  # Connected erfolgreich, raus aus loop
+                except discord.errors.HTTPException as e:
+                    if "429" in str(e):
+                        print(f"⚠️ Rate limited by Discord. Waiting 15s before retry...")
+                        await asyncio.sleep(15)
+                    else:
+                        raise
         except Exception:
             print("❌ Error starting bot:")
             traceback.print_exc()
+
 
 # -----------------------------------------------------------
 # ENTRYPOINT
