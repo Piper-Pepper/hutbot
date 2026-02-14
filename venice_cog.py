@@ -50,13 +50,13 @@ MODEL_LABELS = {
 
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
+    "lustify-sdxl": {"cfg_scale": 5.0, "default_steps": 25, "max_steps": 50},
     "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
-    "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
-    "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 20, "max_steps": 30},
-    "lustify-v7": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
+    "hidream": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 50},
+    "wai-Illustrious": {"cfg_scale": 7.0, "default_steps": 20, "max_steps": 30},
+    "lustify-v7": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
     "z-image-turbo": {"cfg_scale": 6.0, "default_steps": 8, "max_steps": 8},
-    "nano-banana-pro": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 50},
+    "nano-banana-pro": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
 }
 
 # ---------------- VARIANT_MAP ----------------
