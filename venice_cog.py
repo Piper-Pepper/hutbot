@@ -39,13 +39,13 @@ pepper = "<a:01pepper_icon:1377636862847619213>"
 
 # ---------------- Model Labels & Icons ----------------
 MODEL_LABELS = {
-    "lustify-sdxl":    {"full_label": "LF 🔥",      "button_icon": "🔥"},
-    "venice-sd35":     {"full_label": "SD35 🚀",    "button_icon": "🚀"},
-    "wai-Illustrious": {"full_label": "Wai 🎨",     "button_icon": "🎨"},
-    "lustify-v7":      {"full_label": "LF V7 ⚡",   "button_icon": "⚡"},
-    "hidream":         {"full_label": "HDream 🌙",  "button_icon": "🌙"},
-    "z-image-turbo":   {"full_label": "Z-Image ⚡", "button_icon": "⚡"},
-    "nano-banana-pro": {"full_label": "Nano🍌",    "button_icon": "🍌"},
+    "lustify-sdxl":    {"full_label": "🔥Lustify",      "button_icon": "🔥LF"},
+    "venice-sd35":     {"full_label": "🚀SD35",    "button_icon": "🚀S3"},
+    "wai-Illustrious": {"full_label": " 🎨Wai",     "button_icon": "🎨WI"},
+    "lustify-v7":      {"full_label": "⚡Lustify V7",   "button_icon": "⚡V7"},
+    "hidream":         {"full_label": "🌙HiDream",  "button_icon": "🌙HD"},
+    "z-image-turbo":   {"full_label": "🌀Z-Image", "button_icon": "🌀ZI"},
+    "nano-banana-pro": {"full_label": "🍌Nano Banana",    "button_icon": "🍌NB"},
 }
 
 # ---------------- Model Config ----------------
