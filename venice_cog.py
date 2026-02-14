@@ -44,7 +44,7 @@ CFG_REFERENCE = {
     "hidream": {"cfg_scale": 6.5, "default_steps": 25, "max_steps": 50},
     "wai-Illustrious": {"cfg_scale": 8.0, "default_steps": 22, "max_steps": 30},
     "lustify-v7": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
-    "grok-imagine": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
+    "z-image-turbo": {"cfg_scale": 6.0, "default_steps": 8, "max_steps": 8},
     "nano-banana-pro": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
 }
 
@@ -55,8 +55,8 @@ VARIANT_MAP = {
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "LF V7🔞", "model": "lustify-v7"},
         {"label": "HDream", "model": "hidream"},
-        {"label": "Grok🔞", "model": "grok-imagine"},
-        {"label": "NB", "model": "nano-banana-pro"},
+        {"label": "Z-Image🔞", "model": "z-image-turbo"},
+        {"label": "NBanana", "model": "nano-banana-pro"},
     ] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [
         {"label": "LF🔞", "model": "lustify-sdxl"},
@@ -64,8 +64,8 @@ VARIANT_MAP = {
         {"label": "Wai🔞", "model": "wai-Illustrious"},
         {"label": "LF V7🔞", "model": "lustify-v7"},
         {"label": "HDream", "model": "hidream"},
-        {"label": "Grok🔞", "model": "grok-imagine"},
-        {"label": "NB", "model": "nano-banana-pro"},
+        {"label": "Z-Image🔞", "model": "z-image-turbo"},
+        {"label": "NBanana", "model": "nano-banana-pro"},
     ]
 }
 
@@ -76,7 +76,7 @@ MODEL_ASPECTS = {
     "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
     "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
     "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "grok-imagine": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
+    "z-image-turbo": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
     "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
 
