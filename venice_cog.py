@@ -37,6 +37,17 @@ SFW_PROMPT_SUFFIX = " "
 
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
+# ---------------- Model Labels & Icons ----------------
+MODEL_LABELS = {
+    "lustify-sdxl":    {"full_label": "LF 🔥",      "button_icon": "🔥"},
+    "venice-sd35":     {"full_label": "SD35 🚀",    "button_icon": "🚀"},
+    "wai-Illustrious": {"full_label": "Wai 🎨",     "button_icon": "🎨"},
+    "lustify-v7":      {"full_label": "LF V7 ⚡",   "button_icon": "⚡"},
+    "hidream":         {"full_label": "HDream 🌙",  "button_icon": "🌙"},
+    "z-image-turbo":   {"full_label": "Z-Image ⚡", "button_icon": "⚡"},
+    "nano-banana-pro": {"full_label": "Nano🍌",    "button_icon": "🍌"},
+}
+
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 6.0, "default_steps": 25, "max_steps": 50},
@@ -48,35 +59,36 @@ CFG_REFERENCE = {
     "nano-banana-pro": {"cfg_scale": 6.0, "default_steps": 30, "max_steps": 50},
 }
 
+# ---------------- VARIANT_MAP ----------------
 VARIANT_MAP = {
     **{ch: [
-        {"label": "LF🔞", "model": "lustify-sdxl"},
-        {"label": "SD35", "model": "venice-sd35"},
-        {"label": "Wai🔞", "model": "wai-Illustrious"},
-        {"label": "LF V7🔞", "model": "lustify-v7"},
-        {"label": "HDream", "model": "hidream"},
-        {"label": "Z-Image🔞", "model": "z-image-turbo"},
-        {"label": "NBanana", "model": "nano-banana-pro"},
+        {"model": "lustify-sdxl"},
+        {"model": "venice-sd35"},
+        {"model": "wai-Illustrious"},
+        {"model": "lustify-v7"},
+        {"model": "hidream"},
+        {"model": "z-image-turbo"},
+        {"model": "nano-banana-pro"},
     ] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [
-        {"label": "LF🔞", "model": "lustify-sdxl"},
-        {"label": "SD35", "model": "venice-sd35"},
-        {"label": "Wai🔞", "model": "wai-Illustrious"},
-        {"label": "LF V7🔞", "model": "lustify-v7"},
-        {"label": "HDream", "model": "hidream"},
-        {"label": "Z-Image🔞", "model": "z-image-turbo"},
-        {"label": "NBanana", "model": "nano-banana-pro"},
+        {"model": "lustify-sdxl"},
+        {"model": "venice-sd35"},
+        {"model": "wai-Illustrious"},
+        {"model": "lustify-v7"},
+        {"model": "hidream"},
+        {"model": "z-image-turbo"},
+        {"model": "nano-banana-pro"},
     ]
 }
 
 # ---------------- Model Aspect Ratios & Role Requirements ----------------
 MODEL_ASPECTS = {
-    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": None},
-    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
-    "z-image-turbo": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 Hi-Res"], "role_id": VIP_ROLE_ID},
+    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": None},
+    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
+    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
+    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
+    "z-image-turbo": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
     "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
 
@@ -115,7 +127,7 @@ async def venice_generate(session: aiohttp.ClientSession, prompt: str, variant: 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
     def __init__(self, session, variant, hidden_suffix_default, is_vip, previous_inputs=None):
-        super().__init__(title=f"Generate with {variant['label']}")
+        super().__init__(title=f"Generate with {MODEL_LABELS[variant['model']]['full_label']}")
         self.session = session
         self.variant = variant
         self.hidden_suffix_value = hidden_suffix_default
@@ -195,7 +207,7 @@ class VeniceModal(discord.ui.Modal):
         channel_id = interaction.channel.id if interaction.channel else None
         hidden_suffix_default = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
         await interaction.response.send_message(
-            f"🎨 {variant['label']} ready! Choose an aspect ratio:",
+            f"🎨 {MODEL_LABELS[variant['model']]['full_label']} ready! Choose an aspect ratio:",
             view=AspectRatioView(
                 self.session, variant, self.prompt.value, user_hidden, interaction.user,
                 self.is_vip, channel_id=channel_id, previous_inputs=self.previous_inputs
@@ -220,7 +232,7 @@ class AspectRatioView(discord.ui.View):
             "🟦1:1": (1024, 1024),
             "📺16:9": (1280, 816),
             "📱9:16": (816, 1280),
-            "🖼️1:1 Hi-Res": (1280, 1280)
+            "🖼️1:1 ⚡️": (1280, 1280)
         }
 
         for ratio_name, (w, h) in aspect_map.items():
@@ -288,7 +300,7 @@ class AspectRatioView(discord.ui.View):
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        tech_info = f"{self.variant['label']} | {width}x{height} | CFG: {cfg} | Steps: {self.variant.get('steps', CFG_REFERENCE[self.variant['model']]['default_steps'])}"
+        tech_info = f"{MODEL_LABELS[self.variant['model']]['full_label']} | {width}x{height} | CFG: {cfg} | Steps: {steps}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
@@ -364,7 +376,8 @@ class PostGenerationView(discord.ui.View):
                 variants = VARIANT_MAP.get(channel_id, [])
 
                 for v in variants:
-                    btn = discord.ui.Button(label=v["label"], style=discord.ButtonStyle.danger)
+                    icon = MODEL_LABELS[v["model"]]["button_icon"]
+                    btn = discord.ui.Button(label=icon, style=discord.ButtonStyle.danger)
                     btn.callback = self.make_callback(v)
                     self.add_item(btn)
 
@@ -387,7 +400,8 @@ class VeniceView(discord.ui.View):
         self.channel_id = channel.id
         variants = VARIANT_MAP.get(self.channel_id, [])
         for variant in variants:
-            btn = discord.ui.Button(label=variant["label"], style=discord.ButtonStyle.blurple,
+            icon = MODEL_LABELS[variant["model"]]["button_icon"]
+            btn = discord.ui.Button(label=icon, style=discord.ButtonStyle.blurple,
                                    custom_id=f"model_{variant['model']}_{uuid.uuid4().hex}")
             btn.callback = self.make_callback(variant)
             self.add_item(btn)
