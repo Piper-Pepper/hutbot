@@ -83,14 +83,15 @@ VARIANT_MAP = {
 
 # ---------------- Model Aspect Ratios & Role Requirements ----------------
 MODEL_ASPECTS = {
-    "lustify-sdxl": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": None},
-    "venice-sd35": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
-    "hidream": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
+    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": None},
+    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": None},
+    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": SPECIAL_ROLE_ID},
     "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
-    "lustify-v7": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
-    "z-image-turbo": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
+    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": SPECIAL_ROLE_ID},
+    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 ⚡️"], "role_id": VIP_ROLE_ID},
     "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
+
 
 # ---------------- Helper ----------------
 def make_safe_filename(prompt: str) -> str:
