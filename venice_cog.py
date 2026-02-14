@@ -401,7 +401,7 @@ class VeniceView(discord.ui.View):
         variants = VARIANT_MAP.get(self.channel_id, [])
         for variant in variants:
             icon = MODEL_LABELS[variant["model"]]["button_icon"]
-            btn = discord.ui.Button(label=icon, style=discord.ButtonStyle.blurple,
+            btn = discord.ui.Button(label=icon, style=discord.ButtonStyle.gray,
                                    custom_id=f"model_{variant['model']}_{uuid.uuid4().hex}")
             btn.callback = self.make_callback(variant)
             self.add_item(btn)
