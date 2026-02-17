@@ -60,13 +60,13 @@ CFG_REFERENCE = {
 }
 
 MODEL_ASPECTS = {
-    "lustify-sdxl":    {"ratios": ["🟦", "📺", "📱", "🖼️⚡️"], "role_id": None},
-    "venice-sd35":     {"ratios": ["🟦", "📺", "📱", "🖼️⚡️"], "role_id": None},
-    "hidream":         {"ratios": ["🟦", "📺", "📱", "🖼️⚡️"], "role_id": SPECIAL_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["🟦", "📺", "📱", "🖼️⚡️"], "role_id": VIP_ROLE_ID},
-    "lustify-v7":      {"ratios": ["🟦", "📺", "📱", "🖼️⚡️"], "role_id": SPECIAL_ROLE_ID},
-    "z-image-turbo":   {"ratios": ["🟦", "📺", "📱", "🖼️⚡️"], "role_id": VIP_ROLE_ID},
-    "nano-banana-pro": {"ratios": ["🟦"], "role_id": VIP_ROLE_ID},
+    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
+    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
+    "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
 
 VARIANT_MAP = {
@@ -207,10 +207,10 @@ class AspectRatioView(discord.ui.View):
         self.previous_inputs = previous_inputs or {}
 
         aspect_map = {
-            "🟦": (1024, 1024),
-            "📺": (1280, 816),
-            "📱": (816, 1280),
-            "🖼️⚡️": (1280, 1280)
+            "🟦1:1": (1024, 1024),
+            "📺16:9": (1280, 816),
+            "📱9:16": (816, 1280),
+            "🖼️1:1 (Hi)": (1280, 1280)
         }
 
         for ratio_name, (w, h) in aspect_map.items():
