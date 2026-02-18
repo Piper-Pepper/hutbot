@@ -42,10 +42,10 @@ MODEL_LABELS = {
     "lustify-sdxl":    {"full_label": "🔥 Lustify", "button_icon": "🔥LF"},
     "venice-sd35":     {"full_label": "🚀 SD35", "button_icon": "🚀S3"},
     "wai-Illustrious": {"full_label": "🎨 Wai", "button_icon": "🎨WI"},
-    "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
-    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
     "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
     "nano-banana-pro": {"full_label": "🍌 Nano Banana", "button_icon": "🍌NB"},
+    "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
+    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},    
 }
 
 # ---------------- Model Config ----------------
@@ -60,8 +60,8 @@ CFG_REFERENCE = {
 }
 
 ROLE_LEVEL_LABELS = {
-    VIP_ROLE_ID: "(Lvl4)",
-    SPECIAL_ROLE_ID: "(Lvl11)"
+    VIP_ROLE_ID: "⭐*(Lvl 4)*",
+    SPECIAL_ROLE_ID: "💎*(Lvl 11)*"
 }
 
 MODEL_ASPECTS = {
