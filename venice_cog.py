@@ -401,12 +401,21 @@ class ModelSelect(discord.ui.Select):
         options = []
         for variant in VARIANT_MAP.get(channel_id, []):
             model = variant["model"]
+
+            role_needed = MODEL_ASPECTS[model].get("role_id")
+            level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
+
+            label_text = MODEL_LABELS[model]["full_label"]
+            if level_label:
+                label_text = f"{label_text} {level_label}"
+
             options.append(
                 discord.SelectOption(
-                    label=MODEL_LABELS[model]["full_label"],
+                    label=label_text,
                     value=model
                 )
             )
+
 
         super().__init__(
             placeholder="🎨 Choose your model...",
