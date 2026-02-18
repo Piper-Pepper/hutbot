@@ -370,22 +370,6 @@ class PostGenerationView(discord.ui.View):
                         )
                     )
 
-
-role_needed = MODEL_ASPECTS[model].get("role_id")
-level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
-
-label_text = MODEL_LABELS[model]["full_label"]
-if level_label:
-    label_text = f"{label_text} {level_label}"
-
-options.append(
-    discord.SelectOption(
-        label=label_text,
-        value=model
-    )
-)
-
-
                 super().__init__(
                     placeholder="♻️ Re-use with model...",
                     min_values=1,
