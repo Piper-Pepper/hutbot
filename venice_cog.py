@@ -59,6 +59,11 @@ CFG_REFERENCE = {
     "nano-banana-pro": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
 }
 
+ROLE_LEVEL_LABELS = {
+    VIP_ROLE_ID: "(Lvl4)",
+    SPECIAL_ROLE_ID: "(Lvl11)"
+}
+
 MODEL_ASPECTS = {
     "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
     "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
@@ -349,14 +354,28 @@ class PostGenerationView(discord.ui.View):
                 options = []
                 for variant in VARIANT_MAP.get(channel_id, []):
                     model = variant["model"]
-                    options.append(
-                        discord.SelectOption(
-                            label=MODEL_LABELS[model]["full_label"],
-                            value=model
-                        )
-                    )
+                role_needed = MODEL_ASPECTS[model].get("role_id")
+                level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
 
-                super().__init__(
+                label_text = MODEL_LABELS[model]["full_label"]
+                if level_label:
+                    label_text = f"{label_text} {level_label}"
+
+                role_needed = MODEL_ASPECTS[model].get("role_id")
+                level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
+
+                label_text = MODEL_LABELS[model]["full_label"]
+                if level_label:
+                    label_text = f"{label_text} {level_label}"
+
+                options.append(
+                    discord.SelectOption(
+                        label=label_text,
+                        value=model
+                    )
+                )
+
+                                super().__init__(
                     placeholder="♻️ Re-use with model...",
                     min_values=1,
                     max_values=1,
