@@ -45,7 +45,7 @@ MODEL_LABELS = {
     "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
     "nano-banana-pro": {"full_label": "🍌 Nano Banana", "button_icon": "🍌NB"},
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
-    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
+    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},    
 }
 
 # ---------------- Model Config ----------------
@@ -64,15 +64,14 @@ ROLE_LEVEL_LABELS = {
     SPECIAL_ROLE_ID: "💎(Lvl 11)"
 }
 
-# ---------------- Model Ratios ----------------
 MODEL_ASPECTS = {
-    "lustify-sdxl":    {"ratios": ["1:1", "16:9", "9:16"], "role_id": None},
-    "venice-sd35":     {"ratios": ["1:1", "16:9", "9:16"], "role_id": None},
-    "hidream":         {"ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"], "role_id": SPECIAL_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["1:1", "16:9", "9:16"], "role_id": VIP_ROLE_ID},
-    "lustify-v7":      {"ratios": ["1:1", "16:9", "9:16"], "role_id": SPECIAL_ROLE_ID},
-    "z-image-turbo":   {"ratios": ["1:1", "16:9", "9:16"], "role_id": VIP_ROLE_ID},
-    "nano-banana-pro": {"ratios": ["1:1"], "role_id": VIP_ROLE_ID},
+    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
+    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
+    "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
 }
 
 VARIANT_MAP = {
@@ -86,12 +85,13 @@ def make_safe_filename(prompt: str) -> str:
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
-async def venice_generate(session, prompt, variant, ratio, steps, cfg_scale, negative_prompt):
+async def venice_generate(session, prompt, variant, width, height, steps, cfg_scale, negative_prompt):
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     payload = {
         "model": variant["model"],
         "prompt": prompt,
-        "ratio": ratio,  # nur Ratio statt Pixel
+        "width": width,
+        "height": height,
         "steps": steps,
         "cfg_scale": cfg_scale,
         "negative_prompt": negative_prompt,
@@ -188,6 +188,7 @@ class VeniceModal(discord.ui.Modal):
         }
 
         channel_id = interaction.channel.id if interaction.channel else None
+        hidden_suffix_default = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
         await interaction.response.send_message(
             f"🎨 {MODEL_LABELS[variant['model']]['full_label']} ready! Choose an aspect ratio:",
             view=AspectRatioView(
@@ -210,21 +211,29 @@ class AspectRatioView(discord.ui.View):
         self.channel_id = channel_id
         self.previous_inputs = previous_inputs or {}
 
-        for ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
-            role_needed = MODEL_ASPECTS[self.variant["model"]].get("role_id")
-            btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
-            btn.callback = self.make_callback(ratio_name, role_needed)
-            self.add_item(btn)
+        aspect_map = {
+            "🟦1:1": (1024, 1024),
+            "📺16:9": (1280, 816),
+            "📱9:16": (816, 1280),
+            "🖼️1:1 (Hi)": (1280, 1280)
+        }
 
-    def make_callback(self, ratio_name, role_id=None):
+        for ratio_name, (w, h) in aspect_map.items():
+            if ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
+                role_needed = MODEL_ASPECTS[self.variant["model"]].get("role_id")
+                btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
+                btn.callback = self.make_callback(w, h, ratio_name, role_needed)
+                self.add_item(btn)
+
+    def make_callback(self, width, height, ratio_name, role_id=None):
         async def callback(interaction: discord.Interaction):
             if role_id and not any(r.id == role_id for r in interaction.user.roles):
                 await interaction.response.send_message(f"❌ You need <@&{role_id}> to use this aspect ratio!", ephemeral=True)
                 return
-            await self.generate_image(interaction, ratio_name)
+            await self.generate_image(interaction, width, height, ratio_name)
         return callback
 
-    async def generate_image(self, interaction, ratio_name):
+    async def generate_image(self, interaction, width, height, ratio_name):
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
@@ -241,7 +250,7 @@ class AspectRatioView(discord.ui.View):
         if full_prompt and not full_prompt[0].isalnum(): full_prompt = " " + full_prompt
 
         img_bytes = await venice_generate(
-            self.session, full_prompt, self.variant, ratio_name, steps=steps, cfg_scale=cfg,
+            self.session, full_prompt, self.variant, width, height, steps=steps, cfg_scale=cfg,
             negative_prompt=self.variant.get("negative_prompt")
         )
 
@@ -274,7 +283,7 @@ class AspectRatioView(discord.ui.View):
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        tech_info = f"{MODEL_LABELS[self.variant['model']]['full_label']} | Ratio: {ratio_name} | CFG: {cfg} | Steps: {steps}"
+        tech_info = f"{MODEL_LABELS[self.variant['model']]['full_label']} | {width}x{height} | CFG: {cfg} | Steps: {steps}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
@@ -407,20 +416,35 @@ class ModelSelect(discord.ui.Select):
                 )
             )
 
-        super().__init__(placeholder="Choose model...", min_values=1, max_values=1, options=options)
+
+        super().__init__(
+            placeholder="🎨 Choose your model...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
 
     async def callback(self, interaction: discord.Interaction):
         model = self.values[0]
         role_needed = MODEL_ASPECTS[model]["role_id"]
+
         if role_needed and not any(r.id == role_needed for r in interaction.user.roles):
-            await interaction.response.send_message(f"❌ You need <@&{role_needed}> to use this model!", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ You need <@&{role_needed}> to use this model!",
+                ephemeral=True
+            )
             return
-        await interaction.response.send_modal(VeniceModal(self.session, {"model": model}, NSFW_PROMPT_SUFFIX))
+
+        hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
+
+        await interaction.response.send_modal(
+            VeniceModal(self.session, {"model": model}, hidden_suffix)
+        )
 
 class VeniceView(discord.ui.View):
-    def __init__(self, session, channel_id):
+    def __init__(self, session, channel):
         super().__init__(timeout=None)
-        self.add_item(ModelSelect(session, channel_id))
+        self.add_item(ModelSelect(session, channel.id))
 
 # ---------------- Cog ----------------
 class VeniceCog(commands.Cog):
@@ -428,23 +452,36 @@ class VeniceCog(commands.Cog):
         self.bot = bot
         self.session = aiohttp.ClientSession()
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        print(f"Venice Cog ready as {self.bot.user}")
+    async def cog_unload(self):
+        await self.session.close()
+
+    async def ensure_button_message(self, channel):
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                await msg.delete()
+
+        await channel.send(
+            "💡 Choose Model for 🖼️ NEW image!",
+            view=VeniceView(self.session, channel)
+        )
 
     @staticmethod
     async def ensure_button_message_static(channel, session):
-        pass  # hier kann dein original-Code rein, falls du permanenten Button-Pinned brauchst
+        async for msg in channel.history(limit=10):
+            if msg.components and not msg.embeds and not msg.attachments:
+                await msg.delete()
 
-    @commands.command()
-    async def venice(self, ctx):
-        await ctx.send("♻️ Generate image with Venice:", view=VeniceView(self.session, ctx.channel.id))
+        await channel.send(
+            "💡 Choose Model for 🖼️ NEW image!",
+            view=VeniceView(session, channel)
+        )
 
-# ---------------- Bot ----------------
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                if channel.id in VARIANT_MAP:
+                    await self.ensure_button_message(channel)
 
-bot.add_cog(VeniceCog(bot))
-
-bot.run(os.getenv("DISCORD_TOKEN"))
+async def setup(bot):
+    await bot.add_cog(VeniceCog(bot))
