@@ -352,30 +352,41 @@ class PostGenerationView(discord.ui.View):
                 self.hidden_suffix = hidden_suffix
 
                 options = []
+
                 for variant in VARIANT_MAP.get(channel_id, []):
                     model = variant["model"]
-                role_needed = MODEL_ASPECTS[model].get("role_id")
-                level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
 
-                label_text = MODEL_LABELS[model]["full_label"]
-                if level_label:
-                    label_text = f"{label_text} {level_label}"
+                    role_needed = MODEL_ASPECTS[model].get("role_id")
+                    level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
 
-                role_needed = MODEL_ASPECTS[model].get("role_id")
-                level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
+                    label_text = MODEL_LABELS[model]["full_label"]
+                    if level_label:
+                        label_text = f"{label_text} {level_label}"
 
-                label_text = MODEL_LABELS[model]["full_label"]
-                if level_label:
-                    label_text = f"{label_text} {level_label}"
-
-                options.append(
-                    discord.SelectOption(
-                        label=label_text,
-                        value=model
+                    options.append(
+                        discord.SelectOption(
+                            label=label_text,
+                            value=model
+                        )
                     )
-                )
 
-                                super().__init__(
+
+role_needed = MODEL_ASPECTS[model].get("role_id")
+level_label = ROLE_LEVEL_LABELS.get(role_needed, "")
+
+label_text = MODEL_LABELS[model]["full_label"]
+if level_label:
+    label_text = f"{label_text} {level_label}"
+
+options.append(
+    discord.SelectOption(
+        label=label_text,
+        value=model
+    )
+)
+
+
+                super().__init__(
                     placeholder="♻️ Re-use with model...",
                     min_values=1,
                     max_values=1,
