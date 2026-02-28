@@ -57,6 +57,7 @@ CFG_REFERENCE = {
     "lustify-v7": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
     "z-image-turbo": {"cfg_scale": 6.0, "default_steps": 8, "max_steps": 8},
     "nano-banana-pro": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
+    "nano-banana-2": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
 }
 
 ROLE_LEVEL_LABELS = {
@@ -71,9 +72,19 @@ MODEL_ASPECTS = {
     "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
     "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
     "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
-    "nano-banana-pro": {"ratios": ["🟦1:1"], "role_id": VIP_ROLE_ID},
-}
 
+    # Banana Pro (kann mehrere Ratios – also nicht auf 1:1 begrenzen!)
+    "nano-banana-pro": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
+        "role_id": VIP_ROLE_ID
+    },
+
+    # Banana 2
+    "nano-banana-2": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
+        "role_id": VIP_ROLE_ID
+    },
+}
 VARIANT_MAP = {
     **{ch: [{"model": m} for m in MODEL_LABELS] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [{"model": m} for m in MODEL_LABELS],
