@@ -109,6 +109,8 @@ def ratio_to_dimensions(ratio: str, base=1024):
         return 960, 1280
     if ratio == "4:5":
         return 1024, 1280
+    if ratio == "HI":
+        return 1280, 1280
     return base, base
 
 def make_safe_filename(prompt: str) -> str:
@@ -239,7 +241,8 @@ class AspectRatioView(discord.ui.View):
             "📺16:9": "16:9",
             "📱9:16": "9:16",
             "🎬21:9": "21:9",
-            "📷2:3": "2:3"            
+            "📷2:3": "2:3",            
+            "🖼️1:1 (Hi)": "HI"
         }
 
         for ratio_name, ratio_value in aspect_map.items():
