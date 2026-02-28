@@ -42,14 +42,14 @@ pepper = "<a:01pepper_icon:1377636862847619213>"
 MODEL_LABELS = {
     "lustify-sdxl":    {"full_label": "🔥 Lustify", "button_icon": "🔥LF"},
     "venice-sd35":     {"full_label": "🚀 SD35", "button_icon": "🚀S3"},
-    "wai-Illustrious": {"full_label": "🎨 Wai", "button_icon": "🎨WI"},
-    "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
     "nano-banana-pro": {"full_label": "🍌 Nano Banana Pro", "button_icon": "🍌NP"},
+    "wai-Illustrious": {"full_label": "🎨 Wai", "button_icon": "🎨WI"},
+    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
+    "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
+    "imagineart-1.5-pro": {"full_label": "🎨 ImagineArt Pro", "button_icon": "🎨IA"},
     "nano-banana-2":    {"full_label": "🍌 Nano Banana 2", "button_icon": "🍌N2"},
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
-    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
     # ✅ Neue Modelle
-    "imagineart-1.5-pro": {"full_label": "🎨 ImagineArt Pro", "button_icon": "🎨IA"},
     "seedream-v4":        {"full_label": "🌊 Seedream V4", "button_icon": "🌊S4"},
     "recraft-v4-pro":      {"full_label": "🧱 Recraft Pro", "button_icon": "🧱RP"},
 }
@@ -137,7 +137,7 @@ ROLE_LEVEL_LABELS = {
 MODEL_ASPECTS = {
     "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
     "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
-    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
     "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
     "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
     "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
