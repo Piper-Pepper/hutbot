@@ -52,8 +52,6 @@ MODEL_LABELS = {
     "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
 
     # ✅ Neue Modelle
-    "flux-2-pro":      {"full_label": "🔥 Flux Pro", "button_icon": "🔥FP"},
-    "flux-2-max":      {"full_label": "💥 Flux Max", "button_icon": "💥FM"},
 
     "imagineart-1.5-pro": {"full_label": "🎨 ImagineArt Pro", "button_icon": "🎨IA"},
     "seedream-v4":        {"full_label": "🌊 Seedream V4", "button_icon": "🌊S4"},
