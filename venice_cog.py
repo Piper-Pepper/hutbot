@@ -46,12 +46,11 @@ MODEL_LABELS = {
     "wai-Illustrious": {"full_label": "🎨 Wai", "button_icon": "🎨WI"},
     "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
     "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
+    "recraft-v4-pro":      {"full_label": "🧱 Recraft Pro", "button_icon": "🧱RP"},
     "imagineart-1.5-pro": {"full_label": "🎨 ImagineArt Pro", "button_icon": "🎨IA"},
     "nano-banana-2":    {"full_label": "🍌 Nano Banana 2", "button_icon": "🍌N2"},
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
-    # ✅ Neue Modelle
     "seedream-v4":        {"full_label": "🌊 Seedream V4", "button_icon": "🌊S4"},
-    "recraft-v4-pro":      {"full_label": "🧱 Recraft Pro", "button_icon": "🧱RP"},
 }
 
 # ---------------- Model Config ----------------
