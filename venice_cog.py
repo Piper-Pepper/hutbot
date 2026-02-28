@@ -38,6 +38,7 @@ SFW_PROMPT_SUFFIX = " "
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
 # ---------------- Model Labels ----------------
+# ---------------- Model Labels ----------------
 MODEL_LABELS = {
     "lustify-sdxl":    {"full_label": "🔥 Lustify", "button_icon": "🔥LF"},
     "venice-sd35":     {"full_label": "🚀 SD35", "button_icon": "🚀S3"},
@@ -49,7 +50,16 @@ MODEL_LABELS = {
 
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
     "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
+
+    # ✅ Neue Modelle
+    "flux-2-pro":      {"full_label": "🔥 Flux Pro", "button_icon": "🔥FP"},
+    "flux-2-max":      {"full_label": "💥 Flux Max", "button_icon": "💥FM"},
+
+    "imagineart-1.5-pro": {"full_label": "🎨 ImagineArt Pro", "button_icon": "🎨IA"},
+    "seedream-v4":        {"full_label": "🌊 Seedream V4", "button_icon": "🌊S4"},
+    "recraft-v4-pro":      {"full_label": "🧱 Recraft Pro", "button_icon": "🧱RP"},
 }
+
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
 
