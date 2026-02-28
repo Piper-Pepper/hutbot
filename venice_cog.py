@@ -52,14 +52,77 @@ MODEL_LABELS = {
 }
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
-    "lustify-sdxl": {"cfg_scale": 5.0, "default_steps": 25, "max_steps": 50},
-    "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
-    "hidream": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 50},
-    "wai-Illustrious": {"cfg_scale": 7.0, "default_steps": 20, "max_steps": 30},
-    "lustify-v7": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
-    "z-image-turbo": {"cfg_scale": 6.0, "default_steps": 8, "max_steps": 8},
-    "nano-banana-pro": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
-    "nano-banana-2": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
+
+    # Pixel / Stable Diffusion Style
+    "lustify-sdxl": {
+        "cfg_scale": 5.0,
+        "default_steps": 25,
+        "max_steps": 50
+    },
+
+    "venice-sd35": {
+        "cfg_scale": 6.0,
+        "default_steps": 20,
+        "max_steps": 30
+    },
+
+    "hidream": {
+        "cfg_scale": 6.5,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "wai-Illustrious": {
+        "cfg_scale": 7.0,
+        "default_steps": 25,
+        "max_steps": 30
+    },
+
+    "lustify-v7": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "z-image-turbo": {
+        "cfg_scale": 6.0,
+        "default_steps": 8,
+        "max_steps": 8
+    },
+
+    # -----------------------------
+    # Modelle mit starkem Render-Fokus
+    # -----------------------------
+
+    "nano-banana-pro": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "nano-banana-2": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "imagineart-1.5-pro": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "seedream-v4": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "recraft-v4-pro": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
 }
 
 ROLE_LEVEL_LABELS = {
@@ -77,14 +140,27 @@ MODEL_ASPECTS = {
 
     # Banana Pro (kann mehrere Ratios – also nicht auf 1:1 begrenzen!)
     "nano-banana-pro": {
-        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
+        "role_id": None
+    },
+
+    "imagineart-1.5-pro": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
+        "role_id": VIP_ROLE_ID
+    },
+    "seedream-v4": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
+        "role_id": SPECIAL_ROLE_ID
+    },
+    "recraft-v4-pro": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": VIP_ROLE_ID
     },
 
     # Banana 2
     "nano-banana-2": {
-        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
-        "role_id": VIP_ROLE_ID
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
+        "role_id": SPECIAL_ROLE_ID
     },
 }
 VARIANT_MAP = {
