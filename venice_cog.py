@@ -135,65 +135,38 @@ ROLE_LEVEL_LABELS = {
 }
 
 MODEL_ASPECTS = {
+    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
+    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
 
-    "lustify-sdxl": {
-        "ratios": ["1:1", "16:9", "9:16", "HI"],
-        "role_id": None
-    },
-
-    "venice-sd35": {
-        "ratios": ["1:1", "16:9", "9:16", "HI"],
-        "role_id": None
-    },
-
-    "hidream": {
-        "ratios": ["1:1", "16:9", "9:16", "HI"],
-        "role_id": SPECIAL_ROLE_ID
-    },
-
-    "wai-Illustrious": {
-        "ratios": ["1:1", "16:9", "9:16"],
-        "role_id": VIP_ROLE_ID
-    },
-
-    "lustify-v7": {
-        "ratios": ["1:1", "16:9", "9:16", "HI"],
-        "role_id": SPECIAL_ROLE_ID
-    },
-
-    "z-image-turbo": {
-        "ratios": ["1:1", "16:9", "9:16"],
-        "role_id": VIP_ROLE_ID
-    },
-
-    # Banana Pro
+    # Banana Pro (kann mehrere Ratios – also nicht auf 1:1 begrenzen!)
     "nano-banana-pro": {
-        "ratios": ["1:1", "16:9", "9:16", "21:9", "2:3", "3:2", "3:4", "4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": None
     },
 
     "imagineart-1.5-pro": {
-        "ratios": ["1:1", "16:9", "9:16", "2:3", "3:2", "3:4", "4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "📷2:3"],
         "role_id": VIP_ROLE_ID
     },
-
     "seedream-v4": {
-        "ratios": ["1:1", "16:9", "9:16", "2:3", "3:2", "3:4", "4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "📷2:3"],
         "role_id": SPECIAL_ROLE_ID
     },
-
     "recraft-v4-pro": {
-        "ratios": ["1:1", "16:9", "9:16", "21:9", "2:3", "3:2", "3:4", "4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": VIP_ROLE_ID
     },
 
+    # Banana 2
     "nano-banana-2": {
-        "ratios": ["1:1", "16:9", "9:16", "21:9", "2:3", "3:2", "3:4", "4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": SPECIAL_ROLE_ID
     },
 }
-
-
 VARIANT_MAP = {
     **{ch: [{"model": m} for m in MODEL_LABELS] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [{"model": m} for m in MODEL_LABELS],
@@ -202,34 +175,22 @@ VARIANT_MAP = {
 # ---------------- Helper ----------------
 
 def ratio_to_dimensions(ratio: str, base=1024):
-
     if ratio == "16:9":
         return 1280, 720
-
     if ratio == "9:16":
         return 720, 1280
-
     if ratio == "21:9":
         return 1440, 640
-
     if ratio == "3:2":
         return 1200, 800
-
     if ratio == "2:3":
         return 800, 1200
-
     if ratio == "3:4":
         return 960, 1280
-
     if ratio == "4:5":
         return 1024, 1280
-
-    if ratio == "1:1":
-        return 1024, 1024
-
     if ratio == "HI":
         return 1280, 1280
-
     return base, base
 
 def make_safe_filename(prompt: str) -> str:
