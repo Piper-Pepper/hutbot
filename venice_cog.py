@@ -83,60 +83,26 @@ ROLE_LEVEL_LABELS = {
 }
 
 MODEL_ASPECTS = {
+    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
+    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
+    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
+    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
 
-    # -------- Modelle mit aspectRatios (kein Hi nötig) --------
-
-    "flux-2-pro": {
-        "ratios": ["1:1", "3:2", "2:3", "16:9", "9:16", "21:9"],
-        "role_id": None
-    },
-
-    "flux-2-max": {
-        "ratios": ["1:1", "3:2", "2:3", "16:9", "9:16", "21:9"],
-        "role_id": SPECIAL_ROLE_ID
-    },
-
+    # Banana Pro (kann mehrere Ratios – also nicht auf 1:1 begrenzen!)
     "nano-banana-pro": {
-        "ratios": ["1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
         "role_id": VIP_ROLE_ID
     },
 
+    # Banana 2
     "nano-banana-2": {
-        "ratios": ["1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"],
-        "role_id": VIP_ROLE_ID
-    },
-
-    # -------- Pixel / width-height Modelle --------
-    # Diese bekommen automatisch den Hi Button
-
-    "lustify-sdxl": {
-        "ratios": ["1:1", "16:9", "9:16", "1:1-Hi"],
-        "role_id": None,
-        "pixel_mode": True
-    },
-
-    "venice-sd35": {
-        "ratios": ["1:1", "16:9", "9:16", "1:1-Hi"],
-        "role_id": None,
-        "pixel_mode": True
-    },
-
-    "hidream": {
-        "ratios": ["1:1", "16:9", "9:16", "1:1-Hi"],
-        "role_id": SPECIAL_ROLE_ID,
-        "pixel_mode": True
-    },
-
-    "wai-Illustrious": {
-        "ratios": ["1:1", "16:9", "9:16"],
-        "role_id": VIP_ROLE_ID
-    },
-
-    "z-image-turbo": {
-        "ratios": ["1:1", "16:9", "9:16"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
         "role_id": VIP_ROLE_ID
     },
 }
+
 
 VARIANT_MAP = {
     **{ch: [{"model": m} for m in MODEL_LABELS] for ch in NSFW_CHANNELS},
@@ -160,7 +126,7 @@ def ratio_to_dimensions(ratio: str, base=1024):
         return 960, 1280
     if ratio == "4:5":
         return 1024, 1280
-    if ratio == "1:1-Hi":
+    if ratio == "HI":
         return 1280, 1280
     return base, base
 
