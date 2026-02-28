@@ -38,7 +38,6 @@ SFW_PROMPT_SUFFIX = " "
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
 # ---------------- Model Labels ----------------
-# ---------------- Model Labels ----------------
 MODEL_LABELS = {
     "lustify-sdxl":    {"full_label": "🔥 Lustify", "button_icon": "🔥LF"},
     "venice-sd35":     {"full_label": "🚀 SD35", "button_icon": "🚀S3"},
@@ -49,12 +48,6 @@ MODEL_LABELS = {
     "nano-banana-2":    {"full_label": "🍌 Nano Banana 2", "button_icon": "🍌N2"},
 
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
-
-    # ✅ Neue Modelle
-    "flux-2-pro":      {"full_label": "🔥 Flux Pro", "button_icon": "🔥FP"},
-    "seedream-v4":     {"full_label": "🌊 Seedream", "button_icon": "🌊SD"},
-    "flux-2-max":      {"full_label": "💥 Flux Max (NSFW)", "button_icon": "💥FM"},
-
     "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
 }
 # ---------------- Model Config ----------------
@@ -62,19 +55,11 @@ CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 5.0, "default_steps": 25, "max_steps": 50},
     "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
     "hidream": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 50},
-
     "wai-Illustrious": {"cfg_scale": 7.0, "default_steps": 20, "max_steps": 30},
     "lustify-v7": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
-
     "z-image-turbo": {"cfg_scale": 6.0, "default_steps": 8, "max_steps": 8},
-
     "nano-banana-pro": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
     "nano-banana-2": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
-
-    # ✅ Neue Modelle
-    "flux-2-pro": {"cfg_scale": 4.0, "default_steps": 20, "max_steps": 50},
-    "seedream-v4": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
-    "flux-2-max": {"cfg_scale": 4.0, "default_steps": 20, "max_steps": 50},
 }
 
 ROLE_LEVEL_LABELS = {
@@ -102,8 +87,6 @@ MODEL_ASPECTS = {
         "role_id": VIP_ROLE_ID
     },
 }
-
-
 VARIANT_MAP = {
     **{ch: [{"model": m} for m in MODEL_LABELS] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [{"model": m} for m in MODEL_LABELS],
