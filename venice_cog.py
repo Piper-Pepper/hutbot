@@ -521,21 +521,27 @@ class PostGenerationView(discord.ui.View):
             async def callback(self, interaction: discord.Interaction):
                 model = self.values[0]
                 role_needed = MODEL_ASPECTS[model]["role_id"]
+
                 if role_needed and not any(r.id == role_needed for r in interaction.user.roles):
-                    await interaction.response.send_message(f"❌ You need <@&{role_needed}> to use this model!", ephemeral=True)
+                    await interaction.response.send_message(
+                        f"❌ You need <@&{role_needed}> to use this model!",
+                        ephemeral=True
+                    )
                     return
 
- await interaction.response.send_modal(
-                VeniceModal(
-                    self.session,
-                    {"model": model},
-                    self.hidden_suffix,
-                    previous_inputs={
-                        "prompt": self.prompt_text,
-                        "hidden_suffix": self.hidden_suffix
-                    }
+                await interaction.response.send_modal(
+                    VeniceModal(
+                        self.session,
+                        {"model": model},
+                        self.hidden_suffix,
+                        previous_inputs={
+                            "prompt": self.prompt_text,
+                            "hidden_suffix": self.hidden_suffix
+                        }
+                    )
                 )
-            )
+
+                
         view = discord.ui.View()
         view.add_item(ReuseModelSelect(self.session, interaction.channel.id, self.author, self.prompt_text, self.hidden_suffix))
         await interaction.response.send_message("♻️ Choose model to re-use:", view=view, ephemeral=True)
