@@ -365,12 +365,11 @@ class AspectRatioView(discord.ui.View):
                 await progress_msg.edit(content=f"{pepper} Generating image for **{self.author.display_name}** ... {i*10}%")
             except: pass
 
-        full_prompt = (self.prompt_text or "") + (self.hidden_suffix or "")
-        if full_prompt and not full_prompt[0].isalnum(): full_prompt = " " + full_prompt
+        full_prompt = f"{(self.prompt_text or '').strip()} {(self.hidden_suffix or '').strip()}".strip()
 
         payload = {
             "model": self.variant["model"],
-            "prompt": self.prompt_text + (self.hidden_suffix or ""),
+            "prompt": full_prompt,
             "steps": steps,
             "cfg_scale": cfg,
             "negative_prompt": self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
@@ -378,7 +377,7 @@ class AspectRatioView(discord.ui.View):
             "hide_watermark": True,
             "return_binary": True
         }
-
+        
         model_name = self.variant["model"]
 
         # Modelle die KEIN aspect_ratio unterstützen → Pixel-Fallback
@@ -526,10 +525,17 @@ class PostGenerationView(discord.ui.View):
                     await interaction.response.send_message(f"❌ You need <@&{role_needed}> to use this model!", ephemeral=True)
                     return
 
-                await interaction.response.send_modal(
-                    VeniceModal(self.session, {"model": model}, self.hidden_suffix, previous_inputs={"prompt": self.prompt_text})
+ await interaction.response.send_modal(
+                VeniceModal(
+                    self.session,
+                    {"model": model},
+                    self.hidden_suffix,
+                    previous_inputs={
+                        "prompt": self.prompt_text,
+                        "hidden_suffix": self.hidden_suffix
+                    }
                 )
-
+            )
         view = discord.ui.View()
         view.add_item(ReuseModelSelect(self.session, interaction.channel.id, self.author, self.prompt_text, self.hidden_suffix))
         await interaction.response.send_message("♻️ Choose model to re-use:", view=view, ephemeral=True)
