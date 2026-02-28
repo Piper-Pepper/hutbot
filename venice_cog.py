@@ -43,11 +43,13 @@ MODEL_LABELS = {
     "venice-sd35":     {"full_label": "🚀 SD35", "button_icon": "🚀S3"},
     "wai-Illustrious": {"full_label": "🎨 Wai", "button_icon": "🎨WI"},
     "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
-    "nano-banana-pro": {"full_label": "🍌 Nano Banana", "button_icon": "🍌NB"},
-    "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
-    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},    
-}
 
+    "nano-banana-pro": {"full_label": "🍌 Nano Banana Pro", "button_icon": "🍌NP"},
+    "nano-banana-2":    {"full_label": "🍌 Nano Banana 2", "button_icon": "🍌N2"},
+
+    "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
+    "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
+}
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 5.0, "default_steps": 25, "max_steps": 50},
