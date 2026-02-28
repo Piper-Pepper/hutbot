@@ -38,6 +38,7 @@ SFW_PROMPT_SUFFIX = " "
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
 # ---------------- Model Labels ----------------
+# ---------------- Model Labels ----------------
 MODEL_LABELS = {
     "lustify-sdxl":    {"full_label": "🔥 Lustify", "button_icon": "🔥LF"},
     "venice-sd35":     {"full_label": "🚀 SD35", "button_icon": "🚀S3"},
@@ -48,6 +49,12 @@ MODEL_LABELS = {
     "nano-banana-2":    {"full_label": "🍌 Nano Banana 2", "button_icon": "🍌N2"},
 
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
+
+    # ✅ Neue Modelle
+    "flux-2-pro":      {"full_label": "🔥 Flux Pro", "button_icon": "🔥FP"},
+    "seedream-v4":     {"full_label": "🌊 Seedream", "button_icon": "🌊SD"},
+    "flux-2-max":      {"full_label": "💥 Flux Max (NSFW)", "button_icon": "💥FM"},
+
     "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
 }
 # ---------------- Model Config ----------------
@@ -55,11 +62,19 @@ CFG_REFERENCE = {
     "lustify-sdxl": {"cfg_scale": 5.0, "default_steps": 25, "max_steps": 50},
     "venice-sd35": {"cfg_scale": 6.0, "default_steps": 20, "max_steps": 30},
     "hidream": {"cfg_scale": 6.5, "default_steps": 20, "max_steps": 50},
+
     "wai-Illustrious": {"cfg_scale": 7.0, "default_steps": 20, "max_steps": 30},
     "lustify-v7": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
+
     "z-image-turbo": {"cfg_scale": 6.0, "default_steps": 8, "max_steps": 8},
+
     "nano-banana-pro": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
     "nano-banana-2": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
+
+    # ✅ Neue Modelle
+    "flux-2-pro": {"cfg_scale": 4.0, "default_steps": 20, "max_steps": 50},
+    "seedream-v4": {"cfg_scale": 5.0, "default_steps": 20, "max_steps": 50},
+    "flux-2-max": {"cfg_scale": 4.0, "default_steps": 20, "max_steps": 50},
 }
 
 ROLE_LEVEL_LABELS = {
@@ -68,25 +83,61 @@ ROLE_LEVEL_LABELS = {
 }
 
 MODEL_ASPECTS = {
-    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
-    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
-    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
-    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
-    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
 
-    # Banana Pro (kann mehrere Ratios – also nicht auf 1:1 begrenzen!)
+    # -------- Modelle mit aspectRatios (kein Hi nötig) --------
+
+    "flux-2-pro": {
+        "ratios": ["1:1", "3:2", "2:3", "16:9", "9:16", "21:9"],
+        "role_id": None
+    },
+
+    "flux-2-max": {
+        "ratios": ["1:1", "3:2", "2:3", "16:9", "9:16", "21:9"],
+        "role_id": SPECIAL_ROLE_ID
+    },
+
     "nano-banana-pro": {
-        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
+        "ratios": ["1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"],
         "role_id": VIP_ROLE_ID
     },
 
-    # Banana 2
     "nano-banana-2": {
-        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "🖼️3:2", "📷2:3", "🖼️3:4", "🖼️4:5"],
+        "ratios": ["1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"],
+        "role_id": VIP_ROLE_ID
+    },
+
+    # -------- Pixel / width-height Modelle --------
+    # Diese bekommen automatisch den Hi Button
+
+    "lustify-sdxl": {
+        "ratios": ["1:1", "16:9", "9:16", "1:1-Hi"],
+        "role_id": None,
+        "pixel_mode": True
+    },
+
+    "venice-sd35": {
+        "ratios": ["1:1", "16:9", "9:16", "1:1-Hi"],
+        "role_id": None,
+        "pixel_mode": True
+    },
+
+    "hidream": {
+        "ratios": ["1:1", "16:9", "9:16", "1:1-Hi"],
+        "role_id": SPECIAL_ROLE_ID,
+        "pixel_mode": True
+    },
+
+    "wai-Illustrious": {
+        "ratios": ["1:1", "16:9", "9:16"],
+        "role_id": VIP_ROLE_ID
+    },
+
+    "z-image-turbo": {
+        "ratios": ["1:1", "16:9", "9:16"],
         "role_id": VIP_ROLE_ID
     },
 }
+
 VARIANT_MAP = {
     **{ch: [{"model": m} for m in MODEL_LABELS] for ch in NSFW_CHANNELS},
     SFW_CHANNEL: [{"model": m} for m in MODEL_LABELS],
@@ -109,7 +160,7 @@ def ratio_to_dimensions(ratio: str, base=1024):
         return 960, 1280
     if ratio == "4:5":
         return 1024, 1280
-    if ratio == "HI":
+    if ratio == "1:1-Hi":
         return 1280, 1280
     return base, base
 
