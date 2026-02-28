@@ -98,29 +98,21 @@ def make_safe_filename(prompt: str) -> str:
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
-async def venice_generate(session, prompt, variant, width, height, steps, cfg_scale, negative_prompt):
+async def venice_generate(session, payload):
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
-    payload = {
-        "model": variant["model"],
-        "prompt": prompt,
-        "width": width,
-        "height": height,
-        "steps": steps,
-        "cfg_scale": cfg_scale,
-        "negative_prompt": negative_prompt,
-        "safe_mode": False,
-        "hide_watermark": True,
-        "return_binary": True
-    }
+
     try:
         async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
             if resp.status != 200:
-                print(f"Venice API Error {resp.status}: {await resp.text()}")
+                print("Venice API Error:", await resp.text())
                 return None
+
             return await resp.read()
+
     except Exception as e:
-        print(f"Exception calling Venice API: {e}")
+        print("Venice Exception:", e)
         return None
+    
 
 # ---------------- Modal ----------------
 class VeniceModal(discord.ui.Modal):
@@ -225,28 +217,42 @@ class AspectRatioView(discord.ui.View):
         self.previous_inputs = previous_inputs or {}
 
         aspect_map = {
-            "🟦1:1": (1024, 1024),
-            "📺16:9": (1280, 816),
-            "📱9:16": (816, 1280),
-            "🖼️1:1 (Hi)": (1280, 1280)
+            "🟦1:1": "1:1",
+            "📺16:9": "16:9",
+            "📱9:16": "9:16",
+            "🎬21:9": "21:9",
+            "📷2:3": "2:3"            
         }
 
-        for ratio_name, (w, h) in aspect_map.items():
+        for ratio_name, ratio_value in aspect_map.items():
             if ratio_name in MODEL_ASPECTS[self.variant["model"]]["ratios"]:
+
                 role_needed = MODEL_ASPECTS[self.variant["model"]].get("role_id")
-                btn = discord.ui.Button(label=ratio_name, style=discord.ButtonStyle.success)
-                btn.callback = self.make_callback(w, h, ratio_name, role_needed)
+
+                btn = discord.ui.Button(
+                    label=ratio_name,
+                    style=discord.ButtonStyle.success
+                )
+
+                btn.callback = self.make_callback(ratio_value, role_needed)
+
                 self.add_item(btn)
 
-    def make_callback(self, width, height, ratio_name, role_id=None):
+    def make_callback(self, ratio_name, role_id=None):
         async def callback(interaction: discord.Interaction):
-            if role_id and not any(r.id == role_id for r in interaction.user.roles):
-                await interaction.response.send_message(f"❌ You need <@&{role_id}> to use this aspect ratio!", ephemeral=True)
-                return
-            await self.generate_image(interaction, width, height, ratio_name)
-        return callback
 
-    async def generate_image(self, interaction, width, height, ratio_name):
+            if role_id and not any(r.id == role_id for r in interaction.user.roles):
+                await interaction.response.send_message(
+                    f"❌ You need <@&{role_id}>",
+                    ephemeral=True
+                )
+                return
+
+            await self.generate_image(interaction, ratio_name)
+
+        return callback
+    
+    async def generate_image(self, interaction, ratio_value):
         await interaction.response.defer(ephemeral=True)
         cfg = self.variant["cfg_scale"]
         steps = self.variant.get("steps", CFG_REFERENCE[self.variant["model"]]["default_steps"])
@@ -263,8 +269,18 @@ class AspectRatioView(discord.ui.View):
         if full_prompt and not full_prompt[0].isalnum(): full_prompt = " " + full_prompt
 
         img_bytes = await venice_generate(
-            self.session, full_prompt, self.variant, width, height, steps=steps, cfg_scale=cfg,
-            negative_prompt=self.variant.get("negative_prompt")
+            self.session,
+            payload={
+                "model": self.variant["model"],
+                "prompt": self.prompt_text + (self.hidden_suffix or ""),
+                "aspect_ratio": ratio_value,
+                "steps": steps,
+                "cfg_scale": cfg,
+                "negative_prompt": self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
+                "safe_mode": False,
+                "hide_watermark": True,
+                "return_binary": True
+            }
         )
 
         if not img_bytes:
@@ -296,7 +312,7 @@ class AspectRatioView(discord.ui.View):
 
         embed.set_image(url=f"attachment://{discord_file.filename}")
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        tech_info = f"{MODEL_LABELS[self.variant['model']]['full_label']} | {width}x{height} | CFG: {cfg} | Steps: {steps}"
+        tech_info = f"{MODEL_LABELS[self.variant['model']]['full_label']} | Ratio: {ratio_value} | CFG: {cfg} | Steps: {steps}"
         embed.set_footer(text=tech_info, icon_url=guild_icon)
 
         msg = await interaction.channel.send(content=f"{self.author.mention}", embed=embed, file=discord_file)
