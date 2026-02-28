@@ -93,6 +93,24 @@ VARIANT_MAP = {
 }
 
 # ---------------- Helper ----------------
+
+def ratio_to_dimensions(ratio: str, base=1024):
+    if ratio == "16:9":
+        return 1280, 720
+    if ratio == "9:16":
+        return 720, 1280
+    if ratio == "21:9":
+        return 1440, 640
+    if ratio == "3:2":
+        return 1200, 800
+    if ratio == "2:3":
+        return 800, 1200
+    if ratio == "3:4":
+        return 960, 1280
+    if ratio == "4:5":
+        return 1024, 1280
+    return base, base
+
 def make_safe_filename(prompt: str) -> str:
     base = "_".join(prompt.split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
@@ -268,19 +286,32 @@ class AspectRatioView(discord.ui.View):
         full_prompt = (self.prompt_text or "") + (self.hidden_suffix or "")
         if full_prompt and not full_prompt[0].isalnum(): full_prompt = " " + full_prompt
 
+        payload = {
+            "model": self.variant["model"],
+            "prompt": self.prompt_text + (self.hidden_suffix or ""),
+            "steps": steps,
+            "cfg_scale": cfg,
+            "negative_prompt": self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
+            "safe_mode": False,
+            "hide_watermark": True,
+            "return_binary": True
+        }
+
+        model_name = self.variant["model"]
+
+        # Modelle die KEIN aspect_ratio unterstützen → Pixel-Fallback
+        no_ratio_models = ["z-image-turbo"]
+
+        if model_name in no_ratio_models:
+            w, h = ratio_to_dimensions(ratio_value)
+            payload["width"] = w
+            payload["height"] = h
+        else:
+            payload["aspect_ratio"] = ratio_value
+
         img_bytes = await venice_generate(
             self.session,
-            payload={
-                "model": self.variant["model"],
-                "prompt": self.prompt_text + (self.hidden_suffix or ""),
-                "aspect_ratio": ratio_value,
-                "steps": steps,
-                "cfg_scale": cfg,
-                "negative_prompt": self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT),
-                "safe_mode": False,
-                "hide_watermark": True,
-                "return_binary": True
-            }
+            payload=payload
         )
 
         if not img_bytes:
