@@ -359,20 +359,24 @@ class AspectRatioView(discord.ui.View):
 
         progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True)
         prompt_factor = len(self.prompt_text) / 1000
-        
-        # ---------------- Smooth Progress Simulation (Slower) ----------------
-        progress_iterations = max(8, steps // 3)
+   # ---------------- Ultra Slow & Smooth Progress ----------------
 
-        # Mehr Grundverzögerung = +~30 Sekunden realistisch
-        base_delay = 4.5
-        step_delay = steps * 0.9      # deutlich stärkerer Einfluss
-        cfg_delay = cfg * 0.6
-        prompt_delay = prompt_factor * 1.2
+        progress_iterations = max(10, steps // 2)
+
+        # Deutlich mehr Grundverzögerung
+        base_delay = 9.0
+        step_delay = steps * 1.8
+        cfg_delay = cfg * 1.0
+        prompt_delay = prompt_factor * 2.0
 
         total_delay = base_delay + step_delay + cfg_delay + prompt_delay
 
         for i in range(1, progress_iterations + 1):
-            await asyncio.sleep(total_delay / progress_iterations)
+
+            # Progress wird gegen Ende langsamer
+            slowdown_factor = 1 + (i / progress_iterations) * 1.5
+
+            await asyncio.sleep((total_delay / progress_iterations) * slowdown_factor)
 
             percent = int((i / progress_iterations) * 100)
 
