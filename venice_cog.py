@@ -365,8 +365,8 @@ class AspectRatioView(discord.ui.View):
         progress_iterations = max(10, steps // 2)
 
         # Deutlich mehr Grundverzögerung
-        base_delay = 9.0
-        step_delay = steps * 1.8
+        base_delay = 10.0
+        step_delay = steps * 1.9
         cfg_delay = cfg * 1.0
         prompt_delay = prompt_factor * 2.0
 
