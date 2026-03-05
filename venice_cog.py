@@ -209,7 +209,7 @@ MODEL_ASPECTS = {
     # ✅ Neue Modelle
 
     "grok-imagine": {
-        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9"],
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16"],
         "role_id": VIP_ROLE_ID
     },
 
