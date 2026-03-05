@@ -47,17 +47,25 @@ MODEL_LABELS = {
     "wai-Illustrious": {"full_label": "🎨 Wai", "button_icon": "🎨WI"},
     "hidream":         {"full_label": "🌙 HiDream", "button_icon": "🌙HD"},
     "z-image-turbo":   {"full_label": "🌀 Z-Image", "button_icon": "🌀ZI"},
-    "recraft-v4-pro":      {"full_label": "🧱 Recraft Pro", "button_icon": "🧱RP"},
+    "recraft-v4-pro":   {"full_label": "🧱 Recraft Pro", "button_icon": "🧱RP"},
     "imagineart-1.5-pro": {"full_label": "🎨 ImagineArt Pro", "button_icon": "🎨IA"},
     "nano-banana-2":    {"full_label": "🍌 Nano Banana 2", "button_icon": "🍌N2"},
     "lustify-v7":      {"full_label": "⚡ Lustify V7", "button_icon": "⚡V7"},
     "seedream-v4":        {"full_label": "🌊 Seedream V4", "button_icon": "🌊S4"},
-}
 
+    # ✅ Neue Modelle
+    "grok-imagine": {
+        "full_label": "🧠 Grok Imagine",
+        "button_icon": "🧠GI"
+    },
+    "hunyuan-image-v3": {
+        "full_label": "🐉 Hunyuan Image 3.0",
+        "button_icon": "🐉HU"
+    }
+}
 # ---------------- Model Config ----------------
 CFG_REFERENCE = {
 
-    # Pixel / Stable Diffusion Style
     "lustify-sdxl": {
         "cfg_scale": 5.0,
         "default_steps": 25,
@@ -94,10 +102,6 @@ CFG_REFERENCE = {
         "max_steps": 8
     },
 
-    # -----------------------------
-    # Modelle mit starkem Render-Fokus
-    # -----------------------------
-
     "nano-banana-pro": {
         "cfg_scale": 5.0,
         "default_steps": 20,
@@ -127,6 +131,19 @@ CFG_REFERENCE = {
         "default_steps": 20,
         "max_steps": 50
     },
+
+    # ✅ Neue Modelle
+    "grok-imagine": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    },
+
+    "hunyuan-image-v3": {
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50
+    }
 }
 
 ROLE_LEVEL_LABELS = {
@@ -135,14 +152,37 @@ ROLE_LEVEL_LABELS = {
 }
 
 MODEL_ASPECTS = {
-    "lustify-sdxl":    {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
-    "venice-sd35":     {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": None},
-    "hidream":         {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
-    "wai-Illustrious": {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
-    "lustify-v7":      {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": SPECIAL_ROLE_ID},
-    "z-image-turbo":   {"ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"], "role_id": VIP_ROLE_ID},
 
-    # Banana Pro (kann mehrere Ratios – also nicht auf 1:1 begrenzen!)
+    "lustify-sdxl": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"],
+        "role_id": None
+    },
+
+    "venice-sd35": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"],
+        "role_id": None
+    },
+
+    "hidream": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"],
+        "role_id": VIP_ROLE_ID
+    },
+
+    "wai-Illustrious": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"],
+        "role_id": VIP_ROLE_ID
+    },
+
+    "lustify-v7": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"],
+        "role_id": SPECIAL_ROLE_ID
+    },
+
+    "z-image-turbo": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🖼️1:1 (Hi)"],
+        "role_id": VIP_ROLE_ID
+    },
+
     "nano-banana-pro": {
         "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": None
@@ -152,20 +192,34 @@ MODEL_ASPECTS = {
         "ratios": ["🟦1:1", "📺16:9", "📱9:16", "📷2:3"],
         "role_id": VIP_ROLE_ID
     },
+
     "seedream-v4": {
         "ratios": ["🟦1:1", "📺16:9", "📱9:16", "📷2:3"],
         "role_id": SPECIAL_ROLE_ID
     },
+
     "recraft-v4-pro": {
         "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": VIP_ROLE_ID
     },
 
-    # Banana 2
     "nano-banana-2": {
         "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9", "📷2:3"],
         "role_id": SPECIAL_ROLE_ID
     },
+
+    # ✅ Neue Modelle
+
+    "grok-imagine": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9"],
+        "role_id": VIP_ROLE_ID
+    },
+
+    "hunyuan-image-v3": {
+        "ratios": ["🟦1:1", "📺16:9", "📱9:16", "🎬21:9"],
+        "role_id": SPECIAL_ROLE_ID
+    }
+
 }
 VARIANT_MAP = {
     **{ch: [{"model": m} for m in MODEL_LABELS] for ch in NSFW_CHANNELS},
