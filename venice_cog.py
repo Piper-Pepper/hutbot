@@ -456,9 +456,15 @@ class AspectRatioView(discord.ui.View):
         model_name = self.variant["model"]
 
         # Modelle die KEIN aspect_ratio unterstützen → Pixel-Fallback
-        no_ratio_models = ["z-image-turbo", "lustify-v7", "hidream"]
+        no_ratio_models = [
+            "z-image-turbo",
+            "lustify-v7",
+            "lustify-sdxl",
+            "venice-sd35",
+            "hidream"
+        ]
 
-        if model_name in no_ratio_models:
+                if model_name in no_ratio_models:
             w, h = ratio_to_dimensions(ratio_value)
             payload["width"] = w
             payload["height"] = h
