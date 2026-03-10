@@ -462,6 +462,7 @@ class AspectRatioView(discord.ui.View):
             "lustify-v7",
             "lustify-sdxl",
             "venice-sd35",
+            "wai-Illustrious",
             "hidream"
         ]
 
