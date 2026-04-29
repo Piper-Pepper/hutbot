@@ -114,12 +114,13 @@ class ChampionsView(View):
         total: Optional[int] = None
     ):
         super().__init__(timeout=None)
+
         self.interaction = interaction
         self.entries = entries
         self.page = page
         self.guild = guild
         self.entries_per_page = 6
-        self.max_page = (len(entries) - 1) // self.entries_per_page
+        self.max_page = max((len(entries) - 1) // self.entries_per_page, 0)
 
         self.total_solved = total or sum(e[1] for e in entries)
         self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
@@ -131,11 +132,12 @@ class ChampionsView(View):
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title=f"🏆 Riddle Champions ⁉️ Total Solves:🧩{self.total_solved}",
+            title=f"🏆 Riddle Champions ⁉️ Total Solves: 🧩 {self.total_solved}",
             description=f"Page {self.page + 1} of {self.max_page + 1}",
             color=discord.Color.gold()
         )
 
+        # Top user highlight
         if page_entries and self.page == 0:
             top_user_id = page_entries[0][0]
             top_user = None
@@ -156,6 +158,7 @@ class ChampionsView(View):
                 )
                 embed.set_thumbnail(url=top_user.display_avatar.url)
 
+        # Entries
         for i, (user_id, solved, percent, xp) in enumerate(page_entries, start=start + 1):
             user = None
 
@@ -179,17 +182,33 @@ class ChampionsView(View):
         embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
         return embed
 
+    # =========================
+    # FIXED BUTTONS
+    # =========================
+
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
     async def prev(self, interaction: Interaction, button: Button):
+        await interaction.response.defer()
+
         if self.page > 0:
             self.page -= 1
-            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+
+        await interaction.message.edit(
+            embed=await self.get_page_embed(),
+            view=self
+        )
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
     async def next(self, interaction: Interaction, button: Button):
+        await interaction.response.defer()
+
         if self.page < self.max_page:
             self.page += 1
-            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
+
+        await interaction.message.edit(
+            embed=await self.get_page_embed(),
+            view=self
+        )
 
 
 # =========================
@@ -277,9 +296,8 @@ class RiddleEditor(commands.Cog):
         embed = await view.get_page_embed()
 
         mentions = []
-        if visible:
-            if mention:
-                mentions.append(mention.mention)
+        if visible and mention:
+            mentions.append(mention.mention)
 
         await interaction.followup.send(
             content=" ".join(mentions) or None,
