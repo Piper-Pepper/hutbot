@@ -112,6 +112,69 @@ class RiddleEditor(commands.Cog):
                 data = await r.json()
                 return data.get("record", {})
 
+    @app_commands.command(name="riddle_champ", description="Show the top users by solved riddles.")
+    @app_commands.describe(
+        visible="Show publicly in channel or only to you (default: False)",
+        image="Optional image URL to display in the embed",
+        mention="Mention an additional role when showing the leaderboard"
+    )
+    async def riddle_champ(
+        self,
+        interaction: discord.Interaction,
+        visible: Optional[bool] = False,
+        image: Optional[str] = None,
+        mention: Optional[discord.Role] = None,
+    ):
+        await interaction.response.defer(ephemeral=not visible)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send("❌ Failed to load solved riddles data.", ephemeral=True)
+                    return
+                data = await resp.json()
+
+        raw_data = data.get("record", data)
+
+        entries = []
+        for uid, stats in raw_data.items():
+            solved = stats.get("solved_riddles", 0)
+            xp = stats.get("xp", 0)
+            entries.append((int(uid), solved, xp))
+
+        entries.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+        total_solved = sum(s for _, s, _ in entries)
+
+        percent_entries = [
+            (uid, solved, (solved / total_solved * 100 if total_solved else 0), xp)
+            for uid, solved, xp in entries
+        ]
+
+        view = ChampionsView(
+            interaction,
+            percent_entries,
+            guild=interaction.guild,
+            image_url=image,
+            total=total_solved
+        )
+
+        embed = await view.get_page_embed()
+
+        mention_text = ""
+        if visible:
+            mentions = []
+            if mention:
+                mentions.append(mention.mention)
+            mention_text = " ".join(mentions)
+
+        await interaction.followup.send(
+            content=mention_text or None,
+            embed=embed,
+            view=view,
+            ephemeral=not visible
+        )        
+
     @app_commands.command(name="riddle")
     async def riddle(
         self,
