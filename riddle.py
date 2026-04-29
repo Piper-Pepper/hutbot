@@ -1,16 +1,13 @@
 import os
 import discord
-from discord import app_commands, Interaction, Role
+from discord import app_commands, Interaction
 from discord.ext import commands
-from discord.ui import View, Modal, TextInput
+from discord.ui import View, Button, Modal, TextInput
 from dotenv import load_dotenv
 import aiohttp
 import logging
 from typing import Optional
 
-# =========================
-# 🔐 CONFIG
-# =========================
 load_dotenv()
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 
@@ -30,73 +27,53 @@ logger = logging.getLogger(__name__)
 
 
 # =========================
-# 🏆 LEADERBOARD VIEW
+# CHAMPIONS VIEW (UNCHANGED)
 # =========================
 class ChampionsView(View):
-    def __init__(self, interaction, bot, entries, page=0, guild=None, image_url=None, total=None):
+    def __init__(self, interaction, entries, page=0, guild=None, image_url=None, total=None):
         super().__init__(timeout=None)
-
         self.interaction = interaction
-        self.bot = bot
         self.entries = entries
         self.page = page
         self.guild = guild
+        self.entries_per_page = 6
+        self.max_page = (len(entries) - 1) // self.entries_per_page
 
-        self.per_page = 6
-        self.max_page = max(0, (len(entries) - 1) // self.per_page)
+        self.total_solved = total or sum(e[1] for e in entries)
 
-        self.total_solved = sum(e[1] for e in entries) if total is None else total
+        self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
+        self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1462484539128680715/riddle_porn01.gif"
 
-        self.default_image = (
-            "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
-        )
-        self.first_image = image_url or (
-            "https://cdn.discordapp.com/attachments/1383652563408392232/1462484539128680715/riddle_porn01.gif"
-        )
-
-        self.sync_buttons()
-
-    def sync_buttons(self):
         self.prev.disabled = self.page <= 0
         self.next.disabled = self.page >= self.max_page
 
-    async def get_embed(self):
-        start = self.page * self.per_page
-        end = start + self.per_page
+    async def get_page_embed(self):
+        start = self.page * self.entries_per_page
+        end = start + self.entries_per_page
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title=f"🏆 Riddle Champions | 🧩 {self.total_solved}",
-            description=f"Page {self.page + 1}/{self.max_page + 1}",
+            title=f"🏆 Riddle Champions ⁉️ Total Solves:🧩{self.total_solved}",
+            description=f"Page {self.page + 1} of {self.max_page + 1}",
             color=discord.Color.gold()
         )
 
-        if not page_entries:
-            embed.description = "No data."
-            return embed
+        for i, (user_id, solved, percent, xp) in enumerate(page_entries, start=start + 1):
+            user = None
 
-        # 👑 Top user highlight
-        if self.page == 0:
-            uid = page_entries[0][0]
-            user = self.bot.get_user(uid) or (self.guild.get_member(uid) if self.guild else None)
+            if self.guild:
+                try:
+                    user = await self.guild.fetch_member(user_id)
+                except:
+                    user = None
 
-            if user:
-                embed.set_author(
-                    name=f"👑 Riddle Master: {user.name}",
-                    icon_url=user.display_avatar.url
-                )
-                embed.set_thumbnail(url=user.display_avatar.url)
+            if not user:
+                try:
+                    user = await self.interaction.client.fetch_user(user_id)
+                except:
+                    user = None
 
-        # 📊 entries
-        for i, (uid, solved, percent, xp) in enumerate(page_entries, start=start + 1):
-
-            user = self.bot.get_user(uid) or (self.guild.get_member(uid) if self.guild else None)
-
-            name = (
-                user.display_name
-                if user and hasattr(user, "display_name")
-                else (user.name if user else "Unknown")
-            )
+            name = user.display_name if user else "Unknown"
 
             embed.add_field(
                 name=f"🎖️ {i}. {name}",
@@ -104,158 +81,108 @@ class ChampionsView(View):
                 inline=False
             )
 
-        embed.set_image(url=self.first_image if self.page == 0 else self.default_image)
-
-        if self.guild:
-            embed.set_footer(text=self.guild.name, icon_url=self.guild.icon.url if self.guild.icon else None)
+        embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
 
         return embed
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
-    async def prev(self, interaction: Interaction, button: discord.ui.Button):
+    async def prev(self, interaction: Interaction, button: Button):
         if self.page > 0:
             self.page -= 1
-            self.sync_buttons()
-            await interaction.response.edit_message(embed=await self.get_embed(), view=self)
+            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
-    async def next(self, interaction: Interaction, button: discord.ui.Button):
+    async def next(self, interaction: Interaction, button: Button):
         if self.page < self.max_page:
             self.page += 1
-            self.sync_buttons()
-            await interaction.response.edit_message(embed=await self.get_embed(), view=self)
+            await interaction.response.edit_message(embed=await self.get_page_embed(), view=self)
 
 
 # =========================
-# 📤 MODAL
+# MODAL
 # =========================
 class RiddleEditModal(Modal, title="Edit Riddle"):
-    def __init__(self, data, guild):
+    def __init__(self, data):
         super().__init__()
-        self.guild = guild
+
+        self.button_id = data.get("button-id", "")
 
         self.text = TextInput(label="Text", default=data.get("text", ""), style=discord.TextStyle.paragraph)
         self.solution = TextInput(label="Solution", default=data.get("solution", ""), style=discord.TextStyle.paragraph)
         self.award = TextInput(label="Award", default=data.get("award", ""), required=False)
-        self.image = TextInput(label="Image URL", default=data.get("image-url", ""), required=False)
-        self.solution_img = TextInput(label="Solution Image", default=data.get("solution-url", ""), required=False)
+        self.image_url = TextInput(label="Image URL", default=data.get("image-url", ""), required=False)
+        self.solution_url = TextInput(label="Solution URL", default=data.get("solution-url", ""), required=False)
 
         self.add_item(self.text)
         self.add_item(self.solution)
         self.add_item(self.award)
-        self.add_item(self.image)
-        self.add_item(self.solution_img)
-
-        self.button_id = data.get("button-id", "")
+        self.add_item(self.image_url)
+        self.add_item(self.solution_url)
 
     async def on_submit(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        payload = {
+        updated = {
             "text": self.text.value,
             "solution": self.solution.value,
             "award": self.award.value,
-            "image-url": self.image.value,
-            "solution-url": self.solution_img.value,
+            "image-url": self.image_url.value,
+            "solution-url": self.solution_url.value,
             "button-id": self.button_id,
             "riddler": str(interaction.user.id)
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=payload) as r:
+            async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=updated) as r:
                 if r.status == 200:
-                    await interaction.followup.send("✅ Updated!", ephemeral=True)
+                    await interaction.followup.send("✅ Saved!", ephemeral=True)
                 else:
-                    await interaction.followup.send(f"❌ Error {r.status}", ephemeral=True)
+                    await interaction.followup.send("❌ Save failed.", ephemeral=True)
 
 
 # =========================
-# 🎮 COG
+# COG
 # =========================
 class RiddleEditor(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.riddle_cache = None
 
-    # =========================
-    # /riddle (FIXED - NO 10062)
-    # =========================
-    @app_commands.command(name="riddle", description="Load and edit the current riddle.")
-    async def riddle(self, interaction: Interaction, mention: Optional[Role] = None):
+    async def cog_load(self):
+        """Load riddle once at startup (SAFE, not interaction time)"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(JSONBIN_BASE_URL + "/latest", headers=HEADERS) as r:
+                    data = await r.json()
+                    self.riddle_cache = data.get("record", {})
+                    logger.info("Riddle cache loaded")
+        except Exception as e:
+            logger.error(f"Cache load failed: {e}")
+            self.riddle_cache = {}
+
+    @app_commands.command(name="riddle")
+    async def riddle(self, interaction: Interaction, mention: Optional[discord.Role] = None):
 
         required_role_id = 1393762463861702787
 
         if not any(r.id == required_role_id for r in interaction.user.roles):
-            await interaction.response.send_message("🚫 No permission", ephemeral=True)
+            await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        logger.info(f"[Slash Command] /riddle by {interaction.user}")
+        # 🚨 NOTHING BEFORE THIS LINE
+        data = self.riddle_cache or {}
 
-        # ⚡ SAFE FAST LOAD (non-blocking logic)
-        record = {}
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(JSONBIN_BASE_URL + "/latest", headers=HEADERS) as r:
-                    if r.status == 200:
-                        record = (await r.json()).get("record", {})
-        except Exception as e:
-            logger.warning(f"JSON load failed: {e}")
-
-        # ⚡ optional role save (non-critical)
         if mention:
-            record["button-id"] = str(mention.id)
-            try:
-                async with aiohttp.ClientSession() as session:
-                    await session.put(JSONBIN_BASE_URL, headers=HEADERS, json=record)
-            except:
-                pass
+            data["button-id"] = str(mention.id)
 
-        # 💥 CRITICAL: MUST BE LAST RESPONSE
-        await interaction.response.send_modal(RiddleEditModal(record, interaction.guild))
+        modal = RiddleEditModal(data)
 
-    # =========================
-    # /riddle_champ
-    # =========================
-    @app_commands.command(name="riddle_champ", description="Leaderboard")
-    async def riddle_champ(self, interaction: Interaction, visible: Optional[bool] = False, image: Optional[str] = None, mention: Optional[Role] = None):
-
-        await interaction.response.defer(ephemeral=not visible)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as r:
-                data = await r.json()
-
-        raw = data.get("record", data)
-
-        entries = [
-            (int(uid), v.get("solved_riddles", 0), v.get("xp", 0))
-            for uid, v in raw.items()
-        ]
-
-        entries.sort(key=lambda x: (x[1], x[2]), reverse=True)
-
-        total = sum(x[1] for x in entries)
-
-        enriched = [
-            (uid, s, (s / total * 100) if total else 0, xp)
-            for uid, s, xp in entries
-        ]
-
-        view = ChampionsView(interaction, self.bot, enriched, guild=interaction.guild, image_url=image, total=total)
-
-        embed = await view.get_embed()
-
-        content = None
-        if visible:
-            content = "<@&1380610400416043089>"
-            if mention:
-                content += f" {mention.mention}"
-
-        await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=not visible)
+        await interaction.response.send_modal(modal)
 
 
 # =========================
-# 🚀 SETUP
+# SETUP
 # =========================
 async def setup(bot: commands.Bot):
-    await bot.add_cog(RiddleEditor(bot))
+    cog = RiddleEditor(bot)
+    await bot.add_cog(cog)
