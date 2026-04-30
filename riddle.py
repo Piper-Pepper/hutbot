@@ -101,11 +101,33 @@ class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
 
         self.button_id = data.get("button-id", "")
 
-        self.text = TextInput(label="Text", placeholder=data.get("text", ""))
-        self.solution = TextInput(label="Solution", placeholder=data.get("solution", ""))
-        self.award = TextInput(label="Award", placeholder=data.get("award", ""), required=False)
-        self.image_url = TextInput(label="Image URL", placeholder=data.get("image-url", ""), required=False)
-        self.solution_url = TextInput(label="Solution URL", placeholder=data.get("solution-url", ""), required=False)
+        self.text = TextInput(
+            label="Text",
+            placeholder=data.get("text", "empty")
+        )
+
+        self.solution = TextInput(
+            label="Solution",
+            placeholder=data.get("solution", "empty")
+        )
+
+        self.award = TextInput(
+            label="Award",
+            placeholder=data.get("award", ""),
+            required=False
+        )
+
+        self.image_url = TextInput(
+            label="Image URL",
+            placeholder=data.get("image-url", ""),
+            required=False
+        )
+
+        self.solution_url = TextInput(
+            label="Solution URL",
+            placeholder=data.get("solution-url", ""),
+            required=False
+        )
 
         self.add_item(self.text)
         self.add_item(self.solution)
@@ -237,8 +259,10 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
+        # 🔥 IMPORTANT: sofort fetchen
         data = await fetch_riddle_safe()
 
+        # CREATE vs EDIT
         if data.get("text"):
             await interaction.response.send_modal(RiddleEditModal(data))
         else:
