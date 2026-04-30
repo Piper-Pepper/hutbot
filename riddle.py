@@ -287,7 +287,19 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        await interaction.response.send_modal(RiddleCreateModal(mention))
+        # 🔥 HIER PASSIERT DIE MAGIE
+        data = await fetch_riddle_safe()
+
+        has_riddle = (
+            data.get("text") or
+            data.get("solution")
+        )
+
+        # ⚠️ WICHTIG: KEIN defer VOR Modal!
+        if has_riddle:
+            await interaction.response.send_modal(RiddleEditModal(data))
+        else:
+            await interaction.response.send_modal(RiddleCreateModal(mention))
 
     @app_commands.command(name="riddle_champ")
     async def riddle_champ(self, interaction: Interaction,
