@@ -97,7 +97,7 @@ async def fetch_riddle_safe():
 
 
 # =========================
-# CHAMPIONS VIEW (STABLE VERSION)
+# CHAMPIONS VIEW
 # =========================
 class ChampionsView(View):
     def __init__(self, interaction, entries, page=0, guild=None, image_url=None, total=None):
@@ -115,7 +115,7 @@ class ChampionsView(View):
         self.total_solved = total or sum(e[1] for e in entries)
 
         self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
-        self.page1_image_url = image_url or self.default_image_url
+        self.page1_image_url = image_url
 
         self.message: Optional[discord.Message] = None
 
@@ -136,19 +136,19 @@ class ChampionsView(View):
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title=f"🏆 Riddle Champions | Total: 🧩 {self.total_solved}",
+            title=f"🏆 Riddle Champions ⁉️ Total: 🧩 {self.total_solved}",
             description=f"Page {self.page + 1}/{self.max_page + 1}",
             color=discord.Color.gold()
         )
 
-        # TOP #1 GLOBAL
+        # 👑 TOP #1
         if self.entries:
             top_uid = self.entries[0][0]
             top_user = await self.resolve_user(top_uid)
 
             if top_user:
                 embed.set_author(
-                    name=f"👑 #1 {getattr(top_user, 'display_name', str(top_user))}",
+                    name=f"👑 Riddle Master #1: {getattr(top_user, 'display_name', str(top_user))}",
                     icon_url=top_user.display_avatar.url
                 )
                 embed.set_thumbnail(url=top_user.display_avatar.url)
@@ -159,16 +159,20 @@ class ChampionsView(View):
             name = user.display_name if user else f"User {uid}"
 
             embed.add_field(
-                name=f"{i}. {name}",
+                name=f"🎖️ {i}. {name}",
                 value=f"🧩 {solved} | 📊 {percent:.1f}% | 🧠 {xp} XP",
                 inline=False
             )
 
-        embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
+        # IMAGE LOGIC (stable like your original intent)
+        if self.page == 0:
+            embed.set_image(url=self.page1_image_url or self.default_image_url)
+        else:
+            embed.set_image(url=self.default_image_url)
 
         return embed
 
-    async def refresh(self, interaction: Interaction):
+    async def update(self, interaction: Interaction):
         if self.message:
             await self.message.edit(embed=await self.build_embed(), view=self)
 
@@ -177,14 +181,14 @@ class ChampionsView(View):
         await interaction.response.defer()
         if self.page > 0:
             self.page -= 1
-        await self.refresh(interaction)
+        await self.update(interaction)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
     async def next(self, interaction: Interaction, button):
         await interaction.response.defer()
         if self.page < self.max_page:
             self.page += 1
-        await self.refresh(interaction)
+        await self.update(interaction)
 
 
 # =========================
