@@ -226,10 +226,13 @@ class RiddleEditor(commands.Cog):
     # CHAMPIONS
     # =========================
     @app_commands.command(name="riddle_champ")
-    async def riddle_champ(self, interaction: Interaction,
-                           visible: Optional[bool] = False,
-                           image: Optional[str] = None,
-                           mention: Optional[Role] = None):
+    async def riddle_champ(
+        self,
+        interaction: Interaction,
+        visible: Optional[bool] = False,
+        image: Optional[str] = None,
+        mention: Optional[Role] = None,
+    ):
 
         await interaction.response.defer(ephemeral=not visible)
 
@@ -242,19 +245,26 @@ class RiddleEditor(commands.Cog):
 
         raw = data.get("record", data)
 
+        # =========================
+        # RAW PARSING (CORRECT)
+        # =========================
         entries = []
         for uid, stats in raw.items():
             solved = stats.get("solved_riddles", 0)
             xp = stats.get("xp", 0)
-            entries.append((int(uid), solved, solved, xp))  # FIXED STRUCTURE
+            entries.append((int(uid), solved, xp))
 
-        entries.sort(key=lambda x: (x[1], x[3]), reverse=True)
+        # sort by solved + xp
+        entries.sort(key=lambda x: (x[1], x[2]), reverse=True)
 
-        total = sum(e[1] for e in entries)
+        total = sum(s for _, s, _ in entries)
 
+        # =========================
+        # PERCENT LAYER (SEPARATE)
+        # =========================
         percent_entries = [
             (uid, solved, (solved / total * 100 if total else 0), xp)
-            for uid, solved, _, xp in entries
+            for uid, solved, xp in entries
         ]
 
         view = ChampionsView(
@@ -273,7 +283,6 @@ class RiddleEditor(commands.Cog):
             view=view,
             ephemeral=not visible
         )
-
 
 # =========================
 # SETUP
