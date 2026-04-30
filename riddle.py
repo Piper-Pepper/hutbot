@@ -92,13 +92,12 @@ async def fetch_riddle_safe():
                     return empty
                 data = await r.json()
                 return data.get("record", empty)
-    except Exception as e:
-        logger.warning(f"Fetch failed: {e}")
+    except:
         return empty
 
 
 # =========================
-# CHAMPIONS VIEW
+# CHAMPIONS VIEW (FIXED STATE HANDLING)
 # =========================
 class ChampionsView(View):
     def __init__(self, interaction, entries, page=0, guild=None, image_url=None, total=None):
@@ -110,40 +109,49 @@ class ChampionsView(View):
         self.page = page
         self.guild = guild
 
-        self.per_page = 6
-        self.max_page = max((len(entries) - 1) // self.per_page, 0)
+        self.entries_per_page = 6
+        self.max_page = max((len(entries) - 1) // self.entries_per_page, 0)
 
         self.total_solved = total or sum(e[1] for e in entries)
 
-        self.default_image = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
-        self.first_page_image = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1462484539128680715/riddle_porn01.gif"
+        self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
+        self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1462484539128680715/riddle_porn01.gif"
+
+        self.message = None  # 🔥 FIX: stable message reference
 
     async def resolve_user(self, uid: int):
+        user = None
+
         try:
             if self.guild:
-                return await self.guild.fetch_member(uid)
+                user = await self.guild.fetch_member(uid)
         except:
             pass
 
-        try:
-            return await self.client.fetch_user(uid)
-        except:
-            return None
+        if not user:
+            try:
+                user = await self.client.fetch_user(uid)
+            except:
+                user = None
+
+        return user
 
     async def get_embed(self):
-        start = self.page * self.per_page
-        end = start + self.per_page
+        start = self.page * self.entries_per_page
+        end = start + self.entries_per_page
         page_entries = self.entries[start:end]
 
         embed = discord.Embed(
-            title=f"🏆 Riddle Champions | 🧩 {self.total_solved}",
-            description=f"Page {self.page + 1} / {self.max_page + 1}",
+            title=f"🏆 Riddle Champions ⁉️ Total: 🧩 {self.total_solved}",
+            description=f"Page {self.page + 1}/{self.max_page + 1}",
             color=discord.Color.gold()
         )
 
         # TOP #1 GLOBAL
         if self.entries:
-            top_user = await self.resolve_user(self.entries[0][0])
+            top_uid = self.entries[0][0]
+            top_user = await self.resolve_user(top_uid)
+
             if top_user:
                 embed.set_author(
                     name=f"👑 Riddle Master #1: {getattr(top_user, 'display_name', str(top_user))}",
@@ -163,27 +171,35 @@ class ChampionsView(View):
             )
 
         embed.set_image(
-            url=self.first_page_image if self.page == 0 else self.default_image
+            url=self.page1_image_url if self.page == 0 else self.default_image_url
         )
 
         return embed
 
     # =========================
-    # BUTTONS (ONLY ONCE!)
+    # SAFE UPDATE
     # =========================
+    async def update(self, interaction: Interaction):
+        if self.message:
+            await self.message.edit(embed=await self.get_embed(), view=self)
+
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
     async def prev(self, interaction: Interaction, button):
         await interaction.response.defer()
+
         if self.page > 0:
             self.page -= 1
-        await interaction.message.edit(embed=await self.get_embed(), view=self)
+
+        await self.update(interaction)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
     async def next(self, interaction: Interaction, button):
         await interaction.response.defer()
+
         if self.page < self.max_page:
             self.page += 1
-        await interaction.message.edit(embed=await self.get_embed(), view=self)
+
+        await self.update(interaction)
 
 
 # =========================
@@ -193,6 +209,9 @@ class RiddleEditor(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # =========================
+    # RIDDLE
+    # =========================
     @app_commands.command(name="riddle")
     async def riddle(self, interaction: Interaction, mention: Optional[Role] = None):
 
@@ -204,26 +223,30 @@ class RiddleEditor(commands.Cog):
 
         data = await fetch_riddle_safe()
 
-        if mention:
-            data["button-id"] = str(mention.id)
+        data["button-id"] = str(mention.id) if mention else ""
 
-        await interaction.response.send_modal(RiddleEditModal(data))
+        modal = RiddleEditModal(data)
+
+        try:
+            await interaction.response.send_modal(modal)
+        except discord.NotFound:
+            logger.warning("Interaction expired before modal")
 
 
+    # =========================
+    # CHAMPIONS (FIXED + CLEAN)
+    # =========================
     @app_commands.command(name="riddle_champ")
-    async def riddle_champ(
-        self,
-        interaction: Interaction,
-        visible: Optional[bool] = False,
-        image: Optional[str] = None,
-        mention: Optional[Role] = None,
-    ):
+    async def riddle_champ(self, interaction: Interaction,
+                           visible: Optional[bool] = False,
+                           image: Optional[str] = None,
+                           mention: Optional[Role] = None):
 
         await interaction.response.defer(ephemeral=not visible)
 
         async with aiohttp.ClientSession() as session:
-            async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as r:
-                data = await r.json()
+            async with session.get(SOLVED_BIN_URL + "/latest", headers=HEADERS) as resp:
+                data = await resp.json()
 
         raw = data.get("record", data)
 
@@ -242,17 +265,28 @@ class RiddleEditor(commands.Cog):
             for uid, solved, xp in entries
         ]
 
-        view = ChampionsView(interaction, percent_entries, guild=interaction.guild, image_url=image, total=total)
+        view = ChampionsView(
+            interaction,
+            percent_entries,
+            guild=interaction.guild,
+            image_url=image,
+            total=total
+        )
 
         embed = await view.get_embed()
 
-        await interaction.followup.send(
+        msg = await interaction.followup.send(
             content=mention.mention if (visible and mention) else None,
             embed=embed,
             view=view,
             ephemeral=not visible
         )
 
+        view.message = msg  # 🔥 FIX: stable pagination target
 
+
+# =========================
+# SETUP
+# =========================
 async def setup(bot: commands.Bot):
     await bot.add_cog(RiddleEditor(bot))
