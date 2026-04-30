@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # =========================
 # MODAL
 # =========================
-class RiddleEditModal(Modal, title="Edit Riddle"):
+class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
     def __init__(self, data: dict):
         super().__init__()
 
@@ -101,7 +101,7 @@ class RiddleEditModal(Modal, title="Edit Riddle"):
 
 
 # =========================
-# SAFE FETCH (NEU ZENTRAL)
+# SAFE FETCH (nur für submit / optional future use)
 # =========================
 async def fetch_riddle_safe():
     empty = {
@@ -192,7 +192,7 @@ class RiddleEditor(commands.Cog):
         self.bot = bot
 
     # =========================
-    # RIDDLE COMMAND (FIXED SAFE)
+    # RIDDLE COMMAND (FIXED CORE)
     # =========================
     @app_commands.command(name="riddle")
     async def riddle(self, interaction: Interaction, mention: Optional[Role] = None):
@@ -203,17 +203,18 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        # ⚠️ KEIN async delay VOR MODAL
-        data = await fetch_riddle_safe()
+        # ⚠️ ABSOLUTE RULE: NO AWAIT BEFORE MODAL
 
-        if mention:
-            data["button-id"] = str(mention.id)
+        data = {
+            "text": "",
+            "solution": "",
+            "award": "",
+            "image-url": "",
+            "solution-url": "",
+            "button-id": str(mention.id) if mention else ""
+        }
 
         modal = RiddleEditModal(data)
-
-        # SAFE SINGLE RESPONSE
-        if interaction.response.is_done():
-            return
 
         try:
             await interaction.response.send_modal(modal)
@@ -245,7 +246,7 @@ class RiddleEditor(commands.Cog):
         for uid, stats in raw.items():
             solved = stats.get("solved_riddles", 0)
             xp = stats.get("xp", 0)
-            entries.append((int(uid), solved, solved, xp))
+            entries.append((int(uid), solved, solved, xp))  # FIXED STRUCTURE
 
         entries.sort(key=lambda x: (x[1], x[3]), reverse=True)
 
@@ -256,8 +257,13 @@ class RiddleEditor(commands.Cog):
             for uid, solved, _, xp in entries
         ]
 
-        view = ChampionsView(interaction, percent_entries, guild=interaction.guild,
-                            image_url=image, total=total)
+        view = ChampionsView(
+            interaction,
+            percent_entries,
+            guild=interaction.guild,
+            image_url=image,
+            total=total
+        )
 
         embed = await view.get_page_embed()
 
