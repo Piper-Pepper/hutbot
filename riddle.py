@@ -259,14 +259,8 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        # 🔥 IMPORTANT: sofort fetchen
-        data = await fetch_riddle_safe()
-
-        # CREATE vs EDIT
-        if data.get("text"):
-            await interaction.response.send_modal(RiddleEditModal(data))
-        else:
-            await interaction.response.send_modal(RiddleCreateModal(mention))
+        # 🔥 SOFORT MODAL (NO AWAIT BEFORE THIS LINE)
+        await interaction.response.send_modal(RiddleCreateModal(mention))
 
 
     @app_commands.command(name="riddle_champ")
