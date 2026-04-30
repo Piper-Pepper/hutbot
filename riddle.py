@@ -240,12 +240,41 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        data = await self.fetch_latest_riddle()
+        # =========================
+        # SAFE FETCH (non-blocking fallback)
+        # =========================
+        data = {
+            "text": "",
+            "solution": "",
+            "award": "",
+            "image-url": "",
+            "solution-url": "",
+            "button-id": ""
+        }
 
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    JSONBIN_BASE_URL + "/latest",
+                    headers=HEADERS
+                ) as r:
+                    if r.status == 200:
+                        res = await r.json()
+                        record = res.get("record", {})
+                        if isinstance(record, dict):
+                            data.update(record)
+        except Exception:
+            pass  # fallback bleibt leer
+
+        # =========================
+        # optional role override
+        # =========================
         if mention:
             data["button-id"] = str(mention.id)
 
         modal = RiddleEditModal(data)
+
+        # 🚀 MUST BE IMMEDIATE
         await interaction.response.send_modal(modal)
 
     # =========================
