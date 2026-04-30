@@ -217,22 +217,25 @@ class RiddleEditor(commands.Cog):
 
         required_role_id = 1393762463861702787
 
-        if not any(r.id == required_role_id for r in interaction.user.roles):
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = interaction.guild.get_member(interaction.user.id)
+
+        if not member or not any(r.id == required_role_id for r in member.roles):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
         data = await fetch_riddle_safe()
-
         data["button-id"] = str(mention.id) if mention else ""
 
         modal = RiddleEditModal(data)
 
+        # 🔥 CRITICAL: KEIN await davor, KEIN logging davor, KEIN fetch davor außer safe function
         try:
             await interaction.response.send_modal(modal)
         except discord.NotFound:
-            logger.warning("Interaction expired before modal")
-
-
+            logger.warning("Modal failed: interaction expired")
+            
     # =========================
     # CHAMPIONS (FIXED + CLEAN)
     # =========================
