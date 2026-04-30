@@ -31,16 +31,27 @@ logger = logging.getLogger(__name__)
 
 
 # =========================
+# HELPERS
+# =========================
+def clean_value(v: Optional[str]):
+    if v is None:
+        return None
+    v = v.strip()
+    return v if v else None
+
+
+# =========================
 # SAFE FETCH
 # =========================
 async def fetch_riddle_safe():
     empty = {
-        "text": "",
-        "solution": "",
-        "award": "",
-        "image-url": "",
-        "solution-url": "",
-        "button-id": ""
+        "text": None,
+        "solution": None,
+        "award": None,
+        "image-url": None,
+        "solution-url": None,
+        "button-id": None,
+        "riddler": None
     }
 
     try:
@@ -48,9 +59,22 @@ async def fetch_riddle_safe():
             async with session.get(JSONBIN_BASE_URL + "/latest", headers=HEADERS) as r:
                 if r.status != 200:
                     return empty
+
                 data = await r.json()
-                return data.get("record", empty)
-    except:
+                record = data.get("record", {})
+
+                return {
+                    "text": record.get("text"),
+                    "solution": record.get("solution"),
+                    "award": record.get("award"),
+                    "image-url": record.get("image-url"),
+                    "solution-url": record.get("solution-url"),
+                    "button-id": record.get("button-id"),
+                    "riddler": record.get("riddler")
+                }
+
+    except Exception as e:
+        logger.error(f"Fetch error: {e}")
         return empty
 
 
@@ -78,14 +102,16 @@ class RiddleCreateModal(discord.ui.Modal, title="Create Riddle"):
         await interaction.response.defer(ephemeral=True)
 
         updated = {
-            "text": self.text.value,
-            "solution": self.solution.value,
-            "award": self.award.value,
-            "image-url": self.image_url.value,
-            "solution-url": self.solution_url.value,
-            "button-id": str(self.mention.id) if self.mention else "",
+            "text": clean_value(self.text.value),
+            "solution": clean_value(self.solution.value),
+            "award": clean_value(self.award.value),
+            "image-url": clean_value(self.image_url.value),
+            "solution-url": clean_value(self.solution_url.value),
+            "button-id": str(self.mention.id) if self.mention else None,
             "riddler": str(interaction.user.id)
         }
+
+        updated = {k: v for k, v in updated.items() if v is not None}
 
         async with aiohttp.ClientSession() as session:
             async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=updated) as r:
@@ -99,33 +125,33 @@ class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
     def __init__(self, data: dict):
         super().__init__()
 
-        self.button_id = data.get("button-id", "")
+        self.button_id = data.get("button-id")
 
         self.text = TextInput(
             label="Text",
-            placeholder=data.get("text", "empty")
+            default=data.get("text") or ""
         )
 
         self.solution = TextInput(
             label="Solution",
-            placeholder=data.get("solution", "empty")
+            default=data.get("solution") or ""
         )
 
         self.award = TextInput(
             label="Award",
-            placeholder=data.get("award", ""),
+            default=data.get("award") or "",
             required=False
         )
 
         self.image_url = TextInput(
             label="Image URL",
-            placeholder=data.get("image-url", ""),
+            default=data.get("image-url") or "",
             required=False
         )
 
         self.solution_url = TextInput(
             label="Solution URL",
-            placeholder=data.get("solution-url", ""),
+            default=data.get("solution-url") or "",
             required=False
         )
 
@@ -139,14 +165,16 @@ class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
         await interaction.response.defer(ephemeral=True)
 
         updated = {
-            "text": self.text.value,
-            "solution": self.solution.value,
-            "award": self.award.value,
-            "image-url": self.image_url.value,
-            "solution-url": self.solution_url.value,
+            "text": clean_value(self.text.value),
+            "solution": clean_value(self.solution.value),
+            "award": clean_value(self.award.value),
+            "image-url": clean_value(self.image_url.value),
+            "solution-url": clean_value(self.solution_url.value),
             "button-id": self.button_id,
             "riddler": str(interaction.user.id)
         }
+
+        updated = {k: v for k, v in updated.items() if v is not None}
 
         async with aiohttp.ClientSession() as session:
             async with session.put(JSONBIN_BASE_URL, headers=HEADERS, json=updated) as r:
@@ -157,7 +185,7 @@ class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
 
 
 # =========================
-# CHAMPIONS VIEW (UNCHANGED)
+# CHAMPIONS VIEW
 # =========================
 class ChampionsView(View):
     def __init__(self, interaction, entries, page=0, guild=None, image_url=None, total=None):
@@ -259,9 +287,7 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        # 🔥 SOFORT MODAL (NO AWAIT BEFORE THIS LINE)
         await interaction.response.send_modal(RiddleCreateModal(mention))
-
 
     @app_commands.command(name="riddle_champ")
     async def riddle_champ(self, interaction: Interaction,
