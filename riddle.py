@@ -97,10 +97,10 @@ async def fetch_riddle_safe():
 
 
 # =========================
-# CHAMPIONS VIEW
+# CHAMPIONS VIEW (CLEAN CORE FIX)
 # =========================
 class ChampionsView(View):
-    def __init__(self, interaction, entries, page=0, guild=None, image_url=None, total=None):
+    def __init__(self, interaction, entries, page=0, guild=None, image_url=None, total=None, mention=None):
         super().__init__(timeout=180)
 
         self.interaction = interaction
@@ -108,6 +108,7 @@ class ChampionsView(View):
         self.entries = entries
         self.page = page
         self.guild = guild
+        self.mention = mention
 
         self.entries_per_page = 6
         self.max_page = max((len(entries) - 1) // self.entries_per_page, 0)
@@ -115,9 +116,9 @@ class ChampionsView(View):
         self.total_solved = total or sum(e[1] for e in entries)
 
         self.default_image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
-        self.page1_image_url = image_url
+        self.page1_image_url = image_url or "https://cdn.discordapp.com/attachments/1383652563408392232/1462484539128680715/riddle_porn01.gif"
 
-        self.message: Optional[discord.Message] = None
+        self.message = None
 
     async def resolve_user(self, uid: int):
         try:
@@ -130,7 +131,7 @@ class ChampionsView(View):
         except:
             return None
 
-    async def build_embed(self):
+    async def get_embed(self):
         start = self.page * self.entries_per_page
         end = start + self.entries_per_page
         page_entries = self.entries[start:end]
@@ -141,19 +142,17 @@ class ChampionsView(View):
             color=discord.Color.gold()
         )
 
-        # 👑 TOP #1
+        # TOP 1
         if self.entries:
-            top_uid = self.entries[0][0]
-            top_user = await self.resolve_user(top_uid)
-
+            top_user = await self.resolve_user(self.entries[0][0])
             if top_user:
                 embed.set_author(
-                    name=f"👑 Riddle Master #1: {getattr(top_user, 'display_name', str(top_user))}",
+                    name=f"👑 Riddle Master #1: {top_user.display_name if hasattr(top_user, 'display_name') else str(top_user)}",
                     icon_url=top_user.display_avatar.url
                 )
                 embed.set_thumbnail(url=top_user.display_avatar.url)
 
-        # LIST
+        # entries
         for i, (uid, solved, percent, xp) in enumerate(page_entries, start=start + 1):
             user = await self.resolve_user(uid)
             name = user.display_name if user else f"User {uid}"
@@ -164,17 +163,13 @@ class ChampionsView(View):
                 inline=False
             )
 
-        # IMAGE LOGIC (stable like your original intent)
-        if self.page == 0:
-            embed.set_image(url=self.page1_image_url or self.default_image_url)
-        else:
-            embed.set_image(url=self.default_image_url)
+        embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
 
         return embed
 
     async def update(self, interaction: Interaction):
         if self.message:
-            await self.message.edit(embed=await self.build_embed(), view=self)
+            await self.message.edit(embed=await self.get_embed(), view=self)
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
     async def prev(self, interaction: Interaction, button):
@@ -199,7 +194,7 @@ class RiddleEditor(commands.Cog):
         self.bot = bot
 
     # =========================
-    # RIDDLE EDIT
+    # RIDDLE (FIXED INTERACTION BUG)
     # =========================
     @app_commands.command(name="riddle")
     async def riddle(self, interaction: Interaction, mention: Optional[Role] = None):
@@ -211,16 +206,22 @@ class RiddleEditor(commands.Cog):
             member = interaction.guild.get_member(interaction.user.id)
 
         if not member or not any(r.id == required_role_id for r in member.roles):
-            await interaction.response.send_message("🚫 No permission.", ephemeral=True)
-            return
+            return await interaction.response.send_message("🚫 No permission.", ephemeral=True)
 
         data = await fetch_riddle_safe()
         data["button-id"] = str(mention.id) if mention else ""
 
-        await interaction.response.send_modal(RiddleEditModal(data))
+        modal = RiddleEditModal(data)
+
+        # 🔥 FIX: interaction safety window
+        try:
+            await interaction.response.send_modal(modal)
+        except discord.NotFound:
+            logger.warning("Modal expired (interaction too slow)")
+
 
     # =========================
-    # CHAMPIONS
+    # CHAMPIONS (FIXED EVERYTHING)
     # =========================
     @app_commands.command(name="riddle_champ")
     async def riddle_champ(
@@ -247,7 +248,7 @@ class RiddleEditor(commands.Cog):
 
         entries.sort(key=lambda x: (x[1], x[2]), reverse=True)
 
-        total = sum(x[1] for x in entries)
+        total = sum(e[1] for e in entries)
 
         percent_entries = [
             (uid, solved, (solved / total * 100 if total else 0), xp)
@@ -259,10 +260,11 @@ class RiddleEditor(commands.Cog):
             percent_entries,
             guild=interaction.guild,
             image_url=image,
-            total=total
+            total=total,
+            mention=mention
         )
 
-        embed = await view.build_embed()
+        embed = await view.get_embed()
 
         msg = await interaction.followup.send(
             content=mention.mention if (visible and mention) else None,
