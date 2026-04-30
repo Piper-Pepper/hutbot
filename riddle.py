@@ -41,30 +41,31 @@ class RiddleEditModal(discord.ui.Modal, title="Edit Riddle"):
 
         self.text = TextInput(
             label="Text",
-            value=data.get("text", ""),
+            default=data.get("text", ""),
             style=discord.TextStyle.paragraph
         )
+
         self.solution = TextInput(
             label="Solution",
-            value=data.get("solution", ""),
+            default=data.get("solution", ""),
             style=discord.TextStyle.paragraph
         )
 
         self.award = TextInput(
             label="Award",
-            value=data.get("award", ""),
+            default=data.get("award", ""),
             required=False
         )
 
         self.image_url = TextInput(
             label="Image URL",
-            value=data.get("image-url", ""),
+            default=data.get("image-url", ""),
             required=False
         )
 
         self.solution_url = TextInput(
             label="Solution URL",
-            value=data.get("solution-url", ""),
+            default=data.get("solution-url", ""),
             required=False
         )
 
