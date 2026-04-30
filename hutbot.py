@@ -74,7 +74,6 @@ async def main():
             "riddle",
             "hutvote",
             "hutthreadvote",
-            "character_creator",
             "riddle_post"
         ]
 
@@ -89,14 +88,7 @@ async def main():
                 print(f"❌ Fehler beim Laden von {ext}:")
                 traceback.print_exc()
 
-        # Load persistent birthday view
-        try:
-            from birthday_cog import BirthdayButtonView
-            bot.add_view(BirthdayButtonView(bot))
-            print("🎂 Birthday view loaded.")
-        except Exception:
-            print("⚠️ Birthday view not loaded:")
-            traceback.print_exc()
+
 
         # Initial wait (Container, Cloudflare, etc.)
         initial_wait = 10  # Sekunden, kann auch 30 oder 60 sein
