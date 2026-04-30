@@ -1,6 +1,6 @@
 import os
-import json
 import time
+import json
 import asyncio
 import logging
 from typing import Optional, Any
@@ -26,11 +26,10 @@ JSONBIN_BASE_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 SOLVED_BIN_URL = f"https://api.jsonbin.io/v3/b/{SOLVED_BIN_ID}"
 
 REQUIRED_ROLE_ID = 1393762463861702787
-
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
 
 HTTP_TIMEOUT_SEC = 12
-HTTP_RETRIES_DEFAULT = 2
+HTTP_RETRIES = 2
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,9 +45,9 @@ def clean_value(v: Optional[str]) -> Optional[str]:
     return v if v else None
 
 
-def to_int(value: Any, default: int = 0) -> int:
+def to_int(v: Any, default: int = 0) -> int:
     try:
-        return int(value)
+        return int(v)
     except (TypeError, ValueError):
         return default
 
@@ -57,7 +56,7 @@ def is_configured() -> bool:
     return bool(JSONBIN_API_KEY and JSONBIN_API_KEY.strip())
 
 
-def get_empty_riddle() -> dict:
+def empty_riddle() -> dict:
     return {
         "text": None,
         "solution": None,
@@ -65,7 +64,7 @@ def get_empty_riddle() -> dict:
         "image-url": None,
         "solution-url": None,
         "button-id": None,
-        "riddler": None
+        "riddler": None,
     }
 
 
@@ -73,77 +72,65 @@ def has_riddle_data(data: dict) -> bool:
     return bool((data or {}).get("text") or (data or {}).get("solution"))
 
 
-def safe_display_name(user: Optional[discord.abc.User], fallback: str) -> str:
-    if user is None:
-        return fallback
-    return getattr(user, "display_name", getattr(user, "name", fallback))
-
-
 def make_headers() -> dict:
     return {
         "X-Master-Key": JSONBIN_API_KEY or "",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
 
 # =========================
-# JSONBIN HTTP
+# JSONBIN
 # =========================
 async def jsonbin_request(
     method: str,
     url: str,
     *,
     payload: Optional[dict] = None,
-    retries: int = HTTP_RETRIES_DEFAULT,
-    timeout_sec: int = HTTP_TIMEOUT_SEC
+    retries: int = HTTP_RETRIES,
+    timeout_sec: int = HTTP_TIMEOUT_SEC,
 ) -> tuple[bool, int, dict]:
     if not is_configured():
         logger.error("JSONBIN_API_KEY missing.")
         return False, 0, {}
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
-    backoff = 0.5
     last_status = 0
     last_data: dict = {}
+    backoff = 0.4
 
     for attempt in range(retries + 1):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.request(
-                    method=method,
-                    url=url,
-                    headers=make_headers(),
-                    json=payload
+                    method, url, headers=make_headers(), json=payload
                 ) as resp:
                     last_status = resp.status
-                    body = await resp.text()
-                    parsed: dict = {}
+                    text = await resp.text()
 
-                    if body:
+                    data = {}
+                    if text:
                         try:
-                            obj = json.loads(body)
-                            if isinstance(obj, dict):
-                                parsed = obj
+                            parsed = json.loads(text)
+                            if isinstance(parsed, dict):
+                                data = parsed
                         except json.JSONDecodeError:
-                            parsed = {}
+                            data = {}
 
                     if 200 <= resp.status < 300:
-                        return True, resp.status, parsed
+                        return True, resp.status, data
 
-                    # retry nur bei 429/5xx
-                    should_retry = resp.status == 429 or 500 <= resp.status < 600
+                    retryable = resp.status == 429 or 500 <= resp.status < 600
                     logger.warning(
-                        f"JSONBin {method} {url} failed: status={resp.status}, retry={should_retry}, attempt={attempt + 1}/{retries + 1}"
+                        f"JSONBin {method} failed: status={resp.status}, retryable={retryable}, attempt={attempt + 1}/{retries + 1}"
                     )
-                    last_data = parsed
+                    last_data = data
 
-                    if not should_retry or attempt >= retries:
-                        return False, resp.status, parsed
+                    if not retryable or attempt >= retries:
+                        return False, resp.status, data
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(
-                f"JSONBin {method} {url} exception on attempt {attempt + 1}/{retries + 1}: {e}"
-            )
+            logger.warning(f"JSONBin {method} exception: {e} (attempt {attempt + 1}/{retries + 1})")
             if attempt >= retries:
                 break
         except Exception as e:
@@ -157,43 +144,32 @@ async def jsonbin_request(
     return False, last_status, last_data
 
 
-async def jsonbin_get_record(bin_url: str, *, retries: int = HTTP_RETRIES_DEFAULT) -> dict:
-    ok, _, data = await jsonbin_request(
-        "GET",
-        f"{bin_url}/latest",
-        retries=retries
-    )
+async def jsonbin_get_record(bin_url: str, *, retries: int = HTTP_RETRIES) -> dict:
+    ok, _, data = await jsonbin_request("GET", f"{bin_url}/latest", retries=retries)
     if not ok:
         return {}
-
     record = data.get("record", {})
     return record if isinstance(record, dict) else {}
 
 
-async def jsonbin_put_record(bin_url: str, record: dict, *, retries: int = HTTP_RETRIES_DEFAULT) -> bool:
-    ok, _, _ = await jsonbin_request(
-        "PUT",
-        bin_url,
-        payload=record,
-        retries=retries
-    )
+async def jsonbin_put_record(bin_url: str, record: dict, *, retries: int = HTTP_RETRIES) -> bool:
+    ok, _, _ = await jsonbin_request("PUT", bin_url, payload=record, retries=retries)
     return ok
 
 
-async def fetch_riddle_safe(*, retries: int = HTTP_RETRIES_DEFAULT) -> dict:
-    empty = get_empty_riddle()
-    record = await jsonbin_get_record(JSONBIN_BASE_URL, retries=retries)
-    if not record:
-        return empty
+async def fetch_riddle_safe(*, retries: int = HTTP_RETRIES) -> dict:
+    rec = await jsonbin_get_record(JSONBIN_BASE_URL, retries=retries)
+    if not rec:
+        return empty_riddle()
 
     return {
-        "text": record.get("text"),
-        "solution": record.get("solution"),
-        "award": record.get("award"),
-        "image-url": record.get("image-url"),
-        "solution-url": record.get("solution-url"),
-        "button-id": record.get("button-id"),
-        "riddler": record.get("riddler")
+        "text": rec.get("text"),
+        "solution": rec.get("solution"),
+        "award": rec.get("award"),
+        "image-url": rec.get("image-url"),
+        "solution-url": rec.get("solution-url"),
+        "button-id": rec.get("button-id"),
+        "riddler": rec.get("riddler"),
     }
 
 
@@ -201,17 +177,10 @@ async def fetch_riddle_safe(*, retries: int = HTTP_RETRIES_DEFAULT) -> dict:
 # MODAL
 # =========================
 class RiddleUpsertModal(Modal):
-    def __init__(
-        self,
-        *,
-        mode: str,
-        mention: Optional[Role] = None,
-        existing_data: Optional[dict] = None
-    ):
-        title = "Edit Riddle" if mode == "edit" else "Create Riddle"
-        super().__init__(title=title)
+    def __init__(self, *, mode: str, mention: Optional[Role] = None, data: Optional[dict] = None):
+        super().__init__(title="Edit Riddle" if mode == "edit" else "Create Riddle")
+        data = data or {}
 
-        data = existing_data or {}
         self.mode = mode
         self.mention = mention
         self.existing_button_id = data.get("button-id")
@@ -221,33 +190,18 @@ class RiddleUpsertModal(Modal):
             style=discord.TextStyle.paragraph,
             default=data.get("text") or "",
             required=True,
-            max_length=4000
+            max_length=4000,
         )
         self.solution = TextInput(
             label="Solution",
             style=discord.TextStyle.paragraph,
             default=data.get("solution") or "",
             required=True,
-            max_length=4000
+            max_length=4000,
         )
-        self.award = TextInput(
-            label="Award",
-            default=data.get("award") or "",
-            required=False,
-            max_length=200
-        )
-        self.image_url = TextInput(
-            label="Image URL",
-            default=data.get("image-url") or "",
-            required=False,
-            max_length=1000
-        )
-        self.solution_url = TextInput(
-            label="Solution URL",
-            default=data.get("solution-url") or "",
-            required=False,
-            max_length=1000
-        )
+        self.award = TextInput(label="Award", default=data.get("award") or "", required=False, max_length=200)
+        self.image_url = TextInput(label="Image URL", default=data.get("image-url") or "", required=False, max_length=1000)
+        self.solution_url = TextInput(label="Solution URL", default=data.get("solution-url") or "", required=False, max_length=1000)
 
         self.add_item(self.text)
         self.add_item(self.solution)
@@ -262,23 +216,24 @@ class RiddleUpsertModal(Modal):
             await interaction.followup.send("❌ JSONBIN_API_KEY fehlt in der .env.", ephemeral=True)
             return
 
-        button_id = str(self.mention.id) if self.mention else self.existing_button_id
+        button_id = self.existing_button_id
+        if self.mode == "create" and self.mention:
+            button_id = str(self.mention.id)
 
-        updated = {
+        payload = {
             "text": clean_value(self.text.value),
             "solution": clean_value(self.solution.value),
             "award": clean_value(self.award.value),
             "image-url": clean_value(self.image_url.value),
             "solution-url": clean_value(self.solution_url.value),
             "button-id": clean_value(button_id),
-            "riddler": str(interaction.user.id)
+            "riddler": str(interaction.user.id),
         }
-        updated = {k: v for k, v in updated.items() if v is not None}
+        payload = {k: v for k, v in payload.items() if v is not None}
 
-        ok = await jsonbin_put_record(JSONBIN_BASE_URL, updated)
+        ok = await jsonbin_put_record(JSONBIN_BASE_URL, payload)
         if ok:
-            msg = "✅ Updated!" if self.mode == "edit" else "✅ Created!"
-            await interaction.followup.send(msg, ephemeral=True)
+            await interaction.followup.send("✅ Updated!" if self.mode == "edit" else "✅ Created!", ephemeral=True)
         else:
             await interaction.followup.send("❌ Failed while saving to JSONBin.", ephemeral=True)
 
@@ -292,42 +247,36 @@ class ChampionsView(View):
         *,
         entries: list[tuple[int, int, float, int]],
         total_solved: int,
-        page_image_url: Optional[str],
-        name_cache: dict[int, str],
-        avatar_cache: dict[int, str],
-        owner_id: Optional[int] = None
+        image_url: Optional[str],
+        owner_id: Optional[int] = None,
+        name_cache: Optional[dict[int, str]] = None,
+        avatar_cache: Optional[dict[int, str]] = None,
     ):
         super().__init__(timeout=300)
-
         self.entries = entries
         self.total_solved = total_solved
         self.page = 0
         self.entries_per_page = 6
-        self.max_page = max((len(self.entries) - 1) // self.entries_per_page, 0)
+        self.max_page = max((len(entries) - 1) // self.entries_per_page, 0)
 
         self.owner_id = owner_id
-        self.name_cache = name_cache
-        self.avatar_cache = avatar_cache
-
+        self.page1_image_url = image_url or DEFAULT_IMAGE_URL
         self.default_image_url = DEFAULT_IMAGE_URL
-        self.page1_image_url = page_image_url or self.default_image_url
 
+        self.name_cache = name_cache or {}
+        self.avatar_cache = avatar_cache or {}
         self.message: Optional[discord.Message] = None
 
         self._sync_buttons()
 
     def _sync_buttons(self):
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                if child.custom_id == "riddlechamp_prev":
-                    child.disabled = self.page <= 0
-                elif child.custom_id == "riddlechamp_next":
-                    child.disabled = self.page >= self.max_page
+        self.prev_button.disabled = self.page <= 0
+        self.next_button.disabled = self.page >= self.max_page
 
-    def _get_name(self, uid: int) -> str:
+    def _name(self, uid: int) -> str:
         return self.name_cache.get(uid, f"User {uid}")
 
-    def _get_avatar(self, uid: int) -> Optional[str]:
+    def _avatar(self, uid: int) -> Optional[str]:
         return self.avatar_cache.get(uid)
 
     def build_embed(self) -> discord.Embed:
@@ -338,31 +287,28 @@ class ChampionsView(View):
         embed = discord.Embed(
             title=f"🏆 Riddle Champions ⁉️ Total: 🧩 {self.total_solved}",
             description=f"Page {self.page + 1}/{self.max_page + 1}",
-            color=discord.Color.gold()
+            color=discord.Color.gold(),
         )
 
         if self.entries:
             top_uid = self.entries[0][0]
-            top_name = self._get_name(top_uid)
-            top_avatar = self._get_avatar(top_uid)
+            top_name = self._name(top_uid)
+            top_avatar = self._avatar(top_uid)
 
-            embed.set_author(name=f"👑 Riddle Master #1: {top_name}", icon_url=top_avatar or discord.Embed.Empty)
             if top_avatar:
+                embed.set_author(name=f"👑 Riddle Master #1: {top_name}", icon_url=top_avatar)
                 embed.set_thumbnail(url=top_avatar)
+            else:
+                embed.set_author(name=f"👑 Riddle Master #1: {top_name}")
 
         if not page_entries:
-            embed.add_field(
-                name="Noch keine Daten",
-                value="Es wurden noch keine Rätsel gelöst.",
-                inline=False
-            )
+            embed.add_field(name="Noch keine Daten", value="Es wurden noch keine Rätsel gelöst.", inline=False)
         else:
             for i, (uid, solved, percent, xp) in enumerate(page_entries, start=start + 1):
-                name = self._get_name(uid)
                 embed.add_field(
-                    name=f"🎖️ {i}. {name}",
+                    name=f"🎖️ {i}. {self._name(uid)}",
                     value=f"🧩 {solved} | 📊 {percent:.1f}% | 🧠 {xp} XP",
-                    inline=False
+                    inline=False,
                 )
 
         embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
@@ -375,32 +321,23 @@ class ChampionsView(View):
         return True
 
     async def on_timeout(self):
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
             except Exception:
                 pass
 
-    @discord.ui.button(
-        label="Previous",
-        style=discord.ButtonStyle.secondary,
-        custom_id="riddlechamp_prev"
-    )
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="riddlechamp_prev")
     async def prev_button(self, interaction: Interaction, button: discord.ui.Button):
         if self.page > 0:
             self.page -= 1
         self._sync_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    @discord.ui.button(
-        label="Next",
-        style=discord.ButtonStyle.secondary,
-        custom_id="riddlechamp_next"
-    )
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="riddlechamp_next")
     async def next_button(self, interaction: Interaction, button: discord.ui.Button):
         if self.page < self.max_page:
             self.page += 1
@@ -414,62 +351,82 @@ class ChampionsView(View):
 class RiddleEditor(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._riddle_cache: dict = get_empty_riddle()
+
+        self._riddle_cache: dict = empty_riddle()
         self._riddle_cache_ts: float = 0.0
+        self._cache_lock = asyncio.Lock()
+        self._cache_task: Optional[asyncio.Task] = None
 
-    async def _get_riddle_for_modal_fast(self) -> dict:
-        # Kurzer Cache, damit /riddle meistens instant bleibt
-        now = time.monotonic()
-        if now - self._riddle_cache_ts < 90:
-            return self._riddle_cache
+    async def cog_load(self):
+        self._cache_task = asyncio.create_task(self._cache_worker())
 
+    async def cog_unload(self):
+        if self._cache_task and not self._cache_task.done():
+            self._cache_task.cancel()
+            try:
+                await self._cache_task
+            except Exception:
+                pass
+
+    async def _cache_worker(self):
+        await asyncio.sleep(2)
+        while True:
+            try:
+                data = await fetch_riddle_safe(retries=1)
+                async with self._cache_lock:
+                    self._riddle_cache = data
+                    self._riddle_cache_ts = time.monotonic()
+            except Exception as e:
+                logger.warning(f"riddle cache worker error: {e}")
+            await asyncio.sleep(45)
+
+    async def _get_best_riddle_data(self) -> dict:
+        async with self._cache_lock:
+            cached = dict(self._riddle_cache)
+            ts = self._riddle_cache_ts
+
+        # frischer Cache -> direkt verwenden
+        if time.monotonic() - ts < 120 and has_riddle_data(cached):
+            return cached
+
+        # sonst kurzer Direkt-Fetch (aber unter 3s Budget bleiben)
         try:
-            # sehr kurzer Timeout, damit send_modal nicht abläuft (10062)
-            data = await asyncio.wait_for(fetch_riddle_safe(retries=0), timeout=1.4)
-            if isinstance(data, dict):
-                self._riddle_cache = data
-                self._riddle_cache_ts = time.monotonic()
-                return data
-        except asyncio.TimeoutError:
-            logger.warning("/riddle fetch timeout, using cache/fallback")
-        except Exception as e:
-            logger.exception(f"/riddle fetch failed: {e}")
+            fresh = await asyncio.wait_for(fetch_riddle_safe(retries=0), timeout=2.2)
+            if fresh:
+                async with self._cache_lock:
+                    self._riddle_cache = fresh
+                    self._riddle_cache_ts = time.monotonic()
+                return fresh
+        except Exception:
+            pass
 
-        return self._riddle_cache if self._riddle_cache else get_empty_riddle()
+        return cached if cached else empty_riddle()
 
-    def _member_has_permission(self, interaction: Interaction) -> bool:
+    def _has_permission(self, interaction: Interaction) -> bool:
         member = interaction.user
         if not isinstance(member, discord.Member):
             if interaction.guild is None:
                 return False
             member = interaction.guild.get_member(interaction.user.id)
-
         if not member:
             return False
-
-        return any(role.id == REQUIRED_ROLE_ID for role in member.roles)
+        return any(r.id == REQUIRED_ROLE_ID for r in member.roles)
 
     def _build_user_cache(
-        self,
-        guild: Optional[discord.Guild],
-        entries: list[tuple[int, int, int]]
+        self, guild: Optional[discord.Guild], entries_raw: list[tuple[int, int, int]]
     ) -> tuple[dict[int, str], dict[int, str]]:
         name_cache: dict[int, str] = {}
         avatar_cache: dict[int, str] = {}
 
-        for uid, _, _ in entries:
-            user_obj: Optional[discord.abc.User] = None
-
+        for uid, _, _ in entries_raw:
+            user_obj = None
             if guild is not None:
-                member = guild.get_member(uid)
-                if member is not None:
-                    user_obj = member
-
+                user_obj = guild.get_member(uid)
             if user_obj is None:
                 user_obj = self.bot.get_user(uid)
 
             if user_obj is not None:
-                name_cache[uid] = safe_display_name(user_obj, f"User {uid}")
+                name_cache[uid] = getattr(user_obj, "display_name", getattr(user_obj, "name", f"User {uid}"))
                 try:
                     avatar_cache[uid] = user_obj.display_avatar.url
                 except Exception:
@@ -484,31 +441,27 @@ class RiddleEditor(commands.Cog):
             await interaction.response.send_message("❌ JSONBIN_API_KEY fehlt in der .env.", ephemeral=True)
             return
 
-        if not self._member_has_permission(interaction):
+        if not self._has_permission(interaction):
             await interaction.response.send_message("🚫 No permission.", ephemeral=True)
             return
 
-        data = await self._get_riddle_for_modal_fast()
+        data = await self._get_best_riddle_data()
         edit_mode = has_riddle_data(data)
 
         modal = RiddleUpsertModal(
             mode="edit" if edit_mode else "create",
             mention=(None if edit_mode else mention),
-            existing_data=(data if edit_mode else None)
+            data=(data if edit_mode else None),
         )
 
         try:
             await interaction.response.send_modal(modal)
         except discord.NotFound:
-            # 10062, Interaction abgelaufen
-            logger.warning("send_modal failed with NotFound (likely 10062 Unknown interaction)")
+            logger.warning("send_modal failed: interaction expired (10062)")
         except discord.HTTPException as e:
-            logger.exception(f"send_modal HTTPException: {e}")
+            logger.exception(f"send_modal failed: {e}")
             if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ Interaction abgelaufen. Bitte `/riddle` nochmal ausführen.",
-                    ephemeral=True
-                )
+                await interaction.response.send_message("❌ Interaction abgelaufen. Bitte nochmal `/riddle`.", ephemeral=True)
 
     @riddle.error
     async def riddle_error(self, interaction: Interaction, error: app_commands.AppCommandError):
@@ -528,7 +481,7 @@ class RiddleEditor(commands.Cog):
         interaction: Interaction,
         visible: Optional[bool] = False,
         image: Optional[str] = None,
-        mention: Optional[Role] = None
+        mention: Optional[Role] = None,
     ):
         if not is_configured():
             await interaction.response.send_message("❌ JSONBIN_API_KEY fehlt in der .env.", ephemeral=True)
@@ -536,30 +489,27 @@ class RiddleEditor(commands.Cog):
 
         await interaction.response.defer(ephemeral=not visible, thinking=True)
 
-        raw = await jsonbin_get_record(SOLVED_BIN_URL, retries=HTTP_RETRIES_DEFAULT)
+        raw = await jsonbin_get_record(SOLVED_BIN_URL, retries=HTTP_RETRIES)
 
         entries_raw: list[tuple[int, int, int]] = []
         for uid, stats in raw.items():
-            uid_int = to_int(uid, default=-1)
-            if uid_int <= 0:
+            uid_i = to_int(uid, default=-1)
+            if uid_i <= 0:
                 continue
 
-            solved = 0
-            xp = 0
-
             if isinstance(stats, dict):
-                solved = to_int(stats.get("solved_riddles", 0), default=0)
-                xp = to_int(stats.get("xp", 0), default=0)
+                solved = max(0, to_int(stats.get("solved_riddles", 0), default=0))
+                xp = max(0, to_int(stats.get("xp", 0), default=0))
             else:
-                # Fallback falls Datenformat mal kaputt ist
-                solved = to_int(stats, default=0)
+                solved = max(0, to_int(stats, default=0))
+                xp = 0
 
-            entries_raw.append((uid_int, max(0, solved), max(0, xp)))
+            entries_raw.append((uid_i, solved, xp))
 
         entries_raw.sort(key=lambda x: (x[1], x[2]), reverse=True)
-
         total_solved = sum(s for _, s, _ in entries_raw)
-        entries: list[tuple[int, int, float, int]] = [
+
+        entries = [
             (uid, solved, (solved / total_solved * 100.0 if total_solved else 0.0), xp)
             for uid, solved, xp in entries_raw
         ]
@@ -569,22 +519,20 @@ class RiddleEditor(commands.Cog):
         view = ChampionsView(
             entries=entries,
             total_solved=total_solved,
-            page_image_url=image,
+            image_url=image,
+            owner_id=(interaction.user.id if not visible else None),
             name_cache=name_cache,
             avatar_cache=avatar_cache,
-            owner_id=(interaction.user.id if not visible else None)
         )
 
-        embed = view.build_embed()
-
-        sent_msg = await interaction.followup.send(
+        msg = await interaction.followup.send(
             content=mention.mention if (visible and mention) else None,
-            embed=embed,
+            embed=view.build_embed(),
             view=view,
             ephemeral=not visible,
-            wait=True
+            wait=True,
         )
-        view.message = sent_msg
+        view.message = msg
 
     @riddle_champ.error
     async def riddle_champ_error(self, interaction: Interaction, error: app_commands.AppCommandError):
