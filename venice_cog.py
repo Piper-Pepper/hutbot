@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import logging
 import os
@@ -24,6 +25,7 @@ if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
+VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL", "https://api.venice.ai/api/v1/image/upscale")
 
 BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
 LEGACY_STARTER_TEXTS = {
@@ -85,17 +87,17 @@ ASPECT_LABELS = {
     "3:4": "🖼️ 3:4",
     "4:5": "🖼️ 4:5",
 }
-
 RESOLUTION_TIERS = ["1K", "2K", "4K"]
-FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]  # only if model has no native aspectRatios
+
+# Fallback for models with no explicit aspectRatios
+FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]
 
 # =================================================
-# MODEL CONFIG (from your JSON)
-# Removed by your preference:
+# MODEL CONFIG (JSON-aligned)
+# removed as previously requested:
 # - venice-sd35
 # - flux-2-pro
 # - lustify-sdxl
-# - lustify-v7
 # - bria-bg-remover
 # =================================================
 COMMON_RATIOS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
@@ -105,234 +107,138 @@ GPT15_RATIOS = ["1:1", "3:2", "2:3"]
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
     "hidream": {
         "label": "🌙 HiDream",
-        "prompt_limit": 1500,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 6.5,
-        "aspect_ratios": None,
-        "width_height_divisor": 8,
-        "resolutions": [],
+        "prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5,
+        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
     },
     "flux-2-max": {
         "label": "🌌 Flux 2 Max",
-        "prompt_limit": 3000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
+        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
         "aspect_ratios": ["auto", "1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "width_height_divisor": 1, "resolutions": [],
     },
     "gpt-image-2": {
         "label": "🧠 GPT Image 2",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": ["1K", "2K", "4K"],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"],
     },
     "gpt-image-1-5": {
         "label": "🪄 GPT Image 1.5",
-        "prompt_limit": 5000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": GPT15_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": GPT15_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "hunyuan-image-v3": {
         "label": "🐉 Hunyuan Image 3.0",
-        "prompt_limit": 3000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "imagineart-1.5-pro": {
         "label": "🎨 ImagineArt 1.5 Pro",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
         "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"],
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "width_height_divisor": 1, "resolutions": [],
     },
     "nano-banana-2": {
         "label": "🐵 Nano Banana 2",
-        "prompt_limit": 32768,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": ["1K", "2K", "4K"],
+        "prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"],
     },
     "nano-banana-pro": {
         "label": "🍌 Nano Banana Pro",
-        "prompt_limit": 32768,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": ["1K", "2K", "4K"],
+        "prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"],
     },
     "recraft-v4": {
         "label": "🧱 Recraft V4",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "recraft-v4-pro": {
         "label": "🏗️ Recraft V4 Pro",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "seedream-v4": {
         "label": "🌊 Seedream V4.5",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "seedream-v5-lite": {
         "label": "💧 Seedream V5 Lite",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "qwen-image-2": {
         "label": "🔷 Qwen Image 2",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "qwen-image-2-pro": {
         "label": "🧩 Qwen Image 2 Pro",
-        "prompt_limit": 10000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "wan-2-7-text-to-image": {
         "label": "🐋 Wan 2.7",
-        "prompt_limit": 3000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "wan-2-7-pro-text-to-image": {
         "label": "🦈 Wan 2.7 Pro",
-        "prompt_limit": 3000,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": [],
+        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
     },
     "grok-imagine-image": {
         "label": "🧠 Grok Imagine",
-        "prompt_limit": 7500,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": GROK_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": ["1K", "2K"],
+        "prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": GROK_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K"],
     },
     "grok-imagine-image-pro": {
         "label": "🚀 Grok Imagine Pro",
-        "prompt_limit": 7500,
-        "default_steps": 20,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": GROK_RATIOS,
-        "width_height_divisor": 1,
-        "resolutions": ["1K", "2K"],
+        "prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": GROK_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K"],
+    },
+    "lustify-v7": {
+        "label": "🥵 Lustify v7",
+        "prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
     },
     "lustify-v8": {
-        "label": "🔥 Lustify V8",
-        "prompt_limit": 1500,
-        "default_steps": 30,
-        "max_steps": 50,
-        "cfg_default": 5.0,
-        "aspect_ratios": None,
-        "width_height_divisor": 8,
-        "resolutions": [],
+        "label": "🔥 Lustify v8",
+        "prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0,
+        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
     },
     "qwen-image": {
         "label": "🐼 Qwen Image",
-        "prompt_limit": 1500,
-        "default_steps": 8,
-        "max_steps": 8,
-        "cfg_default": 6.0,
-        "aspect_ratios": None,
-        "width_height_divisor": 8,
-        "resolutions": [],
+        "prompt_limit": 1500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0,
+        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
     },
     "wai-Illustrious": {
         "label": "🎌 Anime (WAI)",
-        "prompt_limit": 1500,
-        "default_steps": 25,
-        "max_steps": 30,
-        "cfg_default": 7.0,
-        "aspect_ratios": None,
-        "width_height_divisor": 16,
-        "resolutions": [],
+        "prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0,
+        "aspect_ratios": None, "width_height_divisor": 16, "resolutions": [],
     },
     "z-image-turbo": {
         "label": "⚡ Z-Image Turbo",
-        "prompt_limit": 7500,
-        "default_steps": 8,
-        "max_steps": 8,
-        "cfg_default": 6.0,
-        "aspect_ratios": None,
-        "width_height_divisor": 8,
-        "resolutions": [],
+        "prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0,
+        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
     },
     "chroma": {
         "label": "🌈 Chroma",
-        "prompt_limit": 7500,
-        "default_steps": 10,
-        "max_steps": 10,
-        "cfg_default": 6.0,
-        "aspect_ratios": None,
-        "width_height_divisor": 8,
-        "resolutions": [],
+        "prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0,
+        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
     },
+}
+
+UNCENSORED_MODELS = {
+    "lustify-v7",
+    "lustify-v8",
+    "grok-imagine-image",
+    "grok-imagine-image-pro",
+    "z-image-turbo",
+    "seedream-v4",
+    "seedream-v5-lite",
+    "wan-2-7-text-to-image",
+    "wan-2-7-pro-text-to-image",
 }
 
 MODEL_ORDER = list(MODEL_CONFIG.keys())
@@ -342,6 +248,7 @@ MODEL_ORDER = list(MODEL_CONFIG.keys())
 # =================================================
 _channel_locks: dict[int, asyncio.Lock] = {}
 
+
 def get_channel_lock(channel_id: int) -> asyncio.Lock:
     lock = _channel_locks.get(channel_id)
     if lock is None:
@@ -349,30 +256,32 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
         _channel_locks[channel_id] = lock
     return lock
 
+
 # =================================================
 # HELPERS
 # =================================================
 def get_model_label(model_id: str) -> str:
-    return MODEL_CONFIG[model_id]["label"]
+    base = MODEL_CONFIG[model_id]["label"]
+    return f"{base} 🔞" if model_id in UNCENSORED_MODELS else base
+
 
 def get_model_ratios(model_id: str) -> list[str]:
     ratios = MODEL_CONFIG[model_id]["aspect_ratios"]
     return ratios if ratios else FALLBACK_ASPECTS
 
-def get_clickable_resolutions(model_id: str) -> set[str]:
-    native = MODEL_CONFIG[model_id]["resolutions"]
-    return set(native) if native else {"1K"}
 
 def make_safe_filename(prompt: str) -> str:
     base = "_".join((prompt or "").split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
+
 def snap_to_divisor(value: int, divisor: int) -> int:
     if divisor <= 1:
         return max(1, int(value))
     snapped = int(round(value / divisor) * divisor)
     return max(divisor, snapped)
+
 
 def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -> tuple[int, int]:
     if ratio == "auto":
@@ -399,10 +308,84 @@ def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -
 
     return snap_to_divisor(w, divisor), snap_to_divisor(h, divisor)
 
-def build_payload(
+
+def build_model_options(channel_id: int, include_surprise: bool = True) -> list[discord.SelectOption]:
+    if channel_id not in ALLOWED_CHANNEL_IDS:
+        return []
+
+    options: list[discord.SelectOption] = []
+    if include_surprise:
+        options.append(discord.SelectOption(label=SURPRISE_LABEL, value=SURPRISE_VALUE))
+
+    for model_id in MODEL_ORDER:
+        options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
+
+    return options[:25]
+
+
+def is_model_dropdown_message(msg: discord.Message) -> bool:
+    if not msg.components or msg.embeds or msg.attachments:
+        return False
+
+    for row in msg.components:
+        for child in row.children:
+            cid = getattr(child, "custom_id", None)
+            if isinstance(cid, str) and (
+                cid.startswith("venice_model_select:") or cid.startswith("venice_model_select_")
+            ):
+                return True
+
+    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
+
+
+def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
+    return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
+
+
+def has_role(member: discord.Member, role_id: int) -> bool:
+    return any(r.id == role_id for r in member.roles)
+
+
+def resolution_native_supported(model_id: str, resolution: str) -> bool:
+    return resolution in set(MODEL_CONFIG[model_id]["resolutions"])
+
+
+def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
+    """
+    Returns (generation_resolution, upscale_factor).
+    generation_resolution is native resolution to pass if supported by model.
+    upscale_factor is 2 or 4 when post-upscale is needed.
+    """
+    native = set(MODEL_CONFIG[model_id]["resolutions"])
+
+    if wanted_resolution == "1K":
+        if "1K" in native:
+            return "1K", None
+        return None, None
+
+    if wanted_resolution == "2K":
+        if "2K" in native:
+            return "2K", None
+        if "1K" in native:
+            return "1K", 2
+        return None, 2
+
+    if wanted_resolution == "4K":
+        if "4K" in native:
+            return "4K", None
+        if "2K" in native:
+            return "2K", 2
+        if "1K" in native:
+            return "1K", 4
+        return None, 4
+
+    return None, None
+
+
+def build_generate_payload(
     model_id: str,
     ratio: str,
-    resolution: str,
+    generation_resolution: Optional[str],
     prompt: str,
     negative_prompt: str,
     cfg_scale: float,
@@ -421,93 +404,56 @@ def build_payload(
     }
 
     native_ratios = cfg["aspect_ratios"]
-    native_resolutions = cfg["resolutions"]
-
-    # native resolutions only if truly supported
-    if resolution in native_resolutions:
-        payload["resolution"] = resolution
-
     if native_ratios:
-        if ratio not in native_ratios:
-            ratio = native_ratios[0]
-        payload["aspect_ratio"] = ratio
+        payload["aspect_ratio"] = ratio if ratio in native_ratios else native_ratios[0]
     else:
-        # no native ratio support in constraints -> fallback width/height
         w, h = dimensions_for_ratio(ratio, cfg["width_height_divisor"], base_long_side=1024)
         payload["width"] = w
         payload["height"] = h
 
+    if generation_resolution and generation_resolution in cfg["resolutions"]:
+        payload["resolution"] = generation_resolution
+
     return payload
 
-def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
-    return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
-
-def has_role(member: discord.Member, role_id: int) -> bool:
-    return any(r.id == role_id for r in member.roles)
-
-def build_model_options(channel_id: int, include_surprise: bool = True) -> list[discord.SelectOption]:
-    if channel_id not in ALLOWED_CHANNEL_IDS:
-        return []
-
-    options: list[discord.SelectOption] = []
-    if include_surprise:
-        options.append(discord.SelectOption(label=SURPRISE_LABEL, value=SURPRISE_VALUE))
-
-    options.extend(
-        discord.SelectOption(label=get_model_label(model_id), value=model_id)
-        for model_id in MODEL_ORDER
-    )
-
-    return options[:25]
-
-def is_model_dropdown_message(msg: discord.Message) -> bool:
-    if not msg.components or msg.embeds or msg.attachments:
-        return False
-
-    for row in msg.components:
-        for child in row.children:
-            cid = getattr(child, "custom_id", None)
-            if isinstance(cid, str) and (
-                cid.startswith("venice_model_select:") or
-                cid.startswith("venice_model_select_")
-            ):
-                return True
-
-    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
 
 def build_resolution_hint(model_id: str) -> str:
-    supported = get_clickable_resolutions(model_id)
-    unavailable = [r for r in RESOLUTION_TIERS if r not in supported]
+    native = set(MODEL_CONFIG[model_id]["resolutions"])
 
-    if supported == {"1K"}:
-        return "Available: 1K • 2K and 4K are unavailable for this model."
+    if not native:
+        return "1K is native for this model. 2K/4K are delivered via upscale."
 
-    parts = [f"Available: {', '.join([r for r in RESOLUTION_TIERS if r in supported])}"]
+    parts = [f"Native: {', '.join(sorted(native, key=lambda x: RESOLUTION_TIERS.index(x)))}"]
 
-    if "2K" in supported:
+    if "2K" in native:
         parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
-    if "4K" in supported:
-        parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
+    else:
+        parts.append("2K via upscale")
 
-    if unavailable:
-        parts.append(f"Not supported by this model: {', '.join(unavailable)}")
+    if "4K" in native:
+        parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
+    else:
+        parts.append("4K via upscale")
 
     parts.append("Earn XP in the server to unlock higher tiers.")
     return " • ".join(parts)
 
+
 def build_surprise_embed(model_id: str, ratio: str) -> discord.Embed:
-    embed = discord.Embed(
+    emb = discord.Embed(
         title="🎲 Surprise pick!",
-        description=f"**Model:** {get_model_label(model_id)}\n**Aspect ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
-        color=discord.Color.purple()
+        description=f"**Model:** {get_model_label(model_id)}\n**Aspect Ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
+        color=discord.Color.purple(),
     )
-    return embed
+    return emb
+
 
 async def send_ephemeral(interaction: discord.Interaction, content: str):
     if interaction.response.is_done():
         await interaction.followup.send(content, ephemeral=True)
     else:
         await interaction.response.send_message(content, ephemeral=True)
+
 
 async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int):
     level_name = ROLE_LEVEL_NAMES.get(role_id, "Required level")
@@ -518,9 +464,9 @@ async def send_resolution_lock_message(interaction: discord.Interaction, resolut
         f"💡 Earn XP in the server to unlock this role."
     )
 
+
 async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
-
     for attempt in range(retries + 1):
         try:
             async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
@@ -528,15 +474,14 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
                     return await resp.read()
 
                 body = await resp.text()
-                logger.warning("Venice API error %s: %s", resp.status, body)
+                logger.warning("Venice generate error %s: %s", resp.status, body)
 
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
                 return None
-
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning("Venice request failed (attempt %s): %s", attempt + 1, e)
+            logger.warning("Venice generate request failed (attempt %s): %s", attempt + 1, e)
             if attempt < retries:
                 await asyncio.sleep(1.2 * (attempt + 1))
                 continue
@@ -544,11 +489,66 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
         except Exception as e:
             logger.exception("Unexpected error in venice_generate: %s", e)
             return None
+    return None
+
+
+async def venice_upscale(
+    session: aiohttp.ClientSession,
+    image_bytes: bytes,
+    scale: int,
+    retries: int = 2
+) -> Optional[bytes]:
+    headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
+
+    for attempt in range(retries + 1):
+        try:
+            # Try multipart first
+            form = aiohttp.FormData()
+            form.add_field("file", image_bytes, filename="image.png", content_type="image/png")
+            form.add_field("scale", str(scale))
+            form.add_field("return_binary", "true")
+
+            async with session.post(VENICE_UPSCALE_URL, headers=headers, data=form) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+
+                body = await resp.text()
+                logger.warning("Venice upscale multipart error %s: %s", resp.status, body)
+
+            # Fallback: JSON base64
+            payload = {
+                "image": base64.b64encode(image_bytes).decode("utf-8"),
+                "scale": scale,
+                "return_binary": True,
+            }
+            async with session.post(VENICE_UPSCALE_URL, headers=headers, json=payload) as resp2:
+                if resp2.status == 200:
+                    return await resp2.read()
+
+                body2 = await resp2.text()
+                logger.warning("Venice upscale json error %s: %s", resp2.status, body2)
+
+            if attempt < retries:
+                await asyncio.sleep(1.2 * (attempt + 1))
+                continue
+
+            return None
+
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning("Venice upscale request failed (attempt %s): %s", attempt + 1, e)
+            if attempt < retries:
+                await asyncio.sleep(1.2 * (attempt + 1))
+                continue
+            return None
+        except Exception as e:
+            logger.exception("Unexpected error in venice_upscale: %s", e)
+            return None
 
     return None
 
+
 # =================================================
-# BASE VIEW
+# OWNER LOCKED BASE VIEW
 # =================================================
 class OwnerLockedView(discord.ui.View):
     def __init__(self, owner_id: int, timeout: Optional[float] = 900):
@@ -560,6 +560,7 @@ class OwnerLockedView(discord.ui.View):
             await send_ephemeral(interaction, "🚫 This menu belongs to another user.")
             return False
         return True
+
 
 # =================================================
 # FLOW: MODEL -> ASPECT -> MODAL -> RESOLUTION
@@ -594,7 +595,7 @@ class AspectRatioSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         ratio = self.values[0]
-        src_msg = interaction.message
+        source_msg = interaction.message
 
         await interaction.response.send_modal(
             GenerationModal(
@@ -607,12 +608,13 @@ class AspectRatioSelect(discord.ui.Select):
             )
         )
 
-        # remove aspect dropdown post once selected
-        if src_msg:
+        # Remove aspect dropdown post once clicked
+        if source_msg:
             try:
-                await src_msg.edit(view=None, content="✅ Aspect ratio selected.")
+                await source_msg.edit(view=None, content="✅ Aspect ratio selected.")
             except Exception:
                 pass
+
 
 class AspectRatioSelectView(OwnerLockedView):
     def __init__(
@@ -633,6 +635,7 @@ class AspectRatioSelectView(OwnerLockedView):
                 previous_inputs=previous_inputs
             )
         )
+
 
 class StarterModelSelect(discord.ui.Select):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
@@ -666,13 +669,12 @@ class StarterModelSelect(discord.ui.Select):
                 )
             )
 
-            # show what was picked
             try:
                 await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
 
-            # clean old model dropdowns (requested logic)
+            # requested: when dropdown action happens, clean model dropdown in recent 10
             if isinstance(interaction.channel, discord.TextChannel):
                 await VeniceCog.delete_recent_model_dropdown_posts(
                     interaction.channel,
@@ -693,7 +695,7 @@ class StarterModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        # requested logic: when aspect dropdown posted, remove model dropdown in last 10
+        # requested logic: after aspect dropdown post, remove model dropdown in recent 10
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.delete_recent_model_dropdown_posts(
                 interaction.channel,
@@ -701,10 +703,12 @@ class StarterModelSelect(discord.ui.Select):
                 limit=RECENT_SCAN_LIMIT
             )
 
+
 class StarterView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
         self.add_item(StarterModelSelect(session, channel_id))
+
 
 class GenerationModal(discord.ui.Modal):
     def __init__(
@@ -824,36 +828,32 @@ class GenerationModal(discord.ui.Modal):
             ephemeral=True
         )
 
+
 class ResolutionSelectView(OwnerLockedView):
     def __init__(self, session: aiohttp.ClientSession, generation_data: dict[str, Any]):
         super().__init__(owner_id=generation_data["owner_id"], timeout=900)
         self.session = session
         self.generation_data = generation_data
 
-        supported = get_clickable_resolutions(generation_data["model_id"])
+        model_id = generation_data["model_id"]
+        native = set(MODEL_CONFIG[model_id]["resolutions"])
 
         for res in RESOLUTION_TIERS:
-            if res not in supported:
-                btn = discord.ui.Button(
-                    label=res,
-                    style=discord.ButtonStyle.secondary,
-                    disabled=True,
-                    custom_id=f"venice_res_disabled:{res}"
-                )
-                self.add_item(btn)
-                continue
+            label = res
+            if res not in native and res in ("2K", "4K"):
+                label = f"{res} ↗"  # indicates upscale path
 
             style = (
                 discord.ButtonStyle.success if res == "1K"
                 else discord.ButtonStyle.primary if res == "2K"
-                else discord.ButtonStyle.danger  # 4K supported -> red
+                else discord.ButtonStyle.danger  # 4K red
             )
 
             btn = discord.ui.Button(
-                label=res,
+                label=label,
                 style=style,
                 disabled=False,
-                custom_id=f"venice_res:{res}"
+                custom_id=f"venice_res:{res}:{model_id}"
             )
             btn.callback = self._make_resolution_callback(res)
             self.add_item(btn)
@@ -869,10 +869,9 @@ class ResolutionSelectView(OwnerLockedView):
                 await send_resolution_lock_message(interaction, resolution, role_needed)
                 return
 
-            # Defer first
             await interaction.response.defer(ephemeral=True)
 
-            # remove resolution buttons post after click
+            # remove resolution post after click
             if interaction.message:
                 try:
                     await interaction.message.edit(view=None, content="✅ Resolution selected.")
@@ -880,6 +879,7 @@ class ResolutionSelectView(OwnerLockedView):
                     pass
 
             await self.generate_image(interaction, resolution=resolution)
+
         return callback
 
     async def generate_image(self, interaction: discord.Interaction, resolution: str):
@@ -895,10 +895,12 @@ class ResolutionSelectView(OwnerLockedView):
 
         full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
 
-        payload = build_payload(
+        gen_res, upscale_factor = generation_plan(model_id, resolution)
+
+        payload = build_generate_payload(
             model_id=model_id,
             ratio=ratio,
-            resolution=resolution,
+            generation_resolution=gen_res,
             prompt=full_prompt,
             negative_prompt=negative_prompt,
             cfg_scale=cfg_val,
@@ -918,9 +920,7 @@ class ResolutionSelectView(OwnerLockedView):
             if percent != last_percent:
                 last_percent = percent
                 try:
-                    await progress_msg.edit(
-                        content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%"
-                    )
+                    await progress_msg.edit(content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%")
                 except Exception:
                     pass
             await asyncio.sleep(1.2)
@@ -936,6 +936,20 @@ class ResolutionSelectView(OwnerLockedView):
                 )
             self.stop()
             return
+
+        upscale_note = None
+        if upscale_factor in (2, 4):
+            try:
+                await progress_msg.edit(content=f"{pepper} Upscaling {upscale_factor}x...")
+            except Exception:
+                pass
+
+            upscaled = await venice_upscale(self.session, image_bytes, upscale_factor)
+            if upscaled:
+                image_bytes = upscaled
+                upscale_note = f"Upscaled {upscale_factor}x"
+            else:
+                upscale_note = f"Upscale {upscale_factor}x failed (kept base output)"
 
         try:
             await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
@@ -965,6 +979,9 @@ class ResolutionSelectView(OwnerLockedView):
         if negative_prompt and negative_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative prompt:\n{negative_prompt}"
 
+        if upscale_note:
+            embed.description += f"\n\n🛠️ {upscale_note}"
+
         embed.set_image(url=f"attachment://{dfile.filename}")
 
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
@@ -972,7 +989,7 @@ class ResolutionSelectView(OwnerLockedView):
             text=(
                 f"{get_model_label(model_id)} | "
                 f"Ratio: {ASPECT_LABELS.get(ratio, ratio)} | "
-                f"Res: {resolution} | CFG: {cfg_val} | Steps: {steps}"
+                f"Target: {resolution} | CFG: {cfg_val} | Steps: {steps}"
             ),
             icon_url=guild_icon
         )
@@ -1016,6 +1033,7 @@ class ResolutionSelectView(OwnerLockedView):
             )
 
         self.stop()
+
 
 # =================================================
 # REUSE FLOW
@@ -1086,13 +1104,13 @@ class ReuseModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        # requested logic: aspect dropdown posted -> remove model dropdown in recent 10
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.delete_recent_model_dropdown_posts(
                 interaction.channel,
                 bot_user_id=(interaction.client.user.id if interaction.client.user else None),
                 limit=RECENT_SCAN_LIMIT
             )
+
 
 class ReuseModelSelectView(OwnerLockedView):
     def __init__(
@@ -1113,6 +1131,7 @@ class ReuseModelSelectView(OwnerLockedView):
                 hidden_suffix=hidden_suffix
             )
         )
+
 
 class PostGenerationView(OwnerLockedView):
     def __init__(
@@ -1170,6 +1189,7 @@ class PostGenerationView(OwnerLockedView):
             pass
         await self.reuse_callback(interaction)
 
+
 # =================================================
 # COG
 # =================================================
@@ -1183,14 +1203,14 @@ class VeniceCog(commands.Cog):
     async def _ensure_session(self):
         if self.session and not self.session.closed:
             return
-        timeout = aiohttp.ClientTimeout(total=180)
+        timeout = aiohttp.ClientTimeout(total=240)
         connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
     async def cog_load(self):
         await self._ensure_session()
 
-        # persistent starter views
+        # persistent starter dropdowns
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
@@ -1230,6 +1250,7 @@ class VeniceCog(commands.Cog):
         lock = get_channel_lock(channel.id)
         async with lock:
             try:
+                # requested: last 10 cleanup before repost
                 await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
                     channel,
                     bot_user_id=(self.bot.user.id if self.bot.user else None),
@@ -1268,12 +1289,11 @@ class VeniceCog(commands.Cog):
 
             await self._ensure_session()
 
-            # restart behavior:
-            # all target channels -> scan recent 10 -> delete old model dropdown -> post new
             for guild in self.bot.guilds:
                 for channel in guild.text_channels:
                     if channel.id in ALLOWED_CHANNEL_IDS:
                         await self.ensure_starter_message(channel)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
