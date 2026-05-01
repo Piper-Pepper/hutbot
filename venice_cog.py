@@ -2,6 +2,7 @@ import asyncio
 import io
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -30,6 +31,9 @@ LEGACY_STARTER_TEXTS = {
     "💡 Choose a model for a new image!",
 }
 RECENT_SCAN_LIMIT = 10
+
+SURPRISE_VALUE = "__surprise_me__"
+SURPRISE_LABEL = "🎲 Surprise me"
 
 logger = logging.getLogger("venice_picture_bot")
 
@@ -83,11 +87,11 @@ ASPECT_LABELS = {
 }
 
 RESOLUTION_TIERS = ["1K", "2K", "4K"]
-FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]  # only used when API provides no aspectRatios
+FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]  # only if model has no native aspectRatios
 
 # =================================================
 # MODEL CONFIG (from your JSON)
-# Removed by your prior preference:
+# Removed by your preference:
 # - venice-sd35
 # - flux-2-pro
 # - lustify-sdxl
@@ -419,17 +423,16 @@ def build_payload(
     native_ratios = cfg["aspect_ratios"]
     native_resolutions = cfg["resolutions"]
 
-    # native resolution only if truly supported by model
+    # native resolutions only if truly supported
     if resolution in native_resolutions:
         payload["resolution"] = resolution
 
-    # ratio handling
     if native_ratios:
         if ratio not in native_ratios:
             ratio = native_ratios[0]
         payload["aspect_ratio"] = ratio
     else:
-        # no native aspect ratios: fallback width/height (1K flow)
+        # no native ratio support in constraints -> fallback width/height
         w, h = dimensions_for_ratio(ratio, cfg["width_height_divisor"], base_long_side=1024)
         payload["width"] = w
         payload["height"] = h
@@ -442,10 +445,20 @@ def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
 def has_role(member: discord.Member, role_id: int) -> bool:
     return any(r.id == role_id for r in member.roles)
 
-def build_model_options(channel_id: int) -> list[discord.SelectOption]:
+def build_model_options(channel_id: int, include_surprise: bool = True) -> list[discord.SelectOption]:
     if channel_id not in ALLOWED_CHANNEL_IDS:
         return []
-    return [discord.SelectOption(label=get_model_label(model_id), value=model_id) for model_id in MODEL_ORDER][:25]
+
+    options: list[discord.SelectOption] = []
+    if include_surprise:
+        options.append(discord.SelectOption(label=SURPRISE_LABEL, value=SURPRISE_VALUE))
+
+    options.extend(
+        discord.SelectOption(label=get_model_label(model_id), value=model_id)
+        for model_id in MODEL_ORDER
+    )
+
+    return options[:25]
 
 def is_model_dropdown_message(msg: discord.Message) -> bool:
     if not msg.components or msg.embeds or msg.attachments:
@@ -466,6 +479,9 @@ def build_resolution_hint(model_id: str) -> str:
     supported = get_clickable_resolutions(model_id)
     unavailable = [r for r in RESOLUTION_TIERS if r not in supported]
 
+    if supported == {"1K"}:
+        return "Available: 1K • 2K and 4K are unavailable for this model."
+
     parts = [f"Available: {', '.join([r for r in RESOLUTION_TIERS if r in supported])}"]
 
     if "2K" in supported:
@@ -478,6 +494,14 @@ def build_resolution_hint(model_id: str) -> str:
 
     parts.append("Earn XP in the server to unlock higher tiers.")
     return " • ".join(parts)
+
+def build_surprise_embed(model_id: str, ratio: str) -> discord.Embed:
+    embed = discord.Embed(
+        title="🎲 Surprise pick!",
+        description=f"**Model:** {get_model_label(model_id)}\n**Aspect ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
+        color=discord.Color.purple()
+    )
+    return embed
 
 async def send_ephemeral(interaction: discord.Interaction, content: str):
     if interaction.response.is_done():
@@ -564,11 +588,14 @@ class AspectRatioSelect(discord.ui.Select):
             placeholder="📐 Choose aspect ratio...",
             min_values=1,
             max_values=1,
-            options=options
+            options=options,
+            custom_id=f"venice_aspect_select:{model_id}",
         )
 
     async def callback(self, interaction: discord.Interaction):
         ratio = self.values[0]
+        src_msg = interaction.message
+
         await interaction.response.send_modal(
             GenerationModal(
                 session=self.session,
@@ -579,6 +606,13 @@ class AspectRatioSelect(discord.ui.Select):
                 previous_inputs=self.previous_inputs,
             )
         )
+
+        # remove aspect dropdown post once selected
+        if src_msg:
+            try:
+                await src_msg.edit(view=None, content="✅ Aspect ratio selected.")
+            except Exception:
+                pass
 
 class AspectRatioSelectView(OwnerLockedView):
     def __init__(
@@ -609,14 +643,45 @@ class StarterModelSelect(discord.ui.Select):
             placeholder="🎨 Choose your model...",
             min_values=1,
             max_values=1,
-            options=build_model_options(channel_id),
+            options=build_model_options(channel_id, include_surprise=True),
             custom_id=f"venice_model_select:{channel_id}",
         )
 
     async def callback(self, interaction: discord.Interaction):
-        model_id = self.values[0]
+        selected = self.values[0]
         hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
 
+        if selected == SURPRISE_VALUE:
+            model_id = random.choice(MODEL_ORDER)
+            ratio = random.choice(get_model_ratios(model_id))
+
+            await interaction.response.send_modal(
+                GenerationModal(
+                    session=self.session,
+                    model_id=model_id,
+                    ratio=ratio,
+                    hidden_suffix=hidden_suffix,
+                    owner_id=interaction.user.id,
+                    previous_inputs=None
+                )
+            )
+
+            # show what was picked
+            try:
+                await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
+            except Exception:
+                pass
+
+            # clean old model dropdowns (requested logic)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.delete_recent_model_dropdown_posts(
+                    interaction.channel,
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                    limit=RECENT_SCAN_LIMIT
+                )
+            return
+
+        model_id = selected
         await interaction.response.send_message(
             content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
@@ -628,7 +693,7 @@ class StarterModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        # requested logic: aspect dropdown posted -> remove model dropdown in last 10
+        # requested logic: when aspect dropdown posted, remove model dropdown in last 10
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.delete_recent_model_dropdown_posts(
                 interaction.channel,
@@ -769,16 +834,27 @@ class ResolutionSelectView(OwnerLockedView):
 
         for res in RESOLUTION_TIERS:
             if res not in supported:
-                btn = discord.ui.Button(label=res, style=discord.ButtonStyle.secondary, disabled=True)
+                btn = discord.ui.Button(
+                    label=res,
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                    custom_id=f"venice_res_disabled:{res}"
+                )
                 self.add_item(btn)
                 continue
 
             style = (
                 discord.ButtonStyle.success if res == "1K"
                 else discord.ButtonStyle.primary if res == "2K"
-                else discord.ButtonStyle.secondary
+                else discord.ButtonStyle.danger  # 4K supported -> red
             )
-            btn = discord.ui.Button(label=res, style=style, disabled=False)
+
+            btn = discord.ui.Button(
+                label=res,
+                style=style,
+                disabled=False,
+                custom_id=f"venice_res:{res}"
+            )
             btn.callback = self._make_resolution_callback(res)
             self.add_item(btn)
 
@@ -793,12 +869,20 @@ class ResolutionSelectView(OwnerLockedView):
                 await send_resolution_lock_message(interaction, resolution, role_needed)
                 return
 
+            # Defer first
+            await interaction.response.defer(ephemeral=True)
+
+            # remove resolution buttons post after click
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=None, content="✅ Resolution selected.")
+                except Exception:
+                    pass
+
             await self.generate_image(interaction, resolution=resolution)
         return callback
 
     async def generate_image(self, interaction: discord.Interaction, resolution: str):
-        await interaction.response.defer(ephemeral=True)
-
         model_id = self.generation_data["model_id"]
         ratio = self.generation_data["ratio"]
         prompt_text = self.generation_data["prompt_text"]
@@ -955,12 +1039,41 @@ class ReuseModelSelect(discord.ui.Select):
             placeholder="♻️ Re-use with model...",
             min_values=1,
             max_values=1,
-            options=build_model_options(channel_id)
+            options=build_model_options(channel_id, include_surprise=True)
         )
 
     async def callback(self, interaction: discord.Interaction):
-        model_id = self.values[0]
+        selected = self.values[0]
 
+        if selected == SURPRISE_VALUE:
+            model_id = random.choice(MODEL_ORDER)
+            ratio = random.choice(get_model_ratios(model_id))
+
+            await interaction.response.send_modal(
+                GenerationModal(
+                    session=self.session,
+                    model_id=model_id,
+                    ratio=ratio,
+                    hidden_suffix=self.hidden_suffix,
+                    owner_id=self.owner_id,
+                    previous_inputs=self.previous_inputs
+                )
+            )
+
+            try:
+                await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
+            except Exception:
+                pass
+
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.delete_recent_model_dropdown_posts(
+                    interaction.channel,
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                    limit=RECENT_SCAN_LIMIT
+                )
+            return
+
+        model_id = selected
         await interaction.response.send_message(
             content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
@@ -1077,7 +1190,7 @@ class VeniceCog(commands.Cog):
     async def cog_load(self):
         await self._ensure_session()
 
-        # persistent starter views for each channel
+        # persistent starter views
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
@@ -1117,7 +1230,6 @@ class VeniceCog(commands.Cog):
         lock = get_channel_lock(channel.id)
         async with lock:
             try:
-                # requested logic: check last 10, delete existing dropdown post(s), then repost
                 await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
                     channel,
                     bot_user_id=(self.bot.user.id if self.bot.user else None),
@@ -1156,8 +1268,8 @@ class VeniceCog(commands.Cog):
 
             await self._ensure_session()
 
-            # restart behavior for all target channels:
-            # scan recent 10 -> delete old dropdown -> post new
+            # restart behavior:
+            # all target channels -> scan recent 10 -> delete old model dropdown -> post new
             for guild in self.bot.guilds:
                 for channel in guild.text_channels:
                     if channel.id in ALLOWED_CHANNEL_IDS:
