@@ -1,275 +1,438 @@
+import os
+import re
+import asyncio
+import logging
+from datetime import datetime
+from typing import Optional, Any
+
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import Optional
-import aiohttp
-from datetime import datetime
-import aiohttp
-import re
+from dotenv import load_dotenv
 
-API_KEY = "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
-HEADERS = {"X-Master-Key": API_KEY}
-PUT_HEADERS = {**HEADERS, "Content-Type": "application/json"}
+# =========================
+# Setup / Config
+# =========================
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("riddle_cog")
 
-ARCHIVE_BIN_URL = "https://api.jsonbin.io/v3/b/6869a6fa8960c979a5b7c527"
-RIDDLE_BIN_URL = "https://api.jsonbin.io/v3/b/685442458a456b7966b13207"  # Rätsel-Bin
-SOLVED_BIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34"  # Lösungen-Bin
+BIN_BASE_URL = "https://api.jsonbin.io/v3/b"
+DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
 
-RIDDLE_CHANNEL_ID = 1349697597232906292
-VOTE_CHANNEL_ID = 1381754826710585527
-RIDDLE_ROLE = 1380610400416043089
-REQUIRED_ROLE_ID = 1393762463861702787  # Only this role can use the riddle commands
 
+def env_required(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required env var: {name}")
+    return value
+
+
+def env_int(name: str, default: Optional[int] = None, required: bool = False) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        if required:
+            raise RuntimeError(f"Missing required env var: {name}")
+        if default is None:
+            raise RuntimeError(f"Missing env var: {name} and no default")
+        return default
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise RuntimeError(f"Env var {name} must be int, got: {raw}") from e
+
+
+JSONBIN_API_KEY = env_required("JSONBIN_API_KEY")
+
+# Bin IDs
+RIDDLE_BIN_ID = env_required("RIDDLE_BIN_ID")
+ARCHIVE_BIN_ID = env_required("ARCHIVE_BIN_ID")
+SOLVED_BIN_ID = env_required("SOLVED_BIN_ID")
+
+# Discord IDs
+RIDDLE_CHANNEL_ID = env_int("RIDDLE_CHANNEL_ID", required=True)
+VOTE_CHANNEL_ID = env_int("VOTE_CHANNEL_ID", required=True)
+RIDDLE_ROLE_ID = env_int("RIDDLE_ROLE_ID", required=True)
+REQUIRED_ROLE_ID = env_int("REQUIRED_ROLE_ID", required=True)
+
+HEADERS = {"X-Master-Key": JSONBIN_API_KEY}
+PUT_HEADERS = {"X-Master-Key": JSONBIN_API_KEY, "Content-Type": "application/json"}
+
+
+# =========================
+# Utils
+# =========================
+def bin_url(bin_id: str, latest: bool = False) -> str:
+    return f"{BIN_BASE_URL}/{bin_id}/latest" if latest else f"{BIN_BASE_URL}/{bin_id}"
+
+
+def now_date_str() -> str:
+    return datetime.now().strftime("%Y/%m/%d")
+
+
+def footer_text(guild: Optional[discord.Guild]) -> str:
+    guild_name = guild.name if guild else "Unknown Guild"
+    return f"{guild_name} ({now_date_str()})"
 
 
 def truncate_text(text: str, max_length: int = 75) -> str:
-    """Kürzt den Text nach max_length Zeichen und fügt '[...]' hinzu."""
     if text and len(text) > max_length:
         return text[:max_length] + "[...]"
-    return text
+    return text or ""
 
 
-async def callback(self, interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+def extract_link(text: str) -> tuple[str, Optional[str]]:
+    text = text or ""
+    match = re.search(r"(https?://\S+)", text)
+    if match:
+        link = match.group(1)
+        clean = text.replace(link, "").strip()
+        return clean, link
+    return text.strip(), None
 
-    # 📦 Riddle laden
-    async with aiohttp.ClientSession() as session:
-        async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as resp:
-            riddle_wrap = await resp.json()
-            riddle_data = riddle_wrap.get("record", {})
 
-    if not riddle_data.get("text"):
-        await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
-        return
+def get_field_value(embed: discord.Embed, field_name: str) -> Optional[str]:
+    for field in embed.fields:
+        if field.name.strip().startswith(field_name.strip()):
+            return field.value
+    return None
 
-    # 🔖 optionale Gruppenrolle
-    button_role_id = riddle_data.get("button-id")
-    mentions = [f"<@&{RIDDLE_ROLE}>"]
-    if button_role_id:
-        mentions.append(f"<@&{button_role_id}>")
-    mention_text = " ".join(mentions)
 
-    # 🛑 Closed‑Embed bauen
-    solution_url = riddle_data.get("solution-url") or \
-        "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+def safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
-    # Lösung aufbereiten
-    raw_solution = riddle_data.get("solution", "*None*")
-    clean_solution, link = extract_link(raw_solution or "")
-    solution_display = clean_solution or "*None*"
-    if link:
-        solution_display += f"\n🔗 [🧠**MORE**]({link})"
 
-    closed_embed = (
-        discord.Embed(
-            title="🔒 Riddle Closed",
-            description="Sadly, nobody could solve the Riddle in time...",
-            color=discord.Color.red()
+def unique_role_mentions(guild: Optional[discord.Guild], *role_ids: Optional[int]) -> list[str]:
+    if not guild:
+        return []
+    out = []
+    seen = set()
+    for rid in role_ids:
+        if not rid or rid in seen:
+            continue
+        role = guild.get_role(rid)
+        if role:
+            out.append(role.mention)
+            seen.add(rid)
+    return out
+
+
+# =========================
+# Views / Buttons
+# =========================
+class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
+    solution = discord.ui.TextInput(label="Your Answer", style=discord.TextStyle.paragraph)
+
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        riddle = await self.cog.get_bin_record(RIDDLE_BIN_ID, default={})
+        if not riddle.get("text"):
+            await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
+            return
+
+        vote_channel = interaction.client.get_channel(VOTE_CHANNEL_ID)
+        if not vote_channel:
+            await interaction.followup.send("❌ Vote channel not found.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📜 New Solution Submitted!",
+            description=riddle.get("text", "No riddle"),
+            color=discord.Color.gold()
         )
-        .add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        .add_field(name="✅ Correct Solution", value=solution_display, inline=False)
-        .add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-        .set_image(url=solution_url)
-        .set_footer(
-            text=f"Guild: {interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+        embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
+        embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
+        embed.add_field(name="🏆 Award", value=riddle.get("award", "*None*"), inline=False)
+        embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)
+
+        button_id = riddle.get("button-id")
+        if button_id:
+            embed.add_field(name="🔖 Assigned Group", value=str(button_id), inline=True)
+
+        embed.set_footer(text=footer_text(interaction.guild))
+
+        await vote_channel.send(embed=embed, view=VoteButtons(self.cog))
+        await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
+
+
+class SubmitButton(discord.ui.Button):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(
+            label="💡 Submit Solution",
+            style=discord.ButtonStyle.primary,
+            custom_id="submit_solution"
         )
-    )
+        self.cog = cog
 
-    # 📬 Einmalig posten
-    riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-    if riddle_channel:
-        await riddle_channel.send(content=mention_text, embed=closed_embed)
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(SubmitSolutionModal(self.cog))
 
-    # 📚 Neues Archiv-Item vorbereiten
-    archive_entry = {
-        "text": riddle_data.get("text", "*Unknown*"),
-        "solution": riddle_data.get("solution", "*None*"),
-        "date": datetime.utcnow().strftime("%Y-%m-%d")
-    }
-# 📤 An Archiv-Bin anhängen
-    async with aiohttp.ClientSession() as session:
-        # Hole die aktuellen Daten aus dem Archiv
-        async with session.get(ARCHIVE_BIN_URL + "/latest", headers=HEADERS) as resp:
-            archive_wrap = await resp.json()
-            archive_list = archive_wrap if isinstance(archive_wrap, list) else []
 
-        # Füge den neuen Eintrag zu den bestehenden hinzu
-        archive_list.append(archive_entry)
+class SubmitButtonView(discord.ui.View):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(timeout=None)  # persistent
+        self.add_item(SubmitButton(cog))
 
-        # Speichere das Archiv mit dem neuen Eintrag zurück, ohne "record"
-        async with session.put(
-            ARCHIVE_BIN_URL,
-            headers=PUT_HEADERS,
-            json=archive_list  # Direkt die Liste ohne "record"
-        ) as put_resp:
-            if put_resp.status == 200 or put_resp.status == 201:
-                print(f"✅ Archived riddle added: {archive_entry}")
-            else:
-                print(f"❌ Failed to archive riddle: {put_resp.status}")
-
-    # 🧹 Riddle‑Bin leeren
-    await self.clear_riddle_data()
-
-class VoteButtons(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(VoteSuccessButton())
-        self.add_item(VoteFailButton())
 
 class VoteSuccessButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(emoji="👍", style=discord.ButtonStyle.success, custom_id="riddle_upvote")
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(
+            emoji="👍",
+            style=discord.ButtonStyle.success,
+            custom_id="riddle_upvote"
+        )
+        self.cog = cog
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        message = interaction.message
-        embed = message.embeds[0] if message.embeds else None
-        if not embed:
-            await interaction.followup.send("❌ Couldn't find the original riddle data.", ephemeral=True)
+        msg = interaction.message
+        if not msg or not msg.embeds:
+            await interaction.followup.send("❌ Could not read vote message.", ephemeral=True)
             return
 
-        # --- Daten aus dem Embed ziehen ---
-        riddle_text = extract_from_embed(embed.description)
-        user_solution = get_field_value(embed, "🧠 User's Answer")
-        correct_solution = get_field_value(embed, "✅ Correct Solution")
-        submitter_id_str = get_field_value(embed, "🆔 User ID")
-        submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
-        submitter = await interaction.client.fetch_user(submitter_id)
+        if not self.cog.acquire_vote_lock(msg.id):
+            await interaction.followup.send("⏳ Vote is already being processed.", ephemeral=True)
+            return
 
-        # --- Infos aus Riddle‑Bin laden ---
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                solution_url = data.get("record", {}).get("solution-url", "")
-                award = data.get("record", {}).get("award", "*None*")
-                button_id = data.get("record", {}).get("button-id")
+        try:
+            embed = msg.embeds[0]
 
-        if not solution_url or not solution_url.startswith("http"):
-            solution_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+            riddle_text = (embed.description or "").strip()
+            user_answer = get_field_value(embed, "🧠 User's Answer") or "*None*"
+            correct_solution_raw = get_field_value(embed, "✅ Correct Solution") or "*None*"
+            award = get_field_value(embed, "🏆 Award") or "*None*"
+            submitter_id = safe_int(get_field_value(embed, "🆔 User ID"), interaction.user.id)
+            button_role_id = safe_int(get_field_value(embed, "🔖 Assigned Group"), None)
 
-        def extract_link(text):
-            match = re.search(r"(https?://\S+)", text or "")
-            if match:
-                link = match.group(1)
-                cleaned = text.replace(link, "").strip()
-                return cleaned, link
-            return text, None
-
-        # --- Lösung formatieren ---
-        clean_correct_solution, correct_link = extract_link(correct_solution)
-        correct_display = clean_correct_solution or "*None*"
-        if correct_link:
-            correct_display += f"\n🔗 [🧠**MORE**]({correct_link})"
-
-        # --- Mentions vorbereiten ---
-        mention_ids = set()
-        mentions = []
-
-        if interaction.guild:
-            # Feste Mod-Rolle
-            fixed_role = interaction.guild.get_role(1380610400416043089)
-            if fixed_role and fixed_role.id not in mention_ids:
-                mentions.append(fixed_role.mention)
-                mention_ids.add(fixed_role.id)
-
-            # Button-ID-Rolle (wenn vorhanden)
-            if button_id:
-                role = interaction.guild.get_role(int(button_id))
-                if role and role.id not in mention_ids:
-                    mentions.append(role.mention)
-                    mention_ids.add(role.id)
-
-            # RIDDLE_ROLE
-            riddle_role = interaction.guild.get_role(RIDDLE_ROLE) if isinstance(RIDDLE_ROLE, int) else RIDDLE_ROLE
-            if riddle_role and riddle_role.id not in mention_ids:
-                mentions.append(riddle_role.mention)
-                mention_ids.add(riddle_role.id)
-
-        # Submitter (der User ist eh keine Rolle, also keine ID-Kollision)
-        if submitter:
-            mentions.append(submitter.mention)
-
-        content_msg = " ".join(mentions) + "\n🎉 Cock-gratulations💋!"
-
-
-        # --- Embed zusammenbauen ---
-        solved_embed = discord.Embed(
-            title="🎉 Riddle Solved!",
-            description=f"**{submitter.mention}** solved the riddle!",
-            color=discord.Color.green()
-        )
-        solved_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
-        solved_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
-        solved_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
-        solved_embed.add_field(name="✅ Correct Solution", value=correct_display, inline=False)
-        solved_embed.add_field(name="🏆 Award", value=award or "*None*", inline=False)
-        solved_embed.set_image(url=solution_url)
-        solved_embed.set_footer(
-            text=f"Guild: {interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-        )
-        
-        # --- Ursprungsrätsel im Channel finden und aktualisieren ---
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
             try:
-                async for msg in riddle_channel.history(limit=200):
-                    if not msg.embeds or not msg.components:
-                        continue
+                submitter = interaction.guild.get_member(submitter_id) if interaction.guild else None
+                if submitter is None:
+                    submitter = await interaction.client.fetch_user(submitter_id)
+                submitter_mention = submitter.mention
+                submitter_name = str(submitter)
+                submitter_avatar = submitter.display_avatar.url
+            except Exception:
+                submitter_mention = f"<@{submitter_id}>"
+                submitter_name = f"User {submitter_id}"
+                submitter_avatar = None
 
-                    for i, embed in enumerate(msg.embeds):
-                        riddle_in_msg = extract_from_embed(embed.description or "")
-                        if riddle_in_msg.strip().lower() == riddle_text.strip().lower():
-                            print(f"✏️ Found matching riddle message: {msg.id} (embed index {i})")
+            # Button direkt deaktivieren (verhindert Doppelaktionen sichtbar)
+            try:
+                await msg.edit(view=None)
+            except discord.HTTPException:
+                pass
 
-                            updated_embed = embed.copy()
-                            solved_note = (
-                                f"✅ This riddle was solved by {submitter.mention} "
-                                f"with the correct solution:\n{(clean_correct_solution or '*None*').splitlines()[0]}"
-                            )
-                            if correct_link:
-                                solved_note += f"\n🔗 [🧠**MORE**]({correct_link})"
+            # Lösung formatieren
+            clean_solution, solution_link = extract_link(correct_solution_raw)
+            correct_display = clean_solution or "*None*"
+            if solution_link:
+                correct_display += f"\n🔗 [🧠**MORE**]({solution_link})"
 
-                            updated_embed.add_field(name="✅ Solved", value=solved_note, inline=False)
+            current_riddle = await self.cog.get_bin_record(RIDDLE_BIN_ID, default={})
+            solution_url = current_riddle.get("solution-url") or DEFAULT_IMAGE_URL
+            if not str(solution_url).startswith("http"):
+                solution_url = DEFAULT_IMAGE_URL
 
-                            # Ersetze nur das gefundene Embed im Array
-                            updated_embeds = list(msg.embeds)
-                            updated_embeds[i] = updated_embed
+            solved_embed = discord.Embed(
+                title="🎉 Riddle Solved!",
+                description=f"**{submitter_mention}** solved the riddle!",
+                color=discord.Color.green()
+            )
+            if submitter_avatar:
+                solved_embed.set_author(name=submitter_name, icon_url=submitter_avatar)
+            else:
+                solved_embed.set_author(name=submitter_name)
 
-                            await msg.edit(embeds=updated_embeds, view=None)
-                            print("✅ Updated original riddle message and removed buttons.")
-                            break  # Break inner loop
-                    else:
-                        continue  # No match in any embed → check next message
-                    break  # Break outer loop if match was found
-            except Exception as e:
-                print(f"⚠️ Error while updating original riddle message: {e}")
+            solved_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
+            solved_embed.add_field(name="🔍 Proposed Solution", value=user_answer, inline=False)
+            solved_embed.add_field(name="✅ Correct Solution", value=correct_display, inline=False)
+            solved_embed.add_field(name="🏆 Award", value=award, inline=False)
+            solved_embed.set_image(url=solution_url)
+            solved_embed.set_footer(text=footer_text(interaction.guild))
 
-
-        # --- Embed mit allen Mentions im Riddle-Channel posten ---
-        if riddle_channel:
-            await riddle_channel.send(
-                content=content_msg,
-                embed=solved_embed,
-                allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False)
+            # Original-Riddle-Post markieren + Submit-Buttons entfernen
+            await self.cog.mark_original_riddle_as_solved(
+                riddle_text=riddle_text,
+                solver_mention=submitter_mention,
+                clean_solution=clean_solution or "*None*",
+                more_link=solution_link
             )
 
-        # ---------- Aufräumen ----------
-        await self.update_user_riddle_count(submitter.id)
-        await self.clear_riddle_data()
-        
-        try:
-            await message.delete()  # ursprüngliche Lösungs‑Nachricht (mit Vote‑Button) löschen
-        except discord.HTTPException:
-            print("❌ Failed to delete the solution message.")
+            # Ergebnis posten
+            riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
+            if riddle_channel:
+                mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, button_role_id)
+                mentions.append(submitter_mention)
+                content = " ".join(dict.fromkeys(mentions)) + "\n🎉 Cock-gratulations💋!"
+                await riddle_channel.send(
+                    content=content,
+                    embed=solved_embed,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False)
+                )
 
-        await interaction.followup.send(
-            "✅ Marked as solved, updated the riddle post, removed buttons, and bumped the user’s solve count!",
-            ephemeral=True
+            # Stats updaten + Riddle leeren
+            await self.cog.update_user_riddle_count(submitter_id, award_text=award)
+            await self.cog.clear_riddle_data()
+
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+
+            await interaction.followup.send("✅ Marked as solved and user stats updated.", ephemeral=True)
+
+        finally:
+            self.cog.release_vote_lock(msg.id)
+
+
+class VoteFailButton(discord.ui.Button):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(
+            emoji="👎",
+            style=discord.ButtonStyle.danger,
+            custom_id="riddle_downvote"
         )
+        self.cog = cog
 
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        msg = interaction.message
+        if not msg or not msg.embeds:
+            await interaction.followup.send("❌ Could not read vote message.", ephemeral=True)
+            return
+
+        if not self.cog.acquire_vote_lock(msg.id):
+            await interaction.followup.send("⏳ Vote is already being processed.", ephemeral=True)
+            return
+
+        try:
+            embed = msg.embeds[0]
+            riddle_text = (embed.description or "").strip()
+            user_answer = get_field_value(embed, "🧠 User's Answer") or "*None*"
+            submitter_id = safe_int(get_field_value(embed, "🆔 User ID"), interaction.user.id)
+            button_role_id = safe_int(get_field_value(embed, "🔖 Assigned Group"), None)
+
+            try:
+                submitter = interaction.guild.get_member(submitter_id) if interaction.guild else None
+                if submitter is None:
+                    submitter = await interaction.client.fetch_user(submitter_id)
+                submitter_mention = submitter.mention
+                submitter_name = str(submitter)
+                submitter_avatar = submitter.display_avatar.url
+            except Exception:
+                submitter_mention = f"<@{submitter_id}>"
+                submitter_name = f"User {submitter_id}"
+                submitter_avatar = None
+
+            try:
+                await msg.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+            failed_embed = discord.Embed(
+                title="❌ Riddle Not Solved!",
+                description=f"**{submitter_mention}**'s solution was incorrect.",
+                color=discord.Color.red()
+            )
+            if submitter_avatar:
+                failed_embed.set_author(name=submitter_name, icon_url=submitter_avatar)
+            else:
+                failed_embed.set_author(name=submitter_name)
+
+            failed_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
+            failed_embed.add_field(name="🔍 Proposed Solution", value=user_answer, inline=False)
+            failed_embed.add_field(name="❌ Result", value="*Better luck next time!*", inline=False)
+            failed_embed.set_footer(text=footer_text(interaction.guild))
+
+            riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
+            if riddle_channel:
+                mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, button_role_id)
+                mentions.append(submitter_mention)
+                await riddle_channel.send(
+                    content=" ".join(dict.fromkeys(mentions)),
+                    embed=failed_embed,
+                    allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False)
+                )
+
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+
+            await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
+
+        finally:
+            self.cog.release_vote_lock(msg.id)
+
+
+class VoteButtons(discord.ui.View):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(timeout=None)  # persistent
+        self.add_item(VoteSuccessButton(cog))
+        self.add_item(VoteFailButton(cog))
+
+
+# =========================
+# Cog
+# =========================
+class RiddleCog(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.session: Optional[aiohttp.ClientSession] = None
+        self._vote_locks: set[int] = set()
+
+    async def cog_load(self):
+        # eine Session für alles
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+        # Persistent views registrieren -> Buttons funktionieren nach Restart weiter
+        self.bot.add_view(SubmitButtonView(self))
+        self.bot.add_view(VoteButtons(self))
+        log.info("RiddleCog loaded with persistent views.")
+
+    def cog_unload(self):
+        if self.session and not self.session.closed:
+            asyncio.create_task(self.session.close())
+
+    def acquire_vote_lock(self, message_id: int) -> bool:
+        if message_id in self._vote_locks:
+            return False
+        self._vote_locks.add(message_id)
+        return True
+
+    def release_vote_lock(self, message_id: int):
+        self._vote_locks.discard(message_id)
+
+    # ---------- JSONBin helpers ----------
+    async def get_bin_record(self, bin_id: str, default: Any = None) -> Any:
+        assert self.session is not None
+        async with self.session.get(bin_url(bin_id, latest=True), headers=HEADERS) as resp:
+            if resp.status != 200:
+                log.error("GET latest %s failed (%s)", bin_id, resp.status)
+                return default
+            data = await resp.json()
+            return data.get("record", default)
+
+    async def put_bin_record(self, bin_id: str, value: Any) -> bool:
+        assert self.session is not None
+        async with self.session.put(bin_url(bin_id), headers=PUT_HEADERS, json=value) as resp:
+            if resp.status in (200, 201):
+                return True
+            log.error("PUT %s failed (%s)", bin_id, resp.status)
+            return False
+
+    # ---------- Domain helpers ----------
     async def clear_riddle_data(self):
         empty = {
             "text": None,
@@ -279,442 +442,243 @@ class VoteSuccessButton(discord.ui.Button):
             "solution-url": None,
             "button-id": None
         }
-        async with aiohttp.ClientSession() as session:
-            await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
+        await self.put_bin_record(RIDDLE_BIN_ID, {"record": empty})
 
-
-    async def update_user_riddle_count(self, user_id: int):
-        uid = str(user_id)
-        XP_AWARD = 0  # Fallback-Wert
-
-        async with aiohttp.ClientSession() as session:
-            # 🥇 0. XP-Award aus Bin laden und extrahieren
-            try:
-                async with session.get(RIDDLE_BIN_URL, headers=HEADERS) as award_resp:
-                    if award_resp.status == 200:
-                        award_data = await award_resp.json()
-                        raw_award = award_data.get("record", {}).get("award", "")
-                        match = re.search(r"\d+", str(raw_award))
-                        if match:
-                            XP_AWARD = int(match.group())
-                            print(f"🎁 XP_AWARD extracted: {XP_AWARD}")
-                        else:
-                            print("⚠️ No number found in award field.")
-                    else:
-                        print(f"❌ Failed to fetch award bin: {award_resp.status}")
-            except Exception as e:
-                print(f"❌ Exception while fetching XP_AWARD: {e}")
-
-            # 🧾 1. User-Daten laden
-            async with session.get(f"{SOLVED_BIN_URL}/latest", headers=HEADERS) as resp:
-                data = await resp.json()
-                users = data.get("record", {})
-
-            # 🧠 2. Userdaten updaten oder anlegen
-            if uid in users:
-                users[uid]["solved_riddles"] += 1
-                users[uid]["xp"] = users[uid].get("xp", 0) + XP_AWARD
-            else:
-                users[uid] = {
-                    "solved_riddles": 1,
-                    "xp": XP_AWARD
-                }
-
-            # 💾 3. Zurückschreiben
-            async with session.put(SOLVED_BIN_URL, json=users, headers=HEADERS) as put_resp:
-                if put_resp.status in (200, 201):
-                    print(f"✅ Updated solved_riddles and xp for user {uid}")
-                else:
-                    print(f"❌ Failed to update user stats: {put_resp.status}")
-
-
-class VoteFailButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(emoji="👎", style=discord.ButtonStyle.danger, custom_id="riddle_downvote")
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        message = interaction.message
-        embed = message.embeds[0] if message.embeds else None
-        if not embed:
-            await interaction.followup.send("❌ Couldn't find the original riddle data.", ephemeral=True)
-            return
-
-        riddle_text = extract_from_embed(embed.description)
-        user_solution = get_field_value(embed, "🧠 User's Answer")
-        correct_solution = get_field_value(embed, "✅ Correct Solution")
-
-        # 🕵️‍♂️ Hole Einreicher-ID aus verstecktem Feld
-        submitter_id_str = get_field_value(embed, "🆔 User ID")
-        submitter_id = int(submitter_id_str) if submitter_id_str and submitter_id_str.isdigit() else interaction.user.id
-        submitter = await interaction.client.fetch_user(submitter_id)
-
-        # ❌ Erstelle das „Fehlgeschlagen“-Embed mit dem echten Einreicher
-        failed_embed = discord.Embed(
-            title="❌ Riddle Not Solved!",
-            description=f"**{submitter.mention}**'s solution was incorrect.",
-            color=discord.Color.red()
-        )
-        failed_embed.set_author(name=str(submitter), icon_url=submitter.display_avatar.url)
-        failed_embed.add_field(name="🧩 Riddle", value=truncate_text(riddle_text) or "*Unknown*", inline=False)
-        failed_embed.add_field(name="🔍 Proposed Solution", value=user_solution or "*None*", inline=False)
-        failed_embed.add_field(
-            name="❌ Sadly, the submitted solution was not correct.",
-            value="*Better luck next time!*",
-            inline=False
-        )
-
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            # Rolle aus Embed/JSON (button-id)
-            button_role_id_str = get_field_value(embed, "🔖 Assigned Group") or ""
-            try:
-                button_role_id = int(button_role_id_str)
-            except ValueError:
-                button_role_id = None
-
-            # Content mit Rollen-Mentions und User-Mention
-            mentions = [f"<@&{RIDDLE_ROLE}>", submitter.mention]
-            if button_role_id:
-                mentions.append(f"<@&{button_role_id}>")
-            content = submitter.mention
-
-            await riddle_channel.send(content=content, embed=failed_embed, allowed_mentions=discord.AllowedMentions(roles=True, users=True))
-
-        # 💣 Lösche Original-Vote-Message
-        try:
-            await message.delete()
-        except discord.HTTPException:
-            print("❌ Failed to delete the vote message.")
-
-        await interaction.followup.send("❌ Marked as incorrect!", ephemeral=True)
-
-
-
-class SubmitSolutionModal(discord.ui.Modal, title="💡 Submit Your Solution"):
-    solution = discord.ui.TextInput(label="Your Answer", style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                riddle = (await response.json()).get("record", {})
-
-        channel = interaction.client.get_channel(VOTE_CHANNEL_ID)
-        if not channel:
-            await interaction.followup.send("❌ Could not find the submission channel.", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="📜 New Solution Submitted!",
-            description=f"{riddle.get('text', 'No riddle')}",
-            color=discord.Color.gold()
-        )
-        embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="🧠 User's Answer", value=self.solution.value or "*Empty*", inline=False)
-        embed.add_field(name="✅ Correct Solution", value=riddle.get("solution", "*Not provided*"), inline=False)
-        embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)
-
-        # Unsichtbares Feld mit button-id (versteckt, inline=True macht es klein)
-        button_id = riddle.get("button-id", "")
-        if button_id:
-            embed.add_field(name="🔖 Assigned Group", value=button_id, inline=True)
-
-        await channel.send(embed=embed, view=VoteButtons())
-        await interaction.followup.send("✅ Your answer has been submitted!", ephemeral=True)
-
-
-class SubmitButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="💡 Submit Solution", style=discord.ButtonStyle.primary, custom_id="submit_solution")
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(SubmitSolutionModal())
-
-class SubmitButtonView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(SubmitButton())
-
-class RiddleCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        bot.add_view(SubmitButtonView())
-        bot.add_view(VoteButtons())
-
-    from datetime import datetime
-
-    @app_commands.command(name="riddle_close", description="Close the current riddle and mark it as unsolved.")
-    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
-    async def riddle_close(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        # 📦 Fetch current riddle data
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                data = await response.json()
-                riddle_data = data.get("record", {})
-
-        if not riddle_data.get("text"):
-            await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
-            return
-
-        # 🧩 Build the "Closed" embed
-        solution_url = riddle_data.get("solution-url") or \
-            "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-
-        closed_embed = discord.Embed(
-            title="🔒 Riddle Closed",
-            description="Sadly, nobody could solve the Riddle in time...",
-            color=discord.Color.red()
-        )
-        closed_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        closed_embed.add_field(name="✅ Correct Solution", value=riddle_data.get("solution", "*None*"), inline=False)
-        closed_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-        closed_embed.set_image(url=solution_url)
-        closed_embed.set_footer(
-            text=f"Guild: {interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-        )
-
-        # 📬 Send to riddle channel
-        riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel:
-            await riddle_channel.send(content=f"<@&{RIDDLE_ROLE}>", embed=closed_embed)
-
-        # 🗃️ Archive the riddle before clearing
-        archive_entry = {
+    async def archive_current_riddle(self, riddle_data: dict):
+        entry = {
             "text": riddle_data.get("text", "*Unknown*"),
             "solution": riddle_data.get("solution", "*None*"),
             "date": datetime.utcnow().strftime("%Y-%m-%d")
         }
+        archive_list = await self.get_bin_record(ARCHIVE_BIN_ID, default=[])
+        if not isinstance(archive_list, list):
+            archive_list = []
+        archive_list.append(entry)
+        await self.put_bin_record(ARCHIVE_BIN_ID, archive_list)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(ARCHIVE_BIN_URL + "/latest", headers=HEADERS) as resp:
-                archive_wrap = await resp.json()
-                archive_list = archive_wrap.get("record", [])
-                archive_list = archive_list if isinstance(archive_list, list) else []
+    async def get_total_solved(self) -> int:
+        users = await self.get_bin_record(SOLVED_BIN_ID, default={})
+        if not isinstance(users, dict):
+            return 0
+        total = 0
+        for user_data in users.values():
+            if isinstance(user_data, dict):
+                total += int(user_data.get("solved_riddles", 0) or 0)
+        return total
 
-            archive_list.append(archive_entry)
+    async def get_next_riddle_number(self) -> int:
+        return (await self.get_total_solved()) + 1
 
-            await session.put(
-                ARCHIVE_BIN_URL,
-                headers=PUT_HEADERS,
-                json=archive_list
-            )
+    async def update_user_riddle_count(self, user_id: int, award_text: str):
+        users = await self.get_bin_record(SOLVED_BIN_ID, default={})
+        if not isinstance(users, dict):
+            users = {}
 
-        # 🧹 Clear riddle data
-        await self.clear_riddle_data()
-        await interaction.followup.send("✅ The riddle has been closed, archived, and marked as unsolved.", ephemeral=True)
+        uid = str(user_id)
+        if uid not in users:
+            users[uid] = {"solved_riddles": 0, "xp": 0}
 
-    # Methode zum Zurücksetzen der Rätselfelder
-    async def clear_riddle_data(self):
-        empty = {"text": None, "solution": None, "award": None, "image-url": None, "solution-url": None, "button-id": None}
-        async with aiohttp.ClientSession() as session:
-            await session.put(RIDDLE_BIN_URL, json={"record": empty}, headers=HEADERS)
+        match = re.search(r"\d+", str(award_text or ""))
+        xp_award = int(match.group()) if match else 0
 
-    @app_commands.command(name="riddle_post", description="Post the current riddle in a selected channel.")
-    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
-    @app_commands.describe(ping_role="Optional role to ping along with the riddle group")
-    async def riddle_post(
+        users[uid]["solved_riddles"] = int(users[uid].get("solved_riddles", 0)) + 1
+        users[uid]["xp"] = int(users[uid].get("xp", 0)) + xp_award
+
+        await self.put_bin_record(SOLVED_BIN_ID, users)
+
+    async def mark_original_riddle_as_solved(
         self,
-        interaction: discord.Interaction,
-        ping_role: Optional[discord.Role] = None  # 👈 optionales Ping-Rollen-Feld
+        riddle_text: str,
+        solver_mention: str,
+        clean_solution: str,
+        more_link: Optional[str]
     ):
+        channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
+        if not channel:
+            return
+
+        try:
+            async for msg in channel.history(limit=300):
+                if not msg.embeds:
+                    continue
+
+                for idx, emb in enumerate(msg.embeds):
+                    if (emb.description or "").strip().lower() != riddle_text.strip().lower():
+                        continue
+
+                    updated = discord.Embed.from_dict(emb.to_dict())
+                    solved_line = f"✅ Solved by {solver_mention}\n{clean_solution.splitlines()[0]}"
+                    if more_link:
+                        solved_line += f"\n🔗 [🧠**MORE**]({more_link})"
+
+                    updated.add_field(name="✅ Solved", value=solved_line, inline=False)
+                    updated.set_footer(text=footer_text(msg.guild))
+
+                    embeds = list(msg.embeds)
+                    embeds[idx] = updated
+                    await msg.edit(embeds=embeds, view=None)  # submit button weg
+                    return
+        except Exception as e:
+            log.warning("Failed to update original riddle post: %s", e)
+
+    # ---------- Commands ----------
+    @app_commands.command(name="riddle_post", description="Post the current riddle.")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    @app_commands.describe(ping_role="Optional extra role to ping")
+    async def riddle_post(self, interaction: discord.Interaction, ping_role: Optional[discord.Role] = None):
         await interaction.response.defer(ephemeral=True)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                if response.status != 200:
-                    await interaction.followup.send(f"❌ Error loading riddle: {response.status}", ephemeral=True)
-                    return
-                riddle = (await response.json()).get("record", {})
-
+        riddle = await self.get_bin_record(RIDDLE_BIN_ID, default={})
         if not riddle.get("text") or not riddle.get("solution"):
             await interaction.followup.send("❌ There is currently no active riddle.", ephemeral=True)
             return
 
-        # Feste Riddle Role
-        content_parts = [f"<@&{RIDDLE_ROLE}>"]
+        next_number = await self.get_next_riddle_number()
+        title = f"Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊 No. {next_number} ({now_date_str()})"
 
-        # Geheime Rolle aus JSON (button-id)
-        button_role_id_str = riddle.get("button-id", "")
-        if button_role_id_str:
-            try:
-                button_role_id = int(button_role_id_str)
-                content_parts.append(f"<@&{button_role_id}>")
-            except ValueError:
-                pass  # Ignoriere, wenn ungültige ID
+        image_url = riddle.get("image-url") or DEFAULT_IMAGE_URL
+        if not str(image_url).startswith("http"):
+            image_url = DEFAULT_IMAGE_URL
 
-        # Optionale ping_role aus Command-Parameter
+        button_role_id = safe_int(riddle.get("button-id"))
+        mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, button_role_id)
         if ping_role:
-            content_parts.append(ping_role.mention)
+            mentions.append(ping_role.mention)
 
-        content = " ".join(content_parts)
-
-        image_url = riddle.get("image-url")
-        if not image_url or not image_url.startswith("http"):
-            image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-
-        date_str = datetime.now().strftime("%Y/%m/%d")
         embed = discord.Embed(
-            title=f"🧠Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n{date_str}",
-            description=f"{riddle.get('text', 'No text')}",
+            title=title,
+            description=riddle.get("text", "No text"),
             color=discord.Color.blurple()
         )
-        embed.add_field(name="🏆 Award", value=riddle.get("award", "None"), inline=False)
+        embed.add_field(name="🏆 Award", value=riddle.get("award", "*None*"), inline=False)
         embed.set_image(url=image_url)
-        embed.set_footer(text=f"{interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+        embed.set_footer(text=footer_text(interaction.guild))
+
+        riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
+        if not riddle_channel:
+            await interaction.followup.send("❌ Riddle channel not found.", ephemeral=True)
+            return
+
+        await riddle_channel.send(
+            content=" ".join(dict.fromkeys(mentions)),
+            embed=embed,
+            view=SubmitButtonView(self),
+            allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False)
+        )
+
+        await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}.", ephemeral=True)
+
+    @app_commands.command(name="riddle_close", description="Close current riddle as unsolved.")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    async def riddle_close(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        riddle = await self.get_bin_record(RIDDLE_BIN_ID, default={})
+        if not riddle.get("text"):
+            await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
+            return
+
+        solution_url = riddle.get("solution-url") or DEFAULT_IMAGE_URL
+        if not str(solution_url).startswith("http"):
+            solution_url = DEFAULT_IMAGE_URL
+
+        raw_solution = riddle.get("solution", "*None*")
+        clean_solution, link = extract_link(raw_solution)
+        solution_display = clean_solution or "*None*"
+        if link:
+            solution_display += f"\n🔗 [🧠**MORE**]({link})"
+
+        embed = discord.Embed(
+            title="🔒 Riddle Closed",
+            description="Sadly, nobody could solve the Riddle in time...",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="🧩 Riddle", value=riddle.get("text", "*Unknown*"), inline=False)
+        embed.add_field(name="✅ Correct Solution", value=solution_display, inline=False)
+        embed.add_field(name="🏆 Award", value=riddle.get("award", "*None*"), inline=False)
+        embed.set_image(url=solution_url)
+        embed.set_footer(text=footer_text(interaction.guild))
+
+        button_role_id = safe_int(riddle.get("button-id"))
+        mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, button_role_id)
 
         riddle_channel = self.bot.get_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel:
-            allowed_mentions = discord.AllowedMentions(roles=True, users=False, everyone=False)
-            await riddle_channel.send(
-                content=content,
-                embed=embed,
-                view=SubmitButtonView(),
-                allowed_mentions=allowed_mentions
-            )
+            await riddle_channel.send(content=" ".join(mentions), embed=embed)
 
-            await interaction.followup.send(f"✅ Riddle posted to {riddle_channel.mention}!", ephemeral=True)
+        await self.archive_current_riddle(riddle)
+        await self.clear_riddle_data()
 
-    @app_commands.command(name="riddle_view", description="View the current riddle and winner preview (private).")
+        await interaction.followup.send("✅ Riddle closed, archived and cleared.", ephemeral=True)
+
+    @app_commands.command(name="riddle_view", description="Private preview of current riddle.")
     @app_commands.checks.has_role(REQUIRED_ROLE_ID)
     async def riddle_view(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Fetch the current riddle data
-        async with aiohttp.ClientSession() as session:
-            async with session.get(RIDDLE_BIN_URL + "/latest", headers=HEADERS) as response:
-                if response.status != 200:
-                    await interaction.followup.send("❌ Couldn't fetch riddle data.", ephemeral=True)
-                    return
-                riddle_data = (await response.json()).get("record", {})
-
-        if not riddle_data.get("text"):
+        riddle = await self.get_bin_record(RIDDLE_BIN_ID, default={})
+        if not riddle.get("text"):
             await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
             return
 
-        # ➕ Optional: Mention Group (falls vorhanden)
-        mention_group = None
-        button_id = riddle_data.get("button-id")
-        if button_id and interaction.guild:
-            role = interaction.guild.get_role(int(button_id))
-            if role:
-                mention_group = role.mention
-            else:
-                mention_group = f"(Role ID: {button_id})"
+        next_number = await self.get_next_riddle_number()
+        title = f"Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊 No. {next_number} ({now_date_str()})"
 
-        # Image fallback
-        image_url = riddle_data.get("image-url") or "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
-        if not image_url.startswith("http"):
-            image_url = "https://cdn.discordapp.com/attachments/1383652563408392232/1384269191971868753/riddle_logo.jpg"
+        image_url = riddle.get("image-url") or DEFAULT_IMAGE_URL
+        if not str(image_url).startswith("http"):
+            image_url = DEFAULT_IMAGE_URL
 
-        solution_url = riddle_data.get("solution-url") or image_url
-        if not solution_url.startswith("http"):
+        solution_url = riddle.get("solution-url") or image_url
+        if not str(solution_url).startswith("http"):
             solution_url = image_url
 
-        # 🧠 Riddle Embed
-        date_str = datetime.now().strftime("%Y/%m/%d")
         riddle_embed = discord.Embed(
-            title=f"🧠 Goon Hut ℝ𝕚𝕕𝕕𝕝𝕖 𝕠𝕗 𝕥𝕙𝕖 𝔻𝕒𝕪\n{date_str}",
-            description=riddle_data.get("text", "*No text*"),
+            title=title,
+            description=riddle.get("text", "*No text*"),
             color=discord.Color.blurple()
         )
-        riddle_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "None"), inline=False)
-        if mention_group:
-            riddle_embed.add_field(name="📣 Mention Group", value=mention_group, inline=False)
+        riddle_embed.add_field(name="🏆 Award", value=riddle.get("award", "*None*"), inline=False)
         riddle_embed.set_image(url=image_url)
-        riddle_embed.set_footer(
-            text=f"{interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-        )
+        riddle_embed.set_footer(text=footer_text(interaction.guild))
 
-        # 🎉 Solved Embed
-        solved_embed = discord.Embed(
-            title="🎉 Riddle Solved!",
-            description=f"**SomeUser** solved the riddle!",  # Platzhalter
+        raw_solution = riddle.get("solution", "*None*")
+        clean_solution, link = extract_link(raw_solution)
+        solution_display = clean_solution or "*None*"
+        if link:
+            solution_display += f"\n🔗 [🧠**MORE**]({link})"
+
+        solved_preview = discord.Embed(
+            title="🎉 Riddle Solved! (Preview)",
+            description="**SomeUser** solved the riddle!",
             color=discord.Color.green()
         )
-        solved_embed.set_author(name="User#1234", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
-        solved_embed.add_field(name="🧩 Riddle", value=riddle_data.get("text", "*Unknown*"), inline=False)
-        raw_solution = riddle_data.get("solution", "*None*")
-        # Suche nach dem ersten http/https-Link im Lösungstext
-        match = re.search(r"(https?://\S+)", raw_solution)
-        solution_link = match.group(1) if match else None
+        solved_preview.add_field(name="🧩 Riddle", value=riddle.get("text", "*Unknown*"), inline=False)
+        solved_preview.add_field(name="🔍 Proposed Solution", value="*Right Solution*", inline=False)
+        solved_preview.add_field(name="✅ Correct Solution", value=solution_display, inline=False)
+        solved_preview.add_field(name="🏆 Award", value=riddle.get("award", "*None*"), inline=False)
+        solved_preview.set_image(url=solution_url)
+        solved_preview.set_footer(text=footer_text(interaction.guild))
 
-        # Lösungstext ohne den Link
-        cleaned_solution = raw_solution.replace(solution_link, "").strip() if solution_link else raw_solution
-
-        # Lösung + optionaler Link im neuen Format
-        proposed_value = cleaned_solution
-        if solution_link:
-            proposed_value += f"\n🔗 [🧠**MORE**]({solution_link})"
-
-        solved_embed.add_field(name="🔍 Proposed Solution", value="*Right Solution*", inline=False)
-        solved_embed.add_field(name="✅ Correct Solution", value=proposed_value or "*None*", inline=False)
-
-        solved_embed.add_field(name="🏆 Award", value=riddle_data.get("award", "*None*"), inline=False)
-        if mention_group:
-            solved_embed.add_field(name="📣 Mention Group", value=mention_group, inline=False)
-        solved_embed.set_image(url=solution_url)
-        solved_embed.set_footer(
-            text=f"Guild: {interaction.guild.name}",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-        )
-
-        # 📨 Antwort
         await interaction.followup.send(
-            content="🧪 Here is your private riddle preview:",
-            embeds=[riddle_embed, solved_embed],
+            content="🧪 Private preview:",
+            embeds=[riddle_embed, solved_preview],
             ephemeral=True
         )
 
-    @commands.Cog.listener()
-    async def on_app_command_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_errors.MissingRole):
-            await interaction.response.send_message(
-                "🚫 You don’t have permission to use this command.",
-                ephemeral=True
-            )
-        else:
-            raise error  # Alle anderen Fehler weiterhin durchreichen (damit du echte Bugs siehst)
 
-
+# =========================
+# Global Error Handler
+# =========================
 async def on_riddle_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingRole):
-        await interaction.response.send_message(
-            "🚫 You don’t have permission to use this command.",
-            ephemeral=True
-        )
+        if interaction.response.is_done():
+            await interaction.followup.send("🚫 You don’t have permission to use this command.", ephemeral=True)
+        else:
+            await interaction.response.send_message("🚫 You don’t have permission to use this command.", ephemeral=True)
     else:
-        raise error  # Nur weiterreichen, wenn's ein anderer Fehler ist
+        raise error
 
-
-# Utility Functions
-
-def extract_link(text: str) -> tuple[str, Optional[str]]:
-    """Extracts a link from text and returns (text without link, link or None)."""
-    match = re.search(r'(https?://\S+)', text)
-    if match:
-        link = match.group(1)
-        clean_text = text.replace(link, "").strip()
-        return clean_text, link
-    return text, None
-
-
-def get_field_value(embed: discord.Embed, field_name: str):
-    for field in embed.fields:
-        if field.name.strip().startswith(field_name.strip()):
-            return field.value
-    return None
-
-def extract_from_embed(desc: str):
-    if desc and "> **Riddle:** " in desc:
-        return desc.split("> **Riddle:** ")[-1]
-    return desc or ""
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RiddleCog(bot))
-    bot.tree.on_error = on_riddle_command_error  # <<<<< WICHTIG!
+    bot.tree.on_error = on_riddle_command_error
