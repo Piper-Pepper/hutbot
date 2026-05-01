@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import io
-import json
 import logging
 import os
 import random
@@ -26,11 +25,7 @@ if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
-
-# IMPORTANT: set this in .env to your actual upscale endpoint
-VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL")
-if not VENICE_UPSCALE_URL:
-    raise RuntimeError("VENICE_UPSCALE_URL not set in .env!")
+VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL", "https://api.venice.ai/api/v1/image/upscale")
 
 BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
 LEGACY_STARTER_TEXTS = {
@@ -94,11 +89,16 @@ ASPECT_LABELS = {
 }
 RESOLUTION_TIERS = ["1K", "2K", "4K"]
 
-FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]  # for models without explicit aspectRatios
+# Fallback for models with no explicit aspectRatios
+FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]
 
 # =================================================
-# MODEL CONFIG (JSON aligned)
-# Includes lustify-v7 again, only flux-2-max (no flux-2-pro)
+# MODEL CONFIG (JSON-aligned)
+# removed as previously requested:
+# - venice-sd35
+# - flux-2-pro
+# - lustify-sdxl
+# - bria-bg-remover
 # =================================================
 COMMON_RATIOS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
 GROK_RATIOS = ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"]
@@ -258,104 +258,7 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
 
 
 # =================================================
-# IMAGE PARSING HELPERS
-# =================================================
-def looks_like_image(raw: bytes) -> bool:
-    if not raw or len(raw) < 12:
-        return False
-    if raw.startswith(b"\x89PNG\r\n\x1a\n"):  # PNG
-        return True
-    if raw.startswith(b"\xff\xd8\xff"):  # JPEG
-        return True
-    if raw[0:4] == b"RIFF" and raw[8:12] == b"WEBP":  # WEBP
-        return True
-    if raw[4:8] == b"ftyp":  # HEIF/HEIC/AVIF family
-        brand = raw[8:12]
-        if brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"avif"):
-            return True
-    return False
-
-
-def detect_ext(raw: bytes) -> str:
-    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png"
-    if raw.startswith(b"\xff\xd8\xff"):
-        return "jpg"
-    if raw[0:4] == b"RIFF" and raw[8:12] == b"WEBP":
-        return "webp"
-    if raw[4:8] == b"ftyp":
-        brand = raw[8:12]
-        if brand == b"avif":
-            return "avif"
-        if brand in (b"heic", b"heix", b"hevc", b"hevx"):
-            return "heic"
-    return "png"
-
-
-def _try_decode_b64(value: str) -> Optional[bytes]:
-    if not value:
-        return None
-    b64s = value.split(",", 1)[1] if value.startswith("data:image/") and "," in value else value
-    try:
-        raw = base64.b64decode(b64s, validate=True)
-        return raw if looks_like_image(raw) else None
-    except Exception:
-        return None
-
-
-def extract_image_bytes(raw: bytes) -> Optional[bytes]:
-    if not raw:
-        return None
-
-    if looks_like_image(raw):
-        return raw
-
-    try:
-        obj = json.loads(raw.decode("utf-8"))
-    except Exception:
-        return None
-
-    # Common patterns
-    if isinstance(obj, dict):
-        # direct keys
-        for k in ("image", "b64_json", "data", "output"):
-            val = obj.get(k)
-            if isinstance(val, str):
-                decoded = _try_decode_b64(val)
-                if decoded:
-                    return decoded
-
-        # OpenAI-like: {"data":[{"b64_json":"..."}]}
-        if isinstance(obj.get("data"), list):
-            for it in obj["data"]:
-                if isinstance(it, dict):
-                    for k in ("b64_json", "image", "data"):
-                        val = it.get(k)
-                        if isinstance(val, str):
-                            decoded = _try_decode_b64(val)
-                            if decoded:
-                                return decoded
-
-        # generic images list
-        if isinstance(obj.get("images"), list):
-            for it in obj["images"]:
-                if isinstance(it, str):
-                    decoded = _try_decode_b64(it)
-                    if decoded:
-                        return decoded
-                elif isinstance(it, dict):
-                    for k in ("b64_json", "image", "data"):
-                        val = it.get(k)
-                        if isinstance(val, str):
-                            decoded = _try_decode_b64(val)
-                            if decoded:
-                                return decoded
-
-    return None
-
-
-# =================================================
-# GENERAL HELPERS
+# HELPERS
 # =================================================
 def get_model_label(model_id: str) -> str:
     base = MODEL_CONFIG[model_id]["label"]
@@ -367,10 +270,10 @@ def get_model_ratios(model_id: str) -> list[str]:
     return ratios if ratios else FALLBACK_ASPECTS
 
 
-def make_safe_filename(prompt: str, ext: str = "png") -> str:
+def make_safe_filename(prompt: str) -> str:
     base = "_".join((prompt or "").split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
-    return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.{ext}"
+    return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
 
 def snap_to_divisor(value: int, divisor: int) -> int:
@@ -406,30 +309,6 @@ def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -
     return snap_to_divisor(w, divisor), snap_to_divisor(h, divisor)
 
 
-def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
-    return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
-
-
-def has_role(member: discord.Member, role_id: int) -> bool:
-    return any(r.id == role_id for r in member.roles)
-
-
-def is_model_dropdown_message(msg: discord.Message) -> bool:
-    if not msg.components or msg.embeds or msg.attachments:
-        return False
-
-    for row in msg.components:
-        for child in row.children:
-            cid = getattr(child, "custom_id", None)
-            if isinstance(cid, str) and (
-                cid.startswith("venice_model_select:") or
-                cid.startswith("venice_model_select_")
-            ):
-                return True
-
-    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
-
-
 def build_model_options(channel_id: int, include_surprise: bool = True) -> list[discord.SelectOption]:
     if channel_id not in ALLOWED_CHANNEL_IDS:
         return []
@@ -444,9 +323,38 @@ def build_model_options(channel_id: int, include_surprise: bool = True) -> list[
     return options[:25]
 
 
+def is_model_dropdown_message(msg: discord.Message) -> bool:
+    if not msg.components or msg.embeds or msg.attachments:
+        return False
+
+    for row in msg.components:
+        for child in row.children:
+            cid = getattr(child, "custom_id", None)
+            if isinstance(cid, str) and (
+                cid.startswith("venice_model_select:") or cid.startswith("venice_model_select_")
+            ):
+                return True
+
+    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
+
+
+def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
+    return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
+
+
+def has_role(member: discord.Member, role_id: int) -> bool:
+    return any(r.id == role_id for r in member.roles)
+
+
+def resolution_native_supported(model_id: str, resolution: str) -> bool:
+    return resolution in set(MODEL_CONFIG[model_id]["resolutions"])
+
+
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
     """
-    returns (generation_resolution, upscale_factor)
+    Returns (generation_resolution, upscale_factor).
+    generation_resolution is native resolution to pass if supported by model.
+    upscale_factor is 2 or 4 when post-upscale is needed.
     """
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
@@ -511,15 +419,22 @@ def build_generate_payload(
 
 def build_resolution_hint(model_id: str) -> str:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
+
     if not native:
-        return "1K is native for this model. 2K/4K are done via upscale."
+        return "1K is native for this model. 2K/4K are delivered via upscale."
+
     parts = [f"Native: {', '.join(sorted(native, key=lambda x: RESOLUTION_TIERS.index(x)))}"]
-    parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
-    parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
-    if "2K" not in native:
+
+    if "2K" in native:
+        parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
+    else:
         parts.append("2K via upscale")
-    if "4K" not in native:
+
+    if "4K" in native:
+        parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
+    else:
         parts.append("4K via upscale")
+
     parts.append("Earn XP in the server to unlock higher tiers.")
     return " • ".join(parts)
 
@@ -550,19 +465,15 @@ async def send_resolution_lock_message(interaction: discord.Interaction, resolut
     )
 
 
-# =================================================
-# API CALLS
-# =================================================
 async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     for attempt in range(retries + 1):
         try:
             async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
-                raw = await resp.read()
                 if resp.status == 200:
-                    return raw
+                    return await resp.read()
 
-                body = raw.decode("utf-8", errors="ignore")
+                body = await resp.text()
                 logger.warning("Venice generate error %s: %s", resp.status, body)
 
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
@@ -587,44 +498,40 @@ async def venice_upscale(
     scale: int,
     retries: int = 2
 ) -> Optional[bytes]:
-    img = extract_image_bytes(image_bytes)
-    if not img:
-        logger.warning("Upscale skipped: invalid input image bytes")
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {VENICE_API_KEY}",
-        "Accept": "application/octet-stream,application/json",
-    }
-
-    scale_variants = [f"{scale}x", scale]
-    field_variants = ["image", "file"]  # robust fallback
-    key_variants = ["scale", "upscale"]  # robust fallback
+    headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
 
     for attempt in range(retries + 1):
         try:
-            for field_name in field_variants:
-                for key_name in key_variants:
-                    for svalue in scale_variants:
-                        form = aiohttp.FormData()
-                        form.add_field(field_name, img, filename="input.png", content_type="image/png")
-                        form.add_field(key_name, str(svalue))
+            # Try multipart first
+            form = aiohttp.FormData()
+            form.add_field("file", image_bytes, filename="image.png", content_type="image/png")
+            form.add_field("scale", str(scale))
+            form.add_field("return_binary", "true")
 
-                        async with session.post(VENICE_UPSCALE_URL, headers=headers, data=form) as resp:
-                            raw = await resp.read()
-                            if resp.status == 200:
-                                out = extract_image_bytes(raw)
-                                return out if out else raw
+            async with session.post(VENICE_UPSCALE_URL, headers=headers, data=form) as resp:
+                if resp.status == 200:
+                    return await resp.read()
 
-                            body = raw.decode("utf-8", errors="ignore")
-                            logger.warning(
-                                "Venice upscale error %s (%s/%s=%s): %s",
-                                resp.status, field_name, key_name, svalue, body
-                            )
+                body = await resp.text()
+                logger.warning("Venice upscale multipart error %s: %s", resp.status, body)
+
+            # Fallback: JSON base64
+            payload = {
+                "image": base64.b64encode(image_bytes).decode("utf-8"),
+                "scale": scale,
+                "return_binary": True,
+            }
+            async with session.post(VENICE_UPSCALE_URL, headers=headers, json=payload) as resp2:
+                if resp2.status == 200:
+                    return await resp2.read()
+
+                body2 = await resp2.text()
+                logger.warning("Venice upscale json error %s: %s", resp2.status, body2)
 
             if attempt < retries:
                 await asyncio.sleep(1.2 * (attempt + 1))
                 continue
+
             return None
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -641,7 +548,7 @@ async def venice_upscale(
 
 
 # =================================================
-# VIEWS
+# OWNER LOCKED BASE VIEW
 # =================================================
 class OwnerLockedView(discord.ui.View):
     def __init__(self, owner_id: int, timeout: Optional[float] = 900):
@@ -655,6 +562,9 @@ class OwnerLockedView(discord.ui.View):
         return True
 
 
+# =================================================
+# FLOW: MODEL -> ASPECT -> MODAL -> RESOLUTION
+# =================================================
 class AspectRatioSelect(discord.ui.Select):
     def __init__(
         self,
@@ -698,6 +608,7 @@ class AspectRatioSelect(discord.ui.Select):
             )
         )
 
+        # Remove aspect dropdown post once clicked
         if source_msg:
             try:
                 await source_msg.edit(view=None, content="✅ Aspect ratio selected.")
@@ -763,6 +674,7 @@ class StarterModelSelect(discord.ui.Select):
             except Exception:
                 pass
 
+            # requested: when dropdown action happens, clean model dropdown in recent 10
             if isinstance(interaction.channel, discord.TextChannel):
                 await VeniceCog.delete_recent_model_dropdown_posts(
                     interaction.channel,
@@ -783,6 +695,7 @@ class StarterModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
+        # requested logic: after aspect dropdown post, remove model dropdown in recent 10
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.delete_recent_model_dropdown_posts(
                 interaction.channel,
@@ -928,19 +841,19 @@ class ResolutionSelectView(OwnerLockedView):
         for res in RESOLUTION_TIERS:
             label = res
             if res not in native and res in ("2K", "4K"):
-                label = f"{res} ↗"
+                label = f"{res} ↗"  # indicates upscale path
 
             style = (
                 discord.ButtonStyle.success if res == "1K"
                 else discord.ButtonStyle.primary if res == "2K"
-                else discord.ButtonStyle.danger
+                else discord.ButtonStyle.danger  # 4K red
             )
 
             btn = discord.ui.Button(
                 label=label,
                 style=style,
                 disabled=False,
-                custom_id=f"venice_res:{res}:{model_id}",
+                custom_id=f"venice_res:{res}:{model_id}"
             )
             btn.callback = self._make_resolution_callback(res)
             self.add_item(btn)
@@ -958,6 +871,7 @@ class ResolutionSelectView(OwnerLockedView):
 
             await interaction.response.defer(ephemeral=True)
 
+            # remove resolution post after click
             if interaction.message:
                 try:
                     await interaction.message.edit(view=None, content="✅ Resolution selected.")
@@ -980,6 +894,7 @@ class ResolutionSelectView(OwnerLockedView):
         channel_id = self.generation_data["channel_id"]
 
         full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
+
         gen_res, upscale_factor = generation_plan(model_id, resolution)
 
         payload = build_generate_payload(
@@ -1005,22 +920,19 @@ class ResolutionSelectView(OwnerLockedView):
             if percent != last_percent:
                 last_percent = percent
                 try:
-                    await progress_msg.edit(
-                        content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%"
-                    )
+                    await progress_msg.edit(content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%")
                 except Exception:
                     pass
             await asyncio.sleep(1.2)
 
-        raw_gen = await gen_task
-        image_bytes = extract_image_bytes(raw_gen) if raw_gen else None
+        image_bytes = await gen_task
         if not image_bytes:
-            await interaction.followup.send("❌ Generation failed (invalid image payload).", ephemeral=True)
+            await interaction.followup.send("❌ Generation failed.", ephemeral=True)
             if isinstance(interaction.channel, discord.TextChannel):
                 await VeniceCog.ensure_starter_message_static(
                     interaction.channel,
                     self.session,
-                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None)
                 )
             self.stop()
             return
@@ -1037,17 +949,16 @@ class ResolutionSelectView(OwnerLockedView):
                 image_bytes = upscaled
                 upscale_note = f"Upscaled {upscale_factor}x"
             else:
-                upscale_note = f"Upscale {upscale_factor}x failed (using base image)"
+                upscale_note = f"Upscale {upscale_factor}x failed (kept base output)"
 
         try:
             await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
         except Exception:
             pass
 
-        ext = detect_ext(image_bytes)
         fp = io.BytesIO(image_bytes)
         fp.seek(0)
-        dfile = discord.File(fp, filename=make_safe_filename(prompt_text, ext=ext))
+        dfile = discord.File(fp, filename=make_safe_filename(prompt_text))
 
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(
@@ -1074,12 +985,14 @@ class ResolutionSelectView(OwnerLockedView):
         embed.set_image(url=f"attachment://{dfile.filename}")
 
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
-        footer = (
-            f"{get_model_label(model_id)} | "
-            f"Ratio: {ASPECT_LABELS.get(ratio, ratio)} | "
-            f"Target: {resolution} | CFG: {cfg_val} | Steps: {steps}"
+        embed.set_footer(
+            text=(
+                f"{get_model_label(model_id)} | "
+                f"Ratio: {ASPECT_LABELS.get(ratio, ratio)} | "
+                f"Target: {resolution} | CFG: {cfg_val} | Steps: {steps}"
+            ),
+            icon_url=guild_icon
         )
-        embed.set_footer(text=footer, icon_url=guild_icon)
 
         if not interaction.channel:
             await interaction.followup.send("❌ Channel is unavailable.", ephemeral=True)
@@ -1102,7 +1015,7 @@ class ResolutionSelectView(OwnerLockedView):
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
-                self.session,
+                session=self.session,
                 author_id=interaction.user.id,
                 source_message=posted,
                 channel_id=(interaction.channel.id if interaction.channel else 0),
@@ -1116,7 +1029,7 @@ class ResolutionSelectView(OwnerLockedView):
             await VeniceCog.ensure_starter_message_static(
                 interaction.channel,
                 self.session,
-                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None)
             )
 
         self.stop()
@@ -1290,14 +1203,14 @@ class VeniceCog(commands.Cog):
     async def _ensure_session(self):
         if self.session and not self.session.closed:
             return
-        timeout = aiohttp.ClientTimeout(total=300)
-        connector = aiohttp.TCPConnector(limit=80, ttl_dns_cache=300)
+        timeout = aiohttp.ClientTimeout(total=240)
+        connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
     async def cog_load(self):
         await self._ensure_session()
 
-        # persistent starter views
+        # persistent starter dropdowns
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
@@ -1337,6 +1250,7 @@ class VeniceCog(commands.Cog):
         lock = get_channel_lock(channel.id)
         async with lock:
             try:
+                # requested: last 10 cleanup before repost
                 await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
                     channel,
                     bot_user_id=(self.bot.user.id if self.bot.user else None),
