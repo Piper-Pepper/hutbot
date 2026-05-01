@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 
 import aiohttp
 import discord
@@ -64,18 +64,18 @@ SFW_PROMPT_SUFFIX = " "
 pepper = "<a:01pepper_icon:1377636862847619213>"
 
 # -------------------------------------------------
-# ASPECT RATIOS
+# ASPECT RATIO LABELS
 # -------------------------------------------------
 ASPECT_LABELS = {
-    "auto": "⚙️Auto",
-    "1:1": "🟦1:1",
-    "16:9": "📺16:9",
-    "9:16": "📱9:16",
-    "21:9": "🎬21:9",
-    "3:2": "🖼️3:2",
-    "2:3": "📷2:3",
-    "3:4": "🖼️3:4",
-    "4:5": "🖼️4:5",
+    "auto": "⚙️ Auto",
+    "1:1": "🟦 1:1",
+    "16:9": "📺 16:9",
+    "9:16": "📱 9:16",
+    "21:9": "🎬 21:9",
+    "3:2": "🖼️ 3:2",
+    "2:3": "📷 2:3",
+    "3:4": "🖼️ 3:4",
+    "4:5": "🖼️ 4:5",
 }
 
 def ratio_to_dimensions(ratio: str, base: int = 1024) -> tuple[int, int]:
@@ -96,10 +96,29 @@ def ratio_to_dimensions(ratio: str, base: int = 1024) -> tuple[int, int]:
     return base, base
 
 # -------------------------------------------------
-# MODEL CONFIG (aligned with your provided specs)
-# SD3.5 and old Lustify removed on purpose
+# MODEL CONFIG (API-aligned)
+# Removed intentionally:
+# - venice-sd35
+# - lustify-sdxl
+# - lustify-v7
+# - bria-bg-remover (not classic text-to-image flow)
 # -------------------------------------------------
+COMMON_RATIOS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
+GROK_RATIOS = ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"]
+GPT15_RATIOS = ["1:1", "3:2", "2:3"]
+FALLBACK_RATIOS = ["1:1", "16:9", "9:16"]
+
 MODEL_CONFIG = {
+    "flux-2-pro": {
+        "label": "🛰️ Flux 2 Pro",
+        "prompt_limit": 3000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
     "flux-2-max": {
         "label": "🌌 Flux 2 Max",
         "prompt_limit": 3000,
@@ -110,83 +129,23 @@ MODEL_CONFIG = {
         "use_aspect_ratio": True,
         "resolutions": [],
     },
-    "qwen-image-2-pro": {
-        "label": "🧩 Qwen Image 2 Pro",
+    "gpt-image-2": {
+        "label": "🧠 GPT Image 2",
         "prompt_limit": 10000,
         "cfg_scale": 5.0,
         "default_steps": 20,
         "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
-        "use_aspect_ratio": True,
-        "resolutions": [],
-    },
-    "grok-imagine-image": {
-        "label": "🧠 Grok Imagine",
-        "prompt_limit": 7500,
-        "cfg_scale": 5.0,
-        "default_steps": 20,
-        "max_steps": 50,
-        "ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"],
-        "use_aspect_ratio": True,
-        "resolutions": ["1K", "2K"],
-    },
-    "grok-imagine-image-pro": {
-        "label": "🚀 Grok Imagine Pro",
-        "prompt_limit": 7500,
-        "cfg_scale": 5.0,
-        "default_steps": 20,
-        "max_steps": 50,
-        "ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"],
-        "use_aspect_ratio": True,
-        "resolutions": ["1K", "2K"],
-    },
-    "nano-banana-2": {
-        "label": "🐵 Nano Banana 2",
-        "prompt_limit": 32768,
-        "cfg_scale": 5.0,
-        "default_steps": 20,
-        "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
+        "ratios": COMMON_RATIOS,
         "use_aspect_ratio": True,
         "resolutions": ["1K", "2K", "4K"],
     },
-    "nano-banana-pro": {
-        "label": "🍌 Nano Banana Pro",
-        "prompt_limit": 32768,
+    "gpt-image-1-5": {
+        "label": "🪄 GPT Image 1.5",
+        "prompt_limit": 5000,
         "cfg_scale": 5.0,
         "default_steps": 20,
         "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
-        "use_aspect_ratio": True,
-        "resolutions": ["1K", "2K", "4K"],
-    },
-    "recraft-v4-pro": {
-        "label": "🧱 Recraft V4 Pro",
-        "prompt_limit": 10000,
-        "cfg_scale": 5.0,
-        "default_steps": 20,
-        "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
-        "use_aspect_ratio": True,
-        "resolutions": [],
-    },
-    "imagineart-1.5-pro": {
-        "label": "🖌️ ImagineArt 1.5 Pro",
-        "prompt_limit": 10000,
-        "cfg_scale": 5.0,
-        "default_steps": 20,
-        "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"],
-        "use_aspect_ratio": True,
-        "resolutions": [],
-    },
-    "seedream-v4": {
-        "label": "🌊 Seedream V4.5",
-        "prompt_limit": 10000,
-        "cfg_scale": 5.0,
-        "default_steps": 20,
-        "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
+        "ratios": GPT15_RATIOS,
         "use_aspect_ratio": True,
         "resolutions": [],
     },
@@ -196,40 +155,139 @@ MODEL_CONFIG = {
         "cfg_scale": 5.0,
         "default_steps": 20,
         "max_steps": 50,
-        "ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
+        "ratios": COMMON_RATIOS,
         "use_aspect_ratio": True,
         "resolutions": [],
     },
-    # Models without explicit aspect ratio list in your JSON -> conservative fallback set
-    "hidream": {
-        "label": "🌙 HiDream",
-        "prompt_limit": 1500,
-        "cfg_scale": 6.5,
+    "imagineart-1.5-pro": {
+        "label": "🎨 ImagineArt 1.5 Pro",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
         "default_steps": 20,
         "max_steps": 50,
-        "ratios": ["1:1", "16:9", "9:16"],
-        "use_aspect_ratio": False,
+        "ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"],
+        "use_aspect_ratio": True,
         "resolutions": [],
     },
-    "wai-Illustrious": {
-        "label": "🎌 Anime WAI",
-        "prompt_limit": 1500,
-        "cfg_scale": 7.0,
-        "default_steps": 25,
-        "max_steps": 30,
-        "ratios": ["1:1", "16:9", "9:16"],
-        "use_aspect_ratio": False,
+    "nano-banana-2": {
+        "label": "🐵 Nano Banana 2",
+        "prompt_limit": 32768,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": ["1K", "2K", "4K"],
+    },
+    "nano-banana-pro": {
+        "label": "🍌 Nano Banana Pro",
+        "prompt_limit": 32768,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": ["1K", "2K", "4K"],
+    },
+    "recraft-v4": {
+        "label": "🧱 Recraft V4",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
         "resolutions": [],
     },
-    "z-image-turbo": {
-        "label": "🌀 Z-Image Turbo",
+    "recraft-v4-pro": {
+        "label": "🏗️ Recraft V4 Pro",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "seedream-v4": {
+        "label": "🌊 Seedream V4.5",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "seedream-v5-lite": {
+        "label": "💧 Seedream V5 Lite",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "qwen-image-2": {
+        "label": "🔷 Qwen Image 2",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "qwen-image-2-pro": {
+        "label": "🧩 Qwen Image 2 Pro",
+        "prompt_limit": 10000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "wan-2-7-text-to-image": {
+        "label": "🐋 Wan 2.7",
+        "prompt_limit": 3000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "wan-2-7-pro-text-to-image": {
+        "label": "🦈 Wan 2.7 Pro",
+        "prompt_limit": 3000,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": COMMON_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": [],
+    },
+    "grok-imagine-image": {
+        "label": "🧠 Grok Imagine",
         "prompt_limit": 7500,
-        "cfg_scale": 6.0,
-        "default_steps": 8,
-        "max_steps": 8,
-        "ratios": ["1:1", "16:9", "9:16"],
-        "use_aspect_ratio": False,
-        "resolutions": [],
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": GROK_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": ["1K", "2K"],
+    },
+    "grok-imagine-image-pro": {
+        "label": "🚀 Grok Imagine Pro",
+        "prompt_limit": 7500,
+        "cfg_scale": 5.0,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": GROK_RATIOS,
+        "use_aspect_ratio": True,
+        "resolutions": ["1K", "2K"],
     },
     "lustify-v8": {
         "label": "🔥 Lustify V8",
@@ -237,27 +295,87 @@ MODEL_CONFIG = {
         "cfg_scale": 5.0,
         "default_steps": 30,
         "max_steps": 50,
-        "ratios": ["1:1", "16:9", "9:16"],
+        "ratios": FALLBACK_RATIOS,
+        "use_aspect_ratio": False,
+        "resolutions": [],
+    },
+    "qwen-image": {
+        "label": "🐼 Qwen Image",
+        "prompt_limit": 1500,
+        "cfg_scale": 6.0,
+        "default_steps": 8,
+        "max_steps": 8,
+        "ratios": FALLBACK_RATIOS,
+        "use_aspect_ratio": False,
+        "resolutions": [],
+    },
+    "wai-Illustrious": {
+        "label": "🎌 Anime (WAI)",
+        "prompt_limit": 1500,
+        "cfg_scale": 7.0,
+        "default_steps": 25,
+        "max_steps": 30,
+        "ratios": FALLBACK_RATIOS,
+        "use_aspect_ratio": False,
+        "resolutions": [],
+    },
+    "z-image-turbo": {
+        "label": "⚡ Z-Image Turbo",
+        "prompt_limit": 7500,
+        "cfg_scale": 6.0,
+        "default_steps": 8,
+        "max_steps": 8,
+        "ratios": FALLBACK_RATIOS,
+        "use_aspect_ratio": False,
+        "resolutions": [],
+    },
+    "chroma": {
+        "label": "🌈 Chroma",
+        "prompt_limit": 7500,
+        "cfg_scale": 6.0,
+        "default_steps": 10,
+        "max_steps": 10,
+        "ratios": FALLBACK_RATIOS,
+        "use_aspect_ratio": False,
+        "resolutions": [],
+    },
+    "hidream": {
+        "label": "🌙 HiDream",
+        "prompt_limit": 1500,
+        "cfg_scale": 6.5,
+        "default_steps": 20,
+        "max_steps": 50,
+        "ratios": FALLBACK_RATIOS,
         "use_aspect_ratio": False,
         "resolutions": [],
     },
 }
 
 MODEL_ORDER = [
+    "flux-2-pro",
     "flux-2-max",
-    "qwen-image-2-pro",
-    "grok-imagine-image",
-    "grok-imagine-image-pro",
+    "gpt-image-2",
+    "gpt-image-1-5",
+    "hunyuan-image-v3",
+    "imagineart-1.5-pro",
     "nano-banana-2",
     "nano-banana-pro",
+    "recraft-v4",
     "recraft-v4-pro",
-    "imagineart-1.5-pro",
     "seedream-v4",
-    "hunyuan-image-v3",
-    "hidream",
+    "seedream-v5-lite",
+    "qwen-image-2",
+    "qwen-image-2-pro",
+    "wan-2-7-text-to-image",
+    "wan-2-7-pro-text-to-image",
+    "grok-imagine-image",
+    "grok-imagine-image-pro",
+    "lustify-v8",
+    "qwen-image",
     "wai-Illustrious",
     "z-image-turbo",
-    "lustify-v8",
+    "chroma",
+    "hidream",
 ]
 
 VARIANT_MAP = {
@@ -293,9 +411,21 @@ async def send_resolution_lock_message(interaction: discord.Interaction, resolut
     content = (
         f"🔒 **{resolution}** is locked.\n"
         f"You need <@&{role_id}> (**{level_name}**) to use this quality tier.\n"
-        f"💡 You can earn XP on the server to unlock this role."
+        f"💡 Earn XP in the server to unlock this role."
     )
     await send_ephemeral(interaction, content)
+
+def build_resolution_hint(model_id: str) -> str:
+    resolutions = MODEL_CONFIG[model_id]["resolutions"]
+    if not resolutions:
+        return "This model uses its default API resolution."
+    parts = [f"Available: {', '.join(resolutions)}"]
+    if "2K" in resolutions:
+        parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
+    if "4K" in resolutions:
+        parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
+    parts.append("Earn XP to unlock higher tiers.")
+    return " • ".join(parts)
 
 async def venice_generate(session: aiohttp.ClientSession, payload: dict, retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
@@ -327,20 +457,151 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict, retries
     return None
 
 # -------------------------------------------------
-# MODAL
+# OWNER-LOCKED BASE VIEW
 # -------------------------------------------------
-class VeniceModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, variant: dict, hidden_suffix: str, previous_inputs=None):
-        model_id = variant["model"]
-        model_cfg = MODEL_CONFIG[model_id]
+class OwnerLockedView(discord.ui.View):
+    def __init__(self, owner_id: int, timeout: Optional[float] = 900):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
 
-        super().__init__(title=f"Generate with {get_model_label(model_id)}")
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This menu belongs to another user.")
+            return False
+        return True
+
+# -------------------------------------------------
+# FLOW 1: MODEL SELECT -> ASPECT SELECT
+# -------------------------------------------------
+class AspectRatioSelect(discord.ui.Select):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        model_id: str,
+        hidden_suffix: str,
+        owner_id: int,
+        previous_inputs: Optional[dict[str, Any]] = None,
+    ):
         self.session = session
-        self.variant = variant
-        self.hidden_suffix_value = hidden_suffix
+        self.model_id = model_id
+        self.hidden_suffix = hidden_suffix
+        self.owner_id = owner_id
         self.previous_inputs = previous_inputs or {}
 
+        options = []
+        for ratio in MODEL_CONFIG[model_id]["ratios"]:
+            options.append(
+                discord.SelectOption(
+                    label=ASPECT_LABELS.get(ratio, ratio),
+                    value=ratio
+                )
+            )
+
+        super().__init__(
+            placeholder="📐 Choose aspect ratio...",
+            min_values=1,
+            max_values=1,
+            options=options[:25]
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        ratio = self.values[0]
+        await interaction.response.send_modal(
+            VeniceModal(
+                session=self.session,
+                model_id=self.model_id,
+                ratio=ratio,
+                hidden_suffix=self.hidden_suffix,
+                owner_id=self.owner_id,
+                previous_inputs=self.previous_inputs,
+            )
+        )
+
+class AspectRatioSelectView(OwnerLockedView):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        model_id: str,
+        hidden_suffix: str,
+        owner_id: int,
+        previous_inputs: Optional[dict[str, Any]] = None,
+    ):
+        super().__init__(owner_id=owner_id, timeout=600)
+        self.add_item(
+            AspectRatioSelect(
+                session=session,
+                model_id=model_id,
+                hidden_suffix=hidden_suffix,
+                owner_id=owner_id,
+                previous_inputs=previous_inputs,
+            )
+        )
+
+class ModelSelect(discord.ui.Select):
+    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
+        self.session = session
+        self.channel_id = channel_id
+
+        options = []
+        for variant in VARIANT_MAP.get(channel_id, []):
+            model_id = variant["model"]
+            options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
+
+        super().__init__(
+            placeholder="🎨 Choose your model...",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            custom_id=f"venice_model_select_{channel_id}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        model_id = self.values[0]
+        hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
+
+        await interaction.response.send_message(
+            content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
+            view=AspectRatioSelectView(
+                session=self.session,
+                model_id=model_id,
+                hidden_suffix=hidden_suffix,
+                owner_id=interaction.user.id,
+                previous_inputs=None
+            ),
+            ephemeral=True
+        )
+
+class VeniceView(discord.ui.View):
+    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
+        super().__init__(timeout=None)
+        self.add_item(ModelSelect(session, channel.id))
+
+# -------------------------------------------------
+# FLOW 2: MODAL (prompt/cfg/steps)
+# -------------------------------------------------
+class VeniceModal(discord.ui.Modal):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        model_id: str,
+        ratio: str,
+        hidden_suffix: str,
+        owner_id: int,
+        previous_inputs: Optional[dict[str, Any]] = None,
+    ):
+        self.session = session
+        self.model_id = model_id
+        self.ratio = ratio
+        self.hidden_suffix_value = hidden_suffix
+        self.owner_id = owner_id
+        self.previous_inputs = previous_inputs or {}
+
+        model_cfg = MODEL_CONFIG[model_id]
+        ratio_label = ASPECT_LABELS.get(ratio, ratio)
+        super().__init__(title=f"{get_model_label(model_id)} • {ratio_label}")
+
         prompt_limit = min(model_cfg["prompt_limit"], 4000)
+        fixed_steps = model_cfg["default_steps"] == model_cfg["max_steps"]
 
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
@@ -368,14 +629,14 @@ class VeniceModal(discord.ui.Modal):
             default=self.previous_inputs.get("cfg_value", ""),
         )
 
-        prev_steps = self.previous_inputs.get("steps")
+        steps_label = f"Steps (fixed: {model_cfg['default_steps']})" if fixed_steps else f"Steps (1-{model_cfg['max_steps']})"
         self.steps_value = discord.ui.TextInput(
-            label=f"Steps (1-{model_cfg['max_steps']})",
+            label=steps_label,
             style=discord.TextStyle.short,
             required=False,
             max_length=3,
             placeholder=str(model_cfg["default_steps"]),
-            default=str(prev_steps) if prev_steps else "",
+            default=str(self.previous_inputs.get("steps")) if self.previous_inputs.get("steps") else "",
         )
 
         self.hidden_suffix = discord.ui.TextInput(
@@ -391,111 +652,84 @@ class VeniceModal(discord.ui.Modal):
             self.add_item(item)
 
     async def on_submit(self, interaction: discord.Interaction):
-        model_id = self.variant["model"]
-        model_cfg = MODEL_CONFIG[model_id]
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This modal does not belong to you.")
+            return
+
+        model_cfg = MODEL_CONFIG[self.model_id]
+        fixed_steps = model_cfg["default_steps"] == model_cfg["max_steps"]
 
         try:
             cfg_val = float(self.cfg_value.value)
         except Exception:
             cfg_val = model_cfg["cfg_scale"]
 
-        try:
-            steps_val = int(self.steps_value.value)
-            steps_val = max(1, min(steps_val, model_cfg["max_steps"]))
-        except Exception:
+        if fixed_steps:
             steps_val = model_cfg["default_steps"]
+        else:
+            try:
+                steps_val = int(self.steps_value.value)
+                steps_val = max(1, min(steps_val, model_cfg["max_steps"]))
+            except Exception:
+                steps_val = model_cfg["default_steps"]
 
         negative_prompt = (self.negative_prompt.value or "").strip() or DEFAULT_NEGATIVE_PROMPT
         hidden_suffix = (self.hidden_suffix.value or "").strip() or self.hidden_suffix_value
 
-        variant = {
-            **self.variant,
+        generation_data = {
+            "model_id": self.model_id,
+            "ratio": self.ratio,
+            "prompt_text": self.prompt.value,
+            "negative_prompt": negative_prompt,
             "cfg_scale": cfg_val,
             "steps": steps_val,
-            "negative_prompt": negative_prompt,
-        }
-
-        prev = {
-            "prompt": self.prompt.value,
-            "negative_prompt": negative_prompt,
-            "cfg_value": self.cfg_value.value,
-            "steps": steps_val if steps_val != model_cfg["default_steps"] else None,
             "hidden_suffix": hidden_suffix,
+            "owner_id": self.owner_id,
+            "channel_id": interaction.channel.id if interaction.channel else None,
+            "previous_inputs": {
+                "prompt": self.prompt.value,
+                "negative_prompt": negative_prompt,
+                "cfg_value": self.cfg_value.value,
+                "steps": steps_val if steps_val != model_cfg["default_steps"] else None,
+                "hidden_suffix": hidden_suffix,
+            }
         }
 
-        channel_id = interaction.channel.id if interaction.channel else None
+        hint = build_resolution_hint(self.model_id)
+        ratio_label = ASPECT_LABELS.get(self.ratio, self.ratio)
 
         await interaction.response.send_message(
-            f"{get_model_label(model_id)} is ready. Choose an aspect ratio:",
-            view=AspectRatioView(
-                self.session,
-                variant,
-                prompt_text=self.prompt.value,
-                hidden_suffix=hidden_suffix,
-                author=interaction.user,
-                channel_id=channel_id,
-                previous_inputs=prev,
-            ),
-            ephemeral=True,
+            content=f"✅ {get_model_label(self.model_id)} • {ratio_label}\n{hint}\nChoose resolution:",
+            view=ResolutionSelectView(self.session, generation_data),
+            ephemeral=True
         )
 
 # -------------------------------------------------
-# ASPECT RATIO VIEW
+# FLOW 3: RESOLUTION BUTTONS -> GENERATE
 # -------------------------------------------------
-class AspectRatioView(discord.ui.View):
-    def __init__(
-        self,
-        session: aiohttp.ClientSession,
-        variant: dict,
-        prompt_text: str,
-        hidden_suffix: str,
-        author: discord.abc.User,
-        channel_id: Optional[int] = None,
-        previous_inputs=None,
-    ):
-        super().__init__(timeout=900)
+class ResolutionSelectView(OwnerLockedView):
+    def __init__(self, session: aiohttp.ClientSession, generation_data: dict[str, Any]):
+        super().__init__(owner_id=generation_data["owner_id"], timeout=900)
         self.session = session
-        self.variant = variant
-        self.prompt_text = prompt_text
-        self.hidden_suffix = hidden_suffix
-        self.author = author
-        self.channel_id = channel_id
-        self.previous_inputs = previous_inputs or {}
+        self.generation_data = generation_data
 
-        model_id = variant["model"]
-        cfg = MODEL_CONFIG[model_id]
+        model_id = generation_data["model_id"]
+        resolutions = MODEL_CONFIG[model_id]["resolutions"]
 
-        ratios = cfg["ratios"]
-        resolutions = cfg["resolutions"]  # [] or list like ["1K","2K","4K"]
-
-        for ratio in ratios:
-            # Keep max 25 components
-            if len(self.children) >= 25:
-                break
-
-            if ratio not in ASPECT_LABELS:
-                continue
-
-            # Free (lowest) button
-            if resolutions:
-                self._add_button(ratio=ratio, resolution="1K", style=discord.ButtonStyle.success)
-                if "2K" in resolutions and len(self.children) < 25:
-                    self._add_button(ratio=ratio, resolution="2K", style=discord.ButtonStyle.primary)
-                if "4K" in resolutions and len(self.children) < 25:
-                    self._add_button(ratio=ratio, resolution="4K", style=discord.ButtonStyle.secondary)
-            else:
-                self._add_button(ratio=ratio, resolution=None, style=discord.ButtonStyle.success)
-
-    def _add_button(self, ratio: str, resolution: Optional[str], style: discord.ButtonStyle):
-        base_label = ASPECT_LABELS[ratio]
-        if resolution and resolution != "1K":
-            label = f"{base_label} {resolution}"
+        if resolutions:
+            for res in resolutions:
+                style = discord.ButtonStyle.success if res == "1K" else (
+                    discord.ButtonStyle.primary if res == "2K" else discord.ButtonStyle.secondary
+                )
+                btn = discord.ui.Button(label=res, style=style)
+                btn.callback = self._make_resolution_callback(res)
+                self.add_item(btn)
         else:
-            label = base_label
+            btn = discord.ui.Button(label="Generate", style=discord.ButtonStyle.success)
+            btn.callback = self._make_resolution_callback(None)
+            self.add_item(btn)
 
-        row = min(len(self.children) // 5, 4)
-        btn = discord.ui.Button(label=label, style=style, row=row)
-
+    def _make_resolution_callback(self, resolution: Optional[str]):
         async def callback(interaction: discord.Interaction):
             if not isinstance(interaction.user, discord.Member):
                 await send_ephemeral(interaction, "❌ This action can only be used in a server.")
@@ -506,22 +740,24 @@ class AspectRatioView(discord.ui.View):
                 await send_resolution_lock_message(interaction, resolution, role_needed)
                 return
 
-            await self.generate_image(interaction, ratio=ratio, resolution=resolution)
+            await self.generate_image(interaction, resolution=resolution)
+        return callback
 
-        btn.callback = callback
-        self.add_item(btn)
-
-    async def generate_image(self, interaction: discord.Interaction, ratio: str, resolution: Optional[str]):
+    async def generate_image(self, interaction: discord.Interaction, resolution: Optional[str]):
         await interaction.response.defer(ephemeral=True)
 
-        model_id = self.variant["model"]
+        model_id = self.generation_data["model_id"]
         model_cfg = MODEL_CONFIG[model_id]
+        ratio = self.generation_data["ratio"]
+        prompt_text = self.generation_data["prompt_text"]
+        hidden_suffix = self.generation_data["hidden_suffix"]
+        negative_prompt = self.generation_data["negative_prompt"]
+        cfg_val = float(self.generation_data["cfg_scale"])
+        steps = int(self.generation_data["steps"])
+        previous_inputs = self.generation_data["previous_inputs"]
+        channel_id = self.generation_data["channel_id"]
 
-        cfg_val = float(self.variant["cfg_scale"])
-        steps = int(self.variant.get("steps", model_cfg["default_steps"]))
-        negative_prompt = self.variant.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
-
-        full_prompt = f"{(self.prompt_text or '').strip()} {(self.hidden_suffix or '').strip()}".strip()
+        full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
 
         payload = {
             "model": model_id,
@@ -541,7 +777,6 @@ class AspectRatioView(discord.ui.View):
             payload["width"] = w
             payload["height"] = h
 
-        # only apply resolution if model supports it
         if resolution and resolution in model_cfg["resolutions"]:
             payload["resolution"] = resolution
 
@@ -549,19 +784,17 @@ class AspectRatioView(discord.ui.View):
 
         gen_task = asyncio.create_task(venice_generate(self.session, payload))
         started = time.monotonic()
-
         last_percent = -1
+
         while not gen_task.done():
             elapsed = time.monotonic() - started
-            est_total = max(10.0, min(75.0, 8 + steps * 0.9 + cfg_val * 0.6 + len(self.prompt_text) / 220))
+            est_total = max(10.0, min(75.0, 8 + steps * 0.9 + cfg_val * 0.6 + len(prompt_text) / 220))
             percent = min(95, int((elapsed / est_total) * 95))
 
             if percent != last_percent:
                 last_percent = percent
                 try:
-                    await progress_msg.edit(
-                        content=f"{pepper} Generating image for **{self.author.display_name}**... {percent}%"
-                    )
+                    await progress_msg.edit(content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%")
                 except Exception:
                     pass
 
@@ -582,21 +815,20 @@ class AspectRatioView(discord.ui.View):
 
         file_obj = io.BytesIO(image_bytes)
         file_obj.seek(0)
-        dfile = discord.File(file_obj, filename=make_safe_filename(self.prompt_text))
+        dfile = discord.File(file_obj, filename=make_safe_filename(prompt_text))
 
         today = datetime.now().strftime("%Y-%m-%d")
-
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.set_author(name=f"{self.author.display_name} ({today})", icon_url=self.author.display_avatar.url)
+        embed.set_author(name=f"{interaction.user.display_name} ({today})", icon_url=interaction.user.display_avatar.url)
 
-        prompt_preview = (self.prompt_text or "").replace("\n\n", "\n")
+        prompt_preview = (prompt_text or "").replace("\n\n", "\n")
         if len(prompt_preview) > 600:
             prompt_preview = prompt_preview[:600] + " [...]"
 
         embed.description = f"🔮 Prompt:\n{prompt_preview}"
 
-        default_hidden = NSFW_PROMPT_SUFFIX if self.channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
-        used_hidden = self.previous_inputs.get("hidden_suffix")
+        default_hidden = NSFW_PROMPT_SUFFIX if channel_id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
+        used_hidden = previous_inputs.get("hidden_suffix")
         if isinstance(used_hidden, str) and used_hidden and used_hidden != default_hidden:
             embed.description += "\n\n🔒 Hidden prompt used"
 
@@ -617,7 +849,7 @@ class AspectRatioView(discord.ui.View):
             return
 
         posted = await interaction.channel.send(
-            content=self.author.mention,
+            content=interaction.user.mention,
             embed=embed,
             file=dfile,
             allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
@@ -632,13 +864,12 @@ class AspectRatioView(discord.ui.View):
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
-                self.session,
-                self.variant,
-                prompt_text=self.prompt_text,
-                hidden_suffix=self.hidden_suffix,
-                author=self.author,
-                message=posted,
-                previous_inputs=self.previous_inputs,
+                session=self.session,
+                author_id=interaction.user.id,
+                source_message=posted,
+                channel_id=(interaction.channel.id if interaction.channel else 0),
+                previous_inputs=previous_inputs,
+                hidden_suffix=hidden_suffix,
             ),
             ephemeral=True,
         )
@@ -649,18 +880,85 @@ class AspectRatioView(discord.ui.View):
         self.stop()
 
 # -------------------------------------------------
-# POST GENERATION VIEW
+# REUSE FLOW
 # -------------------------------------------------
-class PostGenerationView(discord.ui.View):
-    def __init__(self, session, variant, prompt_text, hidden_suffix, author, message, previous_inputs=None):
-        super().__init__(timeout=1200)
+class ReuseModelSelect(discord.ui.Select):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        channel_id: int,
+        owner_id: int,
+        previous_inputs: dict[str, Any],
+        hidden_suffix: str
+    ):
         self.session = session
-        self.variant = variant
-        self.prompt_text = prompt_text
+        self.channel_id = channel_id
+        self.owner_id = owner_id
+        self.previous_inputs = previous_inputs
         self.hidden_suffix = hidden_suffix
-        self.author = author
-        self.message = message
-        self.previous_inputs = previous_inputs or {}
+
+        options = []
+        for variant in VARIANT_MAP.get(channel_id, []):
+            model_id = variant["model"]
+            options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
+
+        super().__init__(
+            placeholder="♻️ Re-use with model...",
+            min_values=1,
+            max_values=1,
+            options=options[:25]
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        model_id = self.values[0]
+        await interaction.response.send_message(
+            content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
+            view=AspectRatioSelectView(
+                session=self.session,
+                model_id=model_id,
+                hidden_suffix=self.hidden_suffix,
+                owner_id=self.owner_id,
+                previous_inputs=self.previous_inputs
+            ),
+            ephemeral=True
+        )
+
+class ReuseModelSelectView(OwnerLockedView):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        channel_id: int,
+        owner_id: int,
+        previous_inputs: dict[str, Any],
+        hidden_suffix: str
+    ):
+        super().__init__(owner_id=owner_id, timeout=300)
+        self.add_item(
+            ReuseModelSelect(
+                session=session,
+                channel_id=channel_id,
+                owner_id=owner_id,
+                previous_inputs=previous_inputs,
+                hidden_suffix=hidden_suffix
+            )
+        )
+
+class PostGenerationView(OwnerLockedView):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        author_id: int,
+        source_message: discord.Message,
+        channel_id: int,
+        previous_inputs: dict[str, Any],
+        hidden_suffix: str
+    ):
+        super().__init__(owner_id=author_id, timeout=1200)
+        self.session = session
+        self.source_message = source_message
+        self.channel_id = channel_id
+        self.previous_inputs = previous_inputs
+        self.hidden_suffix = hidden_suffix
 
         reuse_btn = discord.ui.Button(label="♻️ Re-use Prompt", style=discord.ButtonStyle.success)
         reuse_btn.callback = self.reuse_callback
@@ -674,107 +972,32 @@ class PostGenerationView(discord.ui.View):
         delete_reuse_btn.callback = self.delete_reuse_callback
         self.add_item(delete_reuse_btn)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author.id
-
     async def reuse_callback(self, interaction: discord.Interaction):
-        await self.show_reuse_models(interaction)
+        await interaction.response.send_message(
+            "♻️ Choose a model to re-use your prompt:",
+            view=ReuseModelSelectView(
+                session=self.session,
+                channel_id=self.channel_id,
+                owner_id=self.owner_id,
+                previous_inputs=self.previous_inputs,
+                hidden_suffix=self.hidden_suffix
+            ),
+            ephemeral=True
+        )
 
     async def delete_callback(self, interaction: discord.Interaction):
         try:
-            await self.message.delete()
+            await self.source_message.delete()
         except Exception:
             pass
         await interaction.response.send_message("✅ Post deleted.", ephemeral=True)
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
         try:
-            await self.message.delete()
+            await self.source_message.delete()
         except Exception:
             pass
-        await self.show_reuse_models(interaction)
-
-    async def show_reuse_models(self, interaction: discord.Interaction):
-        if not interaction.channel:
-            await interaction.response.send_message("❌ Channel unavailable.", ephemeral=True)
-            return
-
-        class ReuseModelSelect(discord.ui.Select):
-            def __init__(self, session: aiohttp.ClientSession, channel_id: int, prompt_text: str, hidden_suffix: str):
-                self.session = session
-                self.channel_id = channel_id
-                self.prompt_text = prompt_text
-                self.hidden_suffix = hidden_suffix
-
-                options = []
-                for variant in VARIANT_MAP.get(channel_id, []):
-                    model_id = variant["model"]
-                    options.append(
-                        discord.SelectOption(
-                            label=get_model_label(model_id),
-                            value=model_id
-                        )
-                    )
-
-                super().__init__(
-                    placeholder="♻️ Re-use with model...",
-                    min_values=1,
-                    max_values=1,
-                    options=options[:25]
-                )
-
-            async def callback(self, inner_interaction: discord.Interaction):
-                model_id = self.values[0]
-                await inner_interaction.response.send_modal(
-                    VeniceModal(
-                        self.session,
-                        {"model": model_id},
-                        self.hidden_suffix,
-                        previous_inputs={
-                            "prompt": self.prompt_text,
-                            "hidden_suffix": self.hidden_suffix,
-                        },
-                    )
-                )
-
-        view = discord.ui.View(timeout=300)
-        view.add_item(ReuseModelSelect(self.session, interaction.channel.id, self.prompt_text, self.hidden_suffix))
-        await interaction.response.send_message("♻️ Choose a model to re-use your prompt:", view=view, ephemeral=True)
-
-# -------------------------------------------------
-# STARTER MODEL SELECT
-# -------------------------------------------------
-class ModelSelect(discord.ui.Select):
-    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
-        self.session = session
-        self.channel_id = channel_id
-
-        options = []
-        for variant in VARIANT_MAP.get(channel_id, []):
-            model_id = variant["model"]
-            options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
-
-        # custom_id helps identifying starter messages safely
-        super().__init__(
-            placeholder="🎨 Choose your model...",
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-            custom_id=f"venice_model_select_{channel_id}",
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        model_id = self.values[0]
-        hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
-
-        await interaction.response.send_modal(
-            VeniceModal(self.session, {"model": model_id}, hidden_suffix)
-        )
-
-class VeniceView(discord.ui.View):
-    def __init__(self, session: aiohttp.ClientSession, channel: discord.TextChannel):
-        super().__init__(timeout=None)
-        self.add_item(ModelSelect(session, channel.id))
+        await self.reuse_callback(interaction)
 
 # -------------------------------------------------
 # COG
@@ -791,9 +1014,9 @@ class VeniceCog(commands.Cog):
         connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
-    async def cog_unload(self):
+    def cog_unload(self):
         if self.session and not self.session.closed:
-            await self.session.close()
+            asyncio.create_task(self.session.close())
 
     def _is_starter_message(self, msg: discord.Message) -> bool:
         if msg.content != BUTTON_MESSAGE_TEXT:
