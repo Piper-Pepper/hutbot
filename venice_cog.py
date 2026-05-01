@@ -23,7 +23,15 @@ if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
-BUTTON_MESSAGE_TEXT = "💡 Choose a model for a new image!"
+
+# Keep legacy text users already know
+BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
+LEGACY_STARTER_TEXTS = {
+    "💡 Choose Model for 🖼️ NEW image!",
+    "💡 Choose a model for a new image!",
+}
+
+RECENT_SCAN_LIMIT = 10
 logger = logging.getLogger("venice_picture_bot")
 
 # -------------------------------------------------
@@ -88,8 +96,8 @@ TIER_LONG_SIDE = {
 }
 
 # -------------------------------------------------
-# MODELS (JSON-matched where provided)
-# Removed by request:
+# MODELS (clean + aligned)
+# removed by request:
 # - venice-sd35
 # - lustify-sdxl
 # - lustify-v7
@@ -188,7 +196,7 @@ MODEL_CONFIG: dict[str, dict[str, Any]] = {
         "prompt_limit": 7500, "cfg_scale": 5.0, "default_steps": 20, "max_steps": 50,
         "ratios": GROK_RATIOS, "divisor": 1, "use_aspect_ratio": True, "api_resolutions": ["1K", "2K"]
     },
-    # no aspectRatios in JSON -> robust ratio fallback, divisor from JSON
+    # no explicit aspectRatios in provided JSON -> robust ratio fallback
     "lustify-v8": {
         "label": "🔥 Lustify V8",
         "prompt_limit": 1500, "cfg_scale": 5.0, "default_steps": 30, "max_steps": 50,
@@ -227,16 +235,14 @@ REACTIONS = ["1️⃣", "2️⃣", "3️⃣", "<:011:1346549711817146400>", "<:0
 # -------------------------------------------------
 # LOCKS
 # -------------------------------------------------
-_starter_locks: dict[int, asyncio.Lock] = {}
+_channel_locks: dict[int, asyncio.Lock] = {}
 
-
-def get_starter_lock(channel_id: int) -> asyncio.Lock:
-    lock = _starter_locks.get(channel_id)
+def get_channel_lock(channel_id: int) -> asyncio.Lock:
+    lock = _channel_locks.get(channel_id)
     if lock is None:
         lock = asyncio.Lock()
-        _starter_locks[channel_id] = lock
+        _channel_locks[channel_id] = lock
     return lock
-
 
 # -------------------------------------------------
 # HELPERS
@@ -244,20 +250,16 @@ def get_starter_lock(channel_id: int) -> asyncio.Lock:
 def get_model_label(model_id: str) -> str:
     return MODEL_CONFIG[model_id]["label"]
 
-
 def make_safe_filename(prompt: str) -> str:
     base = "_".join((prompt or "").split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
 
-
 def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
     return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
 
-
 def has_role(member: discord.Member, role_id: int) -> bool:
     return any(r.id == role_id for r in member.roles)
-
 
 def snap_to_divisor(value: int, divisor: int) -> int:
     if divisor <= 1:
@@ -265,10 +267,8 @@ def snap_to_divisor(value: int, divisor: int) -> int:
     v = int(round(value / divisor) * divisor)
     return max(divisor, v)
 
-
 def dimensions_from_ratio_and_tier(ratio: str, tier: str, divisor: int) -> tuple[int, int]:
     if ratio == "auto":
-        # auto fallback -> square at tier size
         side = snap_to_divisor(TIER_LONG_SIDE.get(tier, 1024), divisor)
         return side, side
 
@@ -290,7 +290,6 @@ def dimensions_from_ratio_and_tier(ratio: str, tier: str, divisor: int) -> tuple
 
     return snap_to_divisor(w, divisor), snap_to_divisor(h, divisor)
 
-
 def build_payload(
     model_id: str,
     ratio: str,
@@ -301,7 +300,6 @@ def build_payload(
     steps: int,
 ) -> dict[str, Any]:
     cfg = MODEL_CONFIG[model_id]
-
     payload: dict[str, Any] = {
         "model": model_id,
         "prompt": prompt,
@@ -313,7 +311,6 @@ def build_payload(
         "return_binary": True,
     }
 
-    # If model supports explicit API resolution tier, use it
     if resolution in cfg["api_resolutions"]:
         payload["resolution"] = resolution
         if cfg["use_aspect_ratio"] and ratio in cfg["ratios"]:
@@ -324,23 +321,37 @@ def build_payload(
             payload["height"] = h
         return payload
 
-    # Otherwise emulate tiers by width/height for all models
+    # emulate tiers by dimensions for models without explicit resolution tier
     w, h = dimensions_from_ratio_and_tier(ratio, resolution, cfg["divisor"])
     payload["width"] = w
     payload["height"] = h
 
-    # Keep aspect ratio only as fallback info on compatible models
     if cfg["use_aspect_ratio"] and ratio in cfg["ratios"] and ratio != "auto":
         payload["aspect_ratio"] = ratio
 
     return payload
 
-
 def build_model_options(channel_id: int) -> list[discord.SelectOption]:
     if channel_id not in ALLOWED_CHANNEL_IDS:
         return []
-    return [discord.SelectOption(label=get_model_label(model_id), value=model_id) for model_id in MODEL_ORDER][:25]
+    return [discord.SelectOption(label=get_model_label(m), value=m) for m in MODEL_ORDER][:25]
 
+def is_model_dropdown_message(msg: discord.Message) -> bool:
+    if not msg.components:
+        return False
+    if msg.embeds or msg.attachments:
+        return False
+
+    for row in msg.components:
+        for child in row.children:
+            cid = getattr(child, "custom_id", None)
+            if isinstance(cid, str) and (
+                cid.startswith("venice_model_select:") or
+                cid.startswith("venice_model_select_")
+            ):
+                return True
+
+    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
 
 async def send_ephemeral(interaction: discord.Interaction, content: str):
     if interaction.response.is_done():
@@ -348,23 +359,20 @@ async def send_ephemeral(interaction: discord.Interaction, content: str):
     else:
         await interaction.response.send_message(content, ephemeral=True)
 
-
 async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int):
     level_name = ROLE_LEVEL_NAMES.get(role_id, "Required level")
-    content = (
+    await send_ephemeral(
+        interaction,
         f"🔒 **{resolution}** is locked.\n"
         f"You need <@&{role_id}> (**{level_name}**) to use this quality tier.\n"
         f"💡 Earn XP in the server to unlock this role."
     )
-    await send_ephemeral(interaction, content)
-
 
 def build_resolution_hint() -> str:
     return (
         f"1K is free • 2K needs <@&{LEVEL4_ROLE_ID}> • 4K needs <@&{LEVEL11_ROLE_ID}> • "
         "Earn XP to unlock higher tiers."
     )
-
 
 async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
@@ -373,7 +381,6 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
             async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     return await resp.read()
-
                 body = await resp.text()
                 logger.warning("Venice API error %s: %s", resp.status, body)
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
@@ -391,7 +398,6 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
             return None
     return None
 
-
 # -------------------------------------------------
 # OWNER-LOCKED BASE VIEW
 # -------------------------------------------------
@@ -405,7 +411,6 @@ class OwnerLockedView(discord.ui.View):
             await send_ephemeral(interaction, "🚫 This menu belongs to another user.")
             return False
         return True
-
 
 # -------------------------------------------------
 # FLOW: MODEL -> ASPECT -> MODAL -> RESOLUTION
@@ -450,7 +455,6 @@ class AspectRatioSelect(discord.ui.Select):
             )
         )
 
-
 class AspectRatioSelectView(OwnerLockedView):
     def __init__(
         self,
@@ -471,18 +475,16 @@ class AspectRatioSelectView(OwnerLockedView):
             )
         )
 
-
 class StarterModelSelect(discord.ui.Select):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         self.session = session
         self.channel_id = channel_id
-        options = build_model_options(channel_id)
 
         super().__init__(
             placeholder="🎨 Choose your model...",
             min_values=1,
             max_values=1,
-            options=options,
+            options=build_model_options(channel_id),
             custom_id=f"venice_model_select:{channel_id}",
         )
 
@@ -490,6 +492,7 @@ class StarterModelSelect(discord.ui.Select):
         model_id = self.values[0]
         hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
 
+        # post aspect dropdown first
         await interaction.response.send_message(
             content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
@@ -502,12 +505,18 @@ class StarterModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
+        # then remove model dropdown post in recent 10 if present
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.delete_recent_model_dropdown_posts(
+                interaction.channel,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                limit=RECENT_SCAN_LIMIT
+            )
 
 class StarterView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
         self.add_item(StarterModelSelect(session, channel_id))
-
 
 class VeniceModal(discord.ui.Modal):
     def __init__(
@@ -528,9 +537,8 @@ class VeniceModal(discord.ui.Modal):
 
         cfg = MODEL_CONFIG[model_id]
         fixed_steps = cfg["default_steps"] == cfg["max_steps"]
-        ratio_label = ASPECT_LABELS.get(ratio, ratio)
 
-        super().__init__(title=f"{get_model_label(model_id)} • {ratio_label}")
+        super().__init__(title=f"{get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}")
 
         self.prompt = discord.ui.TextInput(
             label="Describe your image",
@@ -539,7 +547,6 @@ class VeniceModal(discord.ui.Modal):
             max_length=min(cfg["prompt_limit"], 4000),
             default=self.previous_inputs.get("prompt", ""),
         )
-
         self.negative_prompt = discord.ui.TextInput(
             label="Negative prompt (optional)",
             style=discord.TextStyle.short,
@@ -547,7 +554,6 @@ class VeniceModal(discord.ui.Modal):
             max_length=800,
             default=self.previous_inputs.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT,
         )
-
         self.cfg_value = discord.ui.TextInput(
             label="CFG scale",
             style=discord.TextStyle.short,
@@ -556,7 +562,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=str(cfg["cfg_scale"]),
             default=self.previous_inputs.get("cfg_value", ""),
         )
-
         self.steps_value = discord.ui.TextInput(
             label=f"Steps (fixed: {cfg['default_steps']})" if fixed_steps else f"Steps (1-{cfg['max_steps']})",
             style=discord.TextStyle.short,
@@ -565,7 +570,6 @@ class VeniceModal(discord.ui.Modal):
             placeholder=str(cfg["default_steps"]),
             default=str(self.previous_inputs.get("steps")) if self.previous_inputs.get("steps") else "",
         )
-
         self.hidden_suffix = discord.ui.TextInput(
             label="Hidden suffix",
             style=discord.TextStyle.paragraph,
@@ -622,17 +626,15 @@ class VeniceModal(discord.ui.Modal):
             },
         }
 
-        ratio_label = ASPECT_LABELS.get(self.ratio, self.ratio)
         await interaction.response.send_message(
             content=(
-                f"✅ {get_model_label(self.model_id)} • {ratio_label}\n"
+                f"✅ {get_model_label(self.model_id)} • {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
                 f"{build_resolution_hint()}\n"
                 "Choose resolution:"
             ),
             view=ResolutionSelectView(self.session, generation_data),
             ephemeral=True
         )
-
 
 class ResolutionSelectView(OwnerLockedView):
     def __init__(self, session: aiohttp.ClientSession, generation_data: dict[str, Any]):
@@ -660,7 +662,6 @@ class ResolutionSelectView(OwnerLockedView):
                 return
 
             await self.generate_image(interaction, resolution=resolution)
-
         return callback
 
     async def generate_image(self, interaction: discord.Interaction, resolution: str):
@@ -710,7 +711,10 @@ class ResolutionSelectView(OwnerLockedView):
         if not image_bytes:
             await interaction.followup.send("❌ Generation failed.", ephemeral=True)
             if isinstance(interaction.channel, discord.TextChannel):
-                await VeniceCog.ensure_starter_message_static(interaction.channel, self.session)
+                await VeniceCog.ensure_starter_message_static(
+                    interaction.channel, self.session,
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None)
+                )
             self.stop()
             return
 
@@ -723,9 +727,11 @@ class ResolutionSelectView(OwnerLockedView):
         fp.seek(0)
         dfile = discord.File(fp, filename=make_safe_filename(prompt_text))
 
-        today = datetime.now().strftime("%Y-%m-%d")
         embed = discord.Embed(color=discord.Color.blurple())
-        embed.set_author(name=f"{interaction.user.display_name} ({today})", icon_url=interaction.user.display_avatar.url)
+        embed.set_author(
+            name=f"{interaction.user.display_name} ({datetime.now().strftime('%Y-%m-%d')})",
+            icon_url=interaction.user.display_avatar.url
+        )
 
         prompt_preview = (prompt_text or "").replace("\n\n", "\n")
         if len(prompt_preview) > 600:
@@ -743,9 +749,8 @@ class ResolutionSelectView(OwnerLockedView):
         embed.set_image(url=f"attachment://{dfile.filename}")
 
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
-        ratio_text = ASPECT_LABELS.get(ratio, ratio)
         embed.set_footer(
-            text=f"{get_model_label(model_id)} | Ratio: {ratio_text} | Res: {resolution} | CFG: {cfg_val} | Steps: {steps}",
+            text=f"{get_model_label(model_id)} | Ratio: {ASPECT_LABELS.get(ratio, ratio)} | Res: {resolution} | CFG: {cfg_val} | Steps: {steps}",
             icon_url=guild_icon
         )
 
@@ -781,10 +786,12 @@ class ResolutionSelectView(OwnerLockedView):
         )
 
         if isinstance(interaction.channel, discord.TextChannel):
-            await VeniceCog.ensure_starter_message_static(interaction.channel, self.session)
+            await VeniceCog.ensure_starter_message_static(
+                interaction.channel, self.session,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None)
+            )
 
         self.stop()
-
 
 # -------------------------------------------------
 # REUSE FLOW
@@ -797,17 +804,16 @@ class ReuseModelSelect(discord.ui.Select):
         self.previous_inputs = previous_inputs
         self.hidden_suffix = hidden_suffix
 
-        options = build_model_options(channel_id)
-
         super().__init__(
             placeholder="♻️ Re-use with model...",
             min_values=1,
             max_values=1,
-            options=options
+            options=build_model_options(channel_id)
         )
 
     async def callback(self, interaction: discord.Interaction):
         model_id = self.values[0]
+
         await interaction.response.send_message(
             content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
@@ -820,6 +826,13 @@ class ReuseModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
+        # requested logic: when aspect dropdown is posted, remove model dropdown if present in last 10
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.delete_recent_model_dropdown_posts(
+                interaction.channel,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                limit=RECENT_SCAN_LIMIT
+            )
 
 class ReuseModelSelectView(OwnerLockedView):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int, owner_id: int, previous_inputs: dict[str, Any], hidden_suffix: str):
@@ -833,7 +846,6 @@ class ReuseModelSelectView(OwnerLockedView):
                 hidden_suffix=hidden_suffix
             )
         )
-
 
 class PostGenerationView(OwnerLockedView):
     def __init__(self, session: aiohttp.ClientSession, author_id: int, source_message: discord.Message, channel_id: int, previous_inputs: dict[str, Any], hidden_suffix: str):
@@ -883,28 +895,6 @@ class PostGenerationView(OwnerLockedView):
             pass
         await self.reuse_callback(interaction)
 
-
-# -------------------------------------------------
-# STARTER MESSAGE HELPERS
-# -------------------------------------------------
-async def refresh_starter_message(channel: discord.TextChannel, session: aiohttp.ClientSession, bot_user_id: Optional[int] = None):
-    lock = get_starter_lock(channel.id)
-    async with lock:
-        async for msg in channel.history(limit=50):
-            if msg.content != BUTTON_MESSAGE_TEXT:
-                continue
-            if not msg.components or msg.embeds or msg.attachments:
-                continue
-            if bot_user_id is not None and msg.author.id != bot_user_id:
-                continue
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-
-        await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
-
-
 # -------------------------------------------------
 # COG
 # -------------------------------------------------
@@ -925,7 +915,7 @@ class VeniceCog(commands.Cog):
     async def cog_load(self):
         await self._ensure_session()
 
-        # register persistent starter views for all allowed channels
+        # persistent starter dropdowns for each channel
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
@@ -933,20 +923,66 @@ class VeniceCog(commands.Cog):
         if self.session and not self.session.closed:
             asyncio.create_task(self.session.close())
 
-    async def ensure_starter_message(self, channel: discord.TextChannel):
-        try:
-            await refresh_starter_message(channel, self.session, bot_user_id=(self.bot.user.id if self.bot.user else None))
-        except discord.Forbidden:
-            logger.warning("Missing permissions in channel %s", channel.id)
-        except Exception as e:
-            logger.warning("ensure_starter_message failed in channel %s: %s", channel.id, e)
+    @staticmethod
+    async def _delete_recent_model_dropdown_posts_unlocked(
+        channel: discord.TextChannel,
+        bot_user_id: Optional[int],
+        limit: int
+    ) -> int:
+        deleted = 0
+        async for msg in channel.history(limit=limit):
+            if bot_user_id is not None and msg.author.id != bot_user_id:
+                continue
+            if is_model_dropdown_message(msg):
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except Exception:
+                    pass
+        return deleted
 
     @staticmethod
-    async def ensure_starter_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession):
-        try:
-            await refresh_starter_message(channel, session, bot_user_id=None)
-        except Exception:
-            pass
+    async def delete_recent_model_dropdown_posts(
+        channel: discord.TextChannel,
+        bot_user_id: Optional[int],
+        limit: int = RECENT_SCAN_LIMIT
+    ) -> int:
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            return await VeniceCog._delete_recent_model_dropdown_posts_unlocked(channel, bot_user_id, limit)
+
+    async def ensure_starter_message(self, channel: discord.TextChannel):
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            try:
+                await self._delete_recent_model_dropdown_posts_unlocked(
+                    channel,
+                    bot_user_id=(self.bot.user.id if self.bot.user else None),
+                    limit=RECENT_SCAN_LIMIT
+                )
+                await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(self.session, channel.id))
+            except discord.Forbidden:
+                logger.warning("Missing permissions in channel %s", channel.id)
+            except Exception as e:
+                logger.warning("ensure_starter_message failed in channel %s: %s", channel.id, e)
+
+    @staticmethod
+    async def ensure_starter_message_static(
+        channel: discord.TextChannel,
+        session: aiohttp.ClientSession,
+        bot_user_id: Optional[int]
+    ):
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            try:
+                await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
+                    channel,
+                    bot_user_id=bot_user_id,
+                    limit=RECENT_SCAN_LIMIT
+                )
+                await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
+            except Exception:
+                pass
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -961,7 +997,6 @@ class VeniceCog(commands.Cog):
                 for channel in guild.text_channels:
                     if channel.id in ALLOWED_CHANNEL_IDS:
                         await self.ensure_starter_message(channel)
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VeniceCog(bot))
