@@ -534,7 +534,7 @@ class RiddleCog(commands.Cog):
             return
 
         next_number = await self.get_next_riddle_number()
-        title = f"Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊 No. {next_number} ({now_date_str()})"
+        title = f"🧠 Ms Pepper's 🧩𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊 #️⃣{next_number} \n*({now_date_str()})*"
 
         image_url = riddle.get("image-url") or DEFAULT_IMAGE_URL
         if not str(image_url).startswith("http"):
