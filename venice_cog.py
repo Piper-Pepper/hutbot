@@ -36,13 +36,11 @@ LEGACY_STARTER_TEXTS = {
     "💡 Choose Model for 🖼️ NEW image!",
     "💡 Choose a model for a new image!",
 }
+RECENT_SCAN_LIMIT = 10
 
 SURPRISE_VALUE = "__surprise_me__"
 SURPRISE_LABEL = "🎲 Surprise me"
 NO_MODEL_VALUE = "__no_models__"
-
-STARTER_STATE_FILE = os.getenv("VENICE_STARTER_STATE_FILE", "venice_starter_state.json")
-TIMING_CACHE_FILE = os.getenv("VENICE_TIMING_CACHE_FILE", "venice_timing_cache.json")
 
 logger = logging.getLogger("venice_picture_bot")
 
@@ -98,7 +96,7 @@ RESOLUTION_TIERS = ["1K", "2K", "4K"]
 FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]
 
 # =================================================
-# MODEL CONFIG
+# MODEL CONFIG (API-first with robust baseline)
 # =================================================
 CURATED_IMAGE_MODELS = [
     "hidream",
@@ -167,6 +165,7 @@ DEFAULT_MODEL_ROW = {
     "speed_factor": 1.0,
 }
 
+# fallback if /models sync fails
 BASELINE_CAPS = {
     "hidream": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
     "flux-2-max": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", "1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
@@ -205,6 +204,7 @@ MODEL_CONFIG: dict[str, dict[str, Any]] = {
 
 MODEL_ORDER = CURATED_IMAGE_MODELS[:]
 DISABLED_MODELS: set[str] = set()
+
 EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "lustify-sdxl", "bria-bg-remover"}
 
 UNCENSORED_MODELS = {
@@ -217,7 +217,6 @@ UNCENSORED_MODELS = {
     "seedream-v5-lite",
     "wan-2-7-text-to-image",
     "wan-2-7-pro-text-to-image",
-    "wai-Illustrious",
 }
 
 # =================================================
@@ -229,25 +228,11 @@ UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
 
 TIMING_EWMA: dict[str, float] = defaultdict(float)
 TIMING_N: dict[str, int] = defaultdict(int)
+
+TIMING_CACHE_FILE = os.getenv("VENICE_TIMING_CACHE_FILE", "venice_timing_cache.json")
 _TIMING_DIRTY_COUNT = 0
 
-# =================================================
-# LOCKS
-# =================================================
-_channel_locks: dict[int, asyncio.Lock] = {}
 
-
-def get_channel_lock(channel_id: int) -> asyncio.Lock:
-    lock = _channel_locks.get(channel_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _channel_locks[channel_id] = lock
-    return lock
-
-
-# =================================================
-# HELPERS
-# =================================================
 def _timing_key(model_id: str, target_res: str, upscale_factor: Optional[int]) -> str:
     return f"{model_id}|{target_res}|up{upscale_factor or 1}"
 
@@ -303,10 +288,28 @@ def timing_update(model_id: str, target_res: str, upscale_factor: Optional[int],
     TIMING_EWMA[k] = measured_seconds if old <= 0 else (alpha * measured_seconds + (1 - alpha) * old)
     TIMING_N[k] += 1
     _TIMING_DIRTY_COUNT += 1
+
     if _TIMING_DIRTY_COUNT >= 10:
         save_timing_cache()
 
 
+# =================================================
+# LOCKS
+# =================================================
+_channel_locks: dict[int, asyncio.Lock] = {}
+
+
+def get_channel_lock(channel_id: int) -> asyncio.Lock:
+    lock = _channel_locks.get(channel_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _channel_locks[channel_id] = lock
+    return lock
+
+
+# =================================================
+# HELPERS
+# =================================================
 def _safe_float(v: Any, default: Optional[float] = 0.0) -> Optional[float]:
     try:
         return float(v)
@@ -326,14 +329,18 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def _resolution_sort_key(x: str) -> int:
-    return RESOLUTION_TIERS.index(x) if x in RESOLUTION_TIERS else 999
+    if x in RESOLUTION_TIERS:
+        return RESOLUTION_TIERS.index(x)
+    return 999
 
 
 def _eta_text(seconds_float: float) -> str:
     s = max(0, int(round(seconds_float)))
     if s < 60:
         return f"{s}s"
-    return f"{s // 60}m {s % 60}s"
+    m = s // 60
+    r = s % 60
+    return f"{m}m {r}s"
 
 
 def get_active_model_ids() -> list[str]:
@@ -415,7 +422,9 @@ def is_model_dropdown_message(msg: discord.Message) -> bool:
     for row in msg.components:
         for child in row.children:
             cid = getattr(child, "custom_id", None)
-            if isinstance(cid, str) and cid.startswith("venice_model_select:"):
+            if isinstance(cid, str) and (
+                cid.startswith("venice_model_select:") or cid.startswith("venice_model_select_")
+            ):
                 return True
 
     return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
@@ -429,9 +438,19 @@ def has_role(member: discord.Member, role_id: int) -> bool:
     return any(r.id == role_id for r in member.roles)
 
 
+def resolution_native_supported(model_id: str, resolution: str) -> bool:
+    return resolution in set(MODEL_CONFIG[model_id]["resolutions"])
+
+
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
+    """
+    Returns (generation_resolution, upscale_factor).
+    Native-first logic:
+    if wanted resolution is natively supported => no upscale.
+    """
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
+    # universal native-first
     if wanted_resolution in native:
         return wanted_resolution, None
 
@@ -492,23 +511,34 @@ def build_generate_payload(
 
 def build_resolution_hint(model_id: str) -> str:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
+
     if not native:
         return "1K is native for this model. 2K/4K are delivered via upscale."
 
     native_sorted = sorted(native, key=_resolution_sort_key)
     parts = [f"Native: {', '.join(native_sorted)}"]
-    parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>" if "2K" in native else "2K via upscale")
-    parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>" if "4K" in native else "4K via upscale")
+
+    if "2K" in native:
+        parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
+    else:
+        parts.append("2K via upscale")
+
+    if "4K" in native:
+        parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
+    else:
+        parts.append("4K via upscale")
+
     parts.append("Earn XP in the server to unlock higher tiers.")
     return " • ".join(parts)
 
 
 def build_surprise_embed(model_id: str, ratio: str) -> discord.Embed:
-    return discord.Embed(
+    emb = discord.Embed(
         title="🎲 Surprise pick!",
         description=f"**Model:** {get_model_label(model_id)}\n**Aspect Ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
         color=discord.Color.purple(),
     )
+    return emb
 
 
 def estimate_generation_seconds(
@@ -526,13 +556,17 @@ def estimate_generation_seconds(
     prompt_f = 1.0 + min(prompt_len, 4000) / 8000.0
     cfg_f = 1.0 + max(0.0, cfg_scale - 5.0) * 0.02
     res_f = NATIVE_RES_TIME_FACTOR.get(generation_resolution or "1K", 1.0)
-    return max(6.0, min(base * model_f * steps_f * prompt_f * cfg_f * res_f, 240.0))
+    est = base * model_f * steps_f * prompt_f * cfg_f * res_f
+    return max(6.0, min(est, 240.0))
 
 
 def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> float:
     if scale not in (2, 4):
         return 0.0
-    return max(4.0, min(UPSCALE_BASE_SECONDS.get(scale, 10.0) * UPSCALE_TARGET_FACTOR.get(target_resolution, 1.0), 180.0))
+    base = UPSCALE_BASE_SECONDS.get(scale, 10.0)
+    target_f = UPSCALE_TARGET_FACTOR.get(target_resolution, 1.0)
+    est = base * target_f
+    return max(4.0, min(est, 180.0))
 
 
 def _looks_like_image(b: bytes) -> bool:
@@ -573,15 +607,18 @@ def _extract_image_from_json_obj(obj: Any) -> Optional[bytes]:
             out = _extract_image_from_json_obj(val)
             if out:
                 return out
+
     elif isinstance(obj, list):
         for item in obj[:16]:
             out = _extract_image_from_json_obj(item)
             if out:
                 return out
+
     elif isinstance(obj, str):
         out = _b64_to_bytes(obj)
         if out and _looks_like_image(out):
             return out
+
     return None
 
 
@@ -598,7 +635,9 @@ async def _extract_image_from_response(resp: aiohttp.ClientResponse) -> Optional
         return raw if _looks_like_image(raw) else None
 
     out = _extract_image_from_json_obj(data)
-    return out if out and _looks_like_image(out) else None
+    if out and _looks_like_image(out):
+        return out
+    return None
 
 
 def _is_deprecated(model_obj: dict[str, Any]) -> bool:
@@ -607,7 +646,8 @@ def _is_deprecated(model_obj: dict[str, Any]) -> bool:
     if not d:
         return False
     try:
-        return datetime.fromisoformat(d.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+        dt = datetime.fromisoformat(d.replace("Z", "+00:00"))
+        return dt <= datetime.now(timezone.utc)
     except Exception:
         return False
 
@@ -624,6 +664,7 @@ def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
     if isinstance(res, dict) and res:
         if "1K" in res and isinstance(res["1K"], dict):
             return _safe_float(res["1K"].get("usd"), None)
+
         vals = []
         for _, row in res.items():
             if isinstance(row, dict) and "usd" in row:
@@ -632,17 +673,20 @@ def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
                     vals.append(v)
         if vals:
             return min(vals)
+
     return None
 
 
 def _calc_speed_factor_from_price(usd: Optional[float]) -> float:
     if usd is None or usd <= 0:
         return 1.0
-    return _clamp((usd / 0.05) ** 0.20, 0.70, 1.55)
+    factor = (usd / 0.05) ** 0.20
+    return _clamp(factor, 0.70, 1.55)
 
 
 def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> float:
     mid = model_id.lower()
+
     if "wai-illustrious" in mid or "anime" in mid:
         return 7.0
     if model_id == "qwen-image":
@@ -651,8 +695,10 @@ def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> floa
         return 6.0
     if width_div >= 16:
         return 6.8
+
     if any(x in mid for x in ["gpt-image", "recraft", "seedream", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "qwen-image-2"]):
         return 5.0
+
     return 5.4
 
 
@@ -697,8 +743,8 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
         payload = await resp.json(content_type=None)
 
     DISABLED_MODELS.clear()
-    api_models: dict[str, dict[str, Any]] = {}
 
+    api_models: dict[str, dict[str, Any]] = {}
     for m in payload.get("data", []):
         if m.get("type") != "image":
             continue
@@ -711,17 +757,17 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
             DISABLED_MODELS.add(mid)
             continue
 
-        model_obj = api_models.get(mid)
-        if not model_obj:
+        m = api_models.get(mid)
+        if not m:
             logger.warning("Model %s not found in API; using baseline fallback.", mid)
             continue
 
-        if _is_deprecated(model_obj):
+        if _is_deprecated(m):
             DISABLED_MODELS.add(mid)
             logger.info("Model disabled (deprecated): %s", mid)
             continue
 
-        MODEL_CONFIG[mid].update(_extract_image_caps(model_obj))
+        MODEL_CONFIG[mid].update(_extract_image_caps(m))
 
     if len(get_active_model_ids()) == 0:
         logger.warning("No active models after sync; re-enabling all curated fallback models.")
@@ -729,23 +775,10 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
 
 
 async def send_ephemeral(interaction: discord.Interaction, content: str):
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(content, ephemeral=True)
-        else:
-            await interaction.response.send_message(content, ephemeral=True)
-    except Exception:
-        pass
-
-
-async def send_interaction_error(interaction: discord.Interaction, message: str = "❌ Interaction failed. Please try again."):
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except Exception:
-        pass
+    if interaction.response.is_done():
+        await interaction.followup.send(content, ephemeral=True)
+    else:
+        await interaction.response.send_message(content, ephemeral=True)
 
 
 async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int):
@@ -756,56 +789,6 @@ async def send_resolution_lock_message(interaction: discord.Interaction, resolut
         f"You need <@&{role_id}> (**{level_name}**) to use this quality tier.\n"
         f"💡 Earn XP in the server to unlock this role."
     )
-
-
-async def remove_component_message(interaction: discord.Interaction, fallback_text: str):
-    msg = interaction.message
-    if not msg:
-        return
-    try:
-        await msg.delete()
-        return
-    except Exception:
-        pass
-    try:
-        await msg.edit(content=fallback_text, view=None)
-    except Exception:
-        pass
-
-
-async def hard_repost_starter_dropdown(
-    channel: discord.TextChannel,
-    session: aiohttp.ClientSession,
-    bot_user_id: Optional[int],
-    starter_state: Optional[dict[int, int]] = None,
-    history_limit: int = 200,
-) -> tuple[int, int]:
-    """
-    Guarantees newest starter dropdown:
-    1) post new
-    2) delete old starter dropdown posts
-    """
-    lock = get_channel_lock(channel.id)
-    async with lock:
-        new_msg = await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
-
-        deleted = 0
-        async for msg in channel.history(limit=history_limit):
-            if msg.id == new_msg.id:
-                continue
-            if bot_user_id is not None and msg.author.id != bot_user_id:
-                continue
-            if is_model_dropdown_message(msg):
-                try:
-                    await msg.delete()
-                    deleted += 1
-                except Exception:
-                    pass
-
-        if starter_state is not None:
-            starter_state[channel.id] = new_msg.id
-
-        return new_msg.id, deleted
 
 
 # =================================================
@@ -829,6 +812,7 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
                 return None
+
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.warning("Venice generate request failed (attempt %s): %s", attempt + 1, e)
             if attempt < retries:
@@ -848,6 +832,7 @@ async def _upscale_once(
     retries: int = 2
 ) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
+
     if not _looks_like_image(image_bytes):
         logger.warning("Upscale input is not a valid image")
         return None
@@ -890,12 +875,13 @@ async def venice_upscale(
         first = await _upscale_once(session, image_bytes, 2, retries=retries)
         if not first:
             return None
-        return await _upscale_once(session, first, 2, retries=retries)
+        second = await _upscale_once(session, first, 2, retries=retries)
+        return second
     return await _upscale_once(session, image_bytes, scale, retries=retries)
 
 
 # =================================================
-# VIEWS
+# OWNER LOCKED BASE VIEW
 # =================================================
 class OwnerLockedView(discord.ui.View):
     def __init__(self, owner_id: int, timeout: Optional[float] = 900):
@@ -908,11 +894,10 @@ class OwnerLockedView(discord.ui.View):
             return False
         return True
 
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        logger.exception("OwnerLockedView interaction error: %s", error)
-        await send_interaction_error(interaction)
 
-
+# =================================================
+# FLOW: MODEL -> ASPECT -> MODAL -> RESOLUTION
+# =================================================
 class AspectRatioSelect(discord.ui.Select):
     def __init__(
         self,
@@ -928,7 +913,10 @@ class AspectRatioSelect(discord.ui.Select):
         self.owner_id = owner_id
         self.previous_inputs = previous_inputs or {}
 
-        options = [discord.SelectOption(label=ASPECT_LABELS.get(r, r), value=r) for r in get_model_ratios(model_id)][:25]
+        options = [
+            discord.SelectOption(label=ASPECT_LABELS.get(r, r), value=r)
+            for r in get_model_ratios(model_id)
+        ][:25]
 
         super().__init__(
             placeholder="📐 Choose aspect ratio...",
@@ -944,6 +932,8 @@ class AspectRatioSelect(discord.ui.Select):
             return
 
         ratio = self.values[0]
+        source_msg = interaction.message
+
         await interaction.response.send_modal(
             GenerationModal(
                 session=self.session,
@@ -954,7 +944,12 @@ class AspectRatioSelect(discord.ui.Select):
                 previous_inputs=self.previous_inputs,
             )
         )
-        await remove_component_message(interaction, "✅ Aspect ratio selected.")
+
+        if source_msg:
+            try:
+                await source_msg.edit(view=None, content="✅ Aspect ratio selected.")
+            except Exception:
+                pass
 
 
 class AspectRatioSelectView(OwnerLockedView):
@@ -982,6 +977,7 @@ class StarterModelSelect(discord.ui.Select):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         self.session = session
         self.channel_id = channel_id
+
         super().__init__(
             placeholder="🎨 Choose your model...",
             min_values=1,
@@ -993,10 +989,6 @@ class StarterModelSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
         hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
-
-        if selected not in (SURPRISE_VALUE, NO_MODEL_VALUE) and selected not in MODEL_CONFIG:
-            await send_ephemeral(interaction, "❌ This model is no longer available.")
-            return
 
         if selected == NO_MODEL_VALUE:
             await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
@@ -1021,36 +1013,48 @@ class StarterModelSelect(discord.ui.Select):
                     previous_inputs=None
                 )
             )
+
             try:
                 await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
+
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.delete_recent_model_dropdown_posts(
+                    interaction.channel,
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                    limit=RECENT_SCAN_LIMIT
+                )
             return
 
         if selected in DISABLED_MODELS:
             await send_ephemeral(interaction, "❌ Dieses Modell ist deaktiviert.")
             return
 
+        model_id = selected
         await interaction.response.send_message(
-            content=f"{get_model_label(selected)} selected. Now choose an aspect ratio:",
+            content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
                 session=self.session,
-                model_id=selected,
+                model_id=model_id,
                 hidden_suffix=hidden_suffix,
                 owner_id=interaction.user.id,
             ),
             ephemeral=True
         )
 
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.delete_recent_model_dropdown_posts(
+                interaction.channel,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                limit=RECENT_SCAN_LIMIT
+            )
+
 
 class StarterView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
         self.add_item(StarterModelSelect(session, channel_id))
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        logger.exception("StarterView interaction error: %s", error)
-        await send_interaction_error(interaction)
 
 
 class GenerationModal(discord.ui.Modal):
@@ -1072,6 +1076,7 @@ class GenerationModal(discord.ui.Modal):
 
         cfg = MODEL_CONFIG[model_id]
         fixed_steps = cfg["default_steps"] == cfg["max_steps"]
+
         super().__init__(title=f"{get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}")
 
         self.prompt = discord.ui.TextInput(
@@ -1185,8 +1190,15 @@ class ResolutionSelectView(OwnerLockedView):
         native = set(MODEL_CONFIG[model_id]["resolutions"])
 
         for res in RESOLUTION_TIERS:
-            label = f"{res} ↗" if res not in native and res in ("2K", "4K") else res
-            style = discord.ButtonStyle.success if res == "1K" else discord.ButtonStyle.primary if res == "2K" else discord.ButtonStyle.danger
+            label = res
+            if res not in native and res in ("2K", "4K"):
+                label = f"{res} ↗"
+
+            style = (
+                discord.ButtonStyle.success if res == "1K"
+                else discord.ButtonStyle.primary if res == "2K"
+                else discord.ButtonStyle.danger
+            )
 
             btn = discord.ui.Button(
                 label=label,
@@ -1209,8 +1221,15 @@ class ResolutionSelectView(OwnerLockedView):
                 return
 
             await interaction.response.defer(ephemeral=True)
-            await remove_component_message(interaction, "✅ Resolution selected.")
+
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=None, content="✅ Resolution selected.")
+                except Exception:
+                    pass
+
             await self.generate_image(interaction, resolution=resolution)
+
         return callback
 
     async def generate_image(self, interaction: discord.Interaction, resolution: str):
@@ -1232,8 +1251,18 @@ class ResolutionSelectView(OwnerLockedView):
         full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
 
         gen_res, upscale_factor = generation_plan(model_id, resolution)
+        # extra safety: if target native, never upscale
         if gen_res == resolution:
             upscale_factor = None
+
+        logger.info(
+            "PLAN model=%s target=%s native=%s => gen_res=%s upscale=%s",
+            model_id,
+            resolution,
+            MODEL_CONFIG[model_id]["resolutions"],
+            gen_res,
+            upscale_factor
+        )
 
         payload = build_generate_payload(
             model_id=model_id,
@@ -1246,21 +1275,20 @@ class ResolutionSelectView(OwnerLockedView):
         )
 
         effective_gen_res = gen_res or "1K"
-        est_gen = timing_get_estimate(
-            model_id,
-            effective_gen_res,
-            None,
-            estimate_generation_seconds(model_id, steps, cfg_val, len(prompt_text or ""), effective_gen_res)
+
+        est_gen_fallback = estimate_generation_seconds(
+            model_id=model_id,
+            steps=steps,
+            cfg_scale=cfg_val,
+            prompt_len=len(prompt_text or ""),
+            generation_resolution=effective_gen_res,
         )
+        est_gen = timing_get_estimate(model_id, effective_gen_res, None, est_gen_fallback)
 
         est_up = 0.0
         if upscale_factor in (2, 4):
-            est_up = timing_get_estimate(
-                model_id,
-                resolution,
-                upscale_factor,
-                estimate_upscale_seconds(upscale_factor, resolution)
-            )
+            est_up_fallback = estimate_upscale_seconds(upscale_factor, resolution)
+            est_up = timing_get_estimate(model_id, resolution, upscale_factor, est_up_fallback)
 
         gen_cap = 82 if upscale_factor in (2, 4) else 97
         progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True)
@@ -1271,6 +1299,8 @@ class ResolutionSelectView(OwnerLockedView):
 
         while not gen_task.done():
             elapsed = time.monotonic() - gen_started
+
+            # adaptive stretch to avoid getting "stuck" at same %
             if elapsed > est_gen * 1.15:
                 est_gen = elapsed * 1.20
 
@@ -1293,6 +1323,12 @@ class ResolutionSelectView(OwnerLockedView):
 
         if not image_bytes:
             await interaction.followup.send("❌ Generation failed.", ephemeral=True)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.ensure_starter_message_static(
+                    interaction.channel,
+                    self.session,
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None)
+                )
             self.stop()
             return
 
@@ -1308,6 +1344,7 @@ class ResolutionSelectView(OwnerLockedView):
 
             while not up_task.done():
                 up_elapsed = time.monotonic() - up_started
+
                 if up_elapsed > est_up * 1.15:
                     est_up = up_elapsed * 1.20
 
@@ -1396,26 +1433,6 @@ class ResolutionSelectView(OwnerLockedView):
             except Exception:
                 pass
 
-        # HARD bump (always)
-        if isinstance(interaction.channel, discord.TextChannel) and interaction.channel.id in ALLOWED_CHANNEL_IDS:
-            try:
-                cog = interaction.client.get_cog("VeniceCog")
-                state_ref = cog.starter_message_ids if cog and hasattr(cog, "starter_message_ids") else None
-
-                new_id, deleted = await hard_repost_starter_dropdown(
-                    channel=interaction.channel,
-                    session=self.session,
-                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
-                    starter_state=state_ref,
-                )
-
-                if cog and hasattr(cog, "_save_starter_state"):
-                    cog._save_starter_state()
-
-                logger.info("HARD BUMP OK channel=%s new=%s deleted=%s", interaction.channel.id, new_id, deleted)
-            except Exception as e:
-                logger.exception("HARD BUMP FAILED channel=%s err=%s", interaction.channel.id, e)
-
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
@@ -1428,6 +1445,13 @@ class ResolutionSelectView(OwnerLockedView):
             ),
             ephemeral=True
         )
+
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.ensure_starter_message_static(
+                interaction.channel,
+                self.session,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None)
+            )
 
         self.stop()
 
@@ -1460,10 +1484,6 @@ class ReuseModelSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
 
-        if selected not in (SURPRISE_VALUE, NO_MODEL_VALUE) and selected not in MODEL_CONFIG:
-            await send_ephemeral(interaction, "❌ This model is no longer available.")
-            return
-
         if selected == NO_MODEL_VALUE:
             await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
             return
@@ -1492,6 +1512,13 @@ class ReuseModelSelect(discord.ui.Select):
                 await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
+
+            if isinstance(interaction.channel, discord.TextChannel):
+                await VeniceCog.delete_recent_model_dropdown_posts(
+                    interaction.channel,
+                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                    limit=RECENT_SCAN_LIMIT
+                )
             return
 
         if selected in DISABLED_MODELS:
@@ -1510,6 +1537,13 @@ class ReuseModelSelect(discord.ui.Select):
             ),
             ephemeral=True
         )
+
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.delete_recent_model_dropdown_posts(
+                interaction.channel,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
+                limit=RECENT_SCAN_LIMIT
+            )
 
 
 class ReuseModelSelectView(OwnerLockedView):
@@ -1599,7 +1633,6 @@ class VeniceCog(commands.Cog):
         self.session: Optional[aiohttp.ClientSession] = None
         self._ready_bootstrap_done = False
         self._ready_lock = asyncio.Lock()
-        self.starter_message_ids: dict[int, int] = {}
 
     async def _ensure_session(self):
         if self.session and not self.session.closed:
@@ -1608,146 +1641,17 @@ class VeniceCog(commands.Cog):
         connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
-    def _load_starter_state(self):
-        try:
-            if not os.path.exists(STARTER_STATE_FILE):
-                return
-            with open(STARTER_STATE_FILE, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            self.starter_message_ids = {int(k): int(v) for k, v in (raw or {}).items()}
-            logger.info("Starter state loaded (%s channels)", len(self.starter_message_ids))
-        except Exception as e:
-            logger.warning("Failed loading starter state: %s", e)
-            self.starter_message_ids = {}
-
-    def _save_starter_state(self):
-        try:
-            raw = {str(k): int(v) for k, v in self.starter_message_ids.items()}
-            with open(STARTER_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(raw, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.warning("Failed saving starter state: %s", e)
-
-    async def _fetch_message_safe(self, channel: discord.TextChannel, message_id: int) -> Optional[discord.Message]:
-        try:
-            return await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            return None
-        except Exception:
-            return None
-
-    async def _find_existing_starters(self, channel: discord.TextChannel, limit: int = 100) -> list[discord.Message]:
-        bot_id = self.bot.user.id if self.bot.user else None
-        out: list[discord.Message] = []
-        async for msg in channel.history(limit=limit):
-            if bot_id is not None and msg.author.id != bot_id:
-                continue
-            if is_model_dropdown_message(msg):
-                out.append(msg)
-        return out
-
-    async def ensure_single_starter_message(self, channel: discord.TextChannel):
-        if channel.id not in ALLOWED_CHANNEL_IDS:
-            return
-
-        lock = get_channel_lock(channel.id)
-        async with lock:
-            keep_msg: Optional[discord.Message] = None
-
-            saved_id = self.starter_message_ids.get(channel.id)
-            if saved_id:
-                fetched = await self._fetch_message_safe(channel, saved_id)
-                if fetched and is_model_dropdown_message(fetched):
-                    keep_msg = fetched
-
-            starters = await self._find_existing_starters(channel, limit=100)
-
-            if keep_msg is None and starters:
-                starters.sort(key=lambda m: m.created_at, reverse=True)
-                keep_msg = starters[0]
-
-            if keep_msg is None:
-                try:
-                    new_id, _ = await hard_repost_starter_dropdown(
-                        channel=channel,
-                        session=self.session,
-                        bot_user_id=(self.bot.user.id if self.bot.user else None),
-                        starter_state=self.starter_message_ids,
-                    )
-                    self._save_starter_state()
-                    keep_msg = await self._fetch_message_safe(channel, new_id)
-                except Exception as e:
-                    logger.warning("Failed creating starter in channel %s: %s", channel.id, e)
-                    return
-
-            keep_id = keep_msg.id if keep_msg else self.starter_message_ids.get(channel.id)
-
-            for msg in starters:
-                if keep_id and msg.id == keep_id:
-                    continue
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
-
-            if keep_id:
-                self.starter_message_ids[channel.id] = keep_id
-                self._save_starter_state()
-
-    async def ensure_starter_is_latest(self, channel: discord.TextChannel):
-        if channel.id not in ALLOWED_CHANNEL_IDS:
-            return
-
-        await self.ensure_single_starter_message(channel)
-
-        lock = get_channel_lock(channel.id)
-        async with lock:
-            starter_id = self.starter_message_ids.get(channel.id)
-            if not starter_id:
-                new_id, deleted = await hard_repost_starter_dropdown(
-                    channel=channel,
-                    session=self.session,
-                    bot_user_id=(self.bot.user.id if self.bot.user else None),
-                    starter_state=self.starter_message_ids,
-                )
-                self._save_starter_state()
-                logger.info("Startup bump (missing starter) channel=%s new=%s deleted=%s", channel.id, new_id, deleted)
-                return
-
-            starter_msg = await self._fetch_message_safe(channel, starter_id)
-            latest_msg = None
-            async for m in channel.history(limit=1):
-                latest_msg = m
-                break
-
-            if not starter_msg or not is_model_dropdown_message(starter_msg) or not latest_msg or latest_msg.id != starter_msg.id:
-                new_id, deleted = await hard_repost_starter_dropdown(
-                    channel=channel,
-                    session=self.session,
-                    bot_user_id=(self.bot.user.id if self.bot.user else None),
-                    starter_state=self.starter_message_ids,
-                )
-                self._save_starter_state()
-                logger.info("Startup bump (not latest) channel=%s new=%s deleted=%s", channel.id, new_id, deleted)
-
-    async def bump_starter_message(self, channel: discord.TextChannel):
-        new_id, deleted = await hard_repost_starter_dropdown(
-            channel=channel,
-            session=self.session,
-            bot_user_id=(self.bot.user.id if self.bot.user else None),
-            starter_state=self.starter_message_ids,
-        )
-        self._save_starter_state()
-        logger.info("bump_starter_message done channel=%s new=%s deleted=%s", channel.id, new_id, deleted)
-
     async def cog_load(self):
         await self._ensure_session()
         load_timing_cache()
-        self._load_starter_state()
 
         try:
             await sync_model_caps_from_api(self.session)
-            logger.info("Model sync done. Active=%s Disabled=%s", len(get_active_model_ids()), len(DISABLED_MODELS))
+            logger.info(
+                "Model sync done. Active=%s Disabled=%s",
+                len(get_active_model_ids()),
+                len(DISABLED_MODELS)
+            )
         except Exception as e:
             logger.warning("Model sync failed in cog_load: %s", e)
 
@@ -1755,10 +1659,70 @@ class VeniceCog(commands.Cog):
             self.bot.add_view(StarterView(self.session, channel_id))
 
     def cog_unload(self):
-        self._save_starter_state()
         save_timing_cache()
         if self.session and not self.session.closed:
             asyncio.create_task(self.session.close())
+
+    @staticmethod
+    async def _delete_recent_model_dropdown_posts_unlocked(
+        channel: discord.TextChannel,
+        bot_user_id: Optional[int],
+        limit: int
+    ) -> int:
+        deleted = 0
+        async for msg in channel.history(limit=limit):
+            if bot_user_id is not None and msg.author.id != bot_user_id:
+                continue
+            if is_model_dropdown_message(msg):
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except Exception:
+                    pass
+        return deleted
+
+    @staticmethod
+    async def delete_recent_model_dropdown_posts(
+        channel: discord.TextChannel,
+        bot_user_id: Optional[int],
+        limit: int = RECENT_SCAN_LIMIT
+    ) -> int:
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            return await VeniceCog._delete_recent_model_dropdown_posts_unlocked(channel, bot_user_id, limit)
+
+    async def ensure_starter_message(self, channel: discord.TextChannel):
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            try:
+                await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
+                    channel,
+                    bot_user_id=(self.bot.user.id if self.bot.user else None),
+                    limit=RECENT_SCAN_LIMIT
+                )
+                await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(self.session, channel.id))
+            except discord.Forbidden:
+                logger.warning("Missing permissions in channel %s", channel.id)
+            except Exception as e:
+                logger.warning("ensure_starter_message failed in channel %s: %s", channel.id, e)
+
+    @staticmethod
+    async def ensure_starter_message_static(
+        channel: discord.TextChannel,
+        session: aiohttp.ClientSession,
+        bot_user_id: Optional[int]
+    ):
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            try:
+                await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
+                    channel,
+                    bot_user_id=bot_user_id,
+                    limit=RECENT_SCAN_LIMIT
+                )
+                await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
+            except Exception:
+                pass
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -1772,75 +1736,7 @@ class VeniceCog(commands.Cog):
             for guild in self.bot.guilds:
                 for channel in guild.text_channels:
                     if channel.id in ALLOWED_CHANNEL_IDS:
-                        await self.ensure_starter_is_latest(channel)
-
-    @commands.Cog.listener()
-    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
-        channel_id = payload.channel_id
-        message_id = payload.message_id
-
-        if channel_id not in ALLOWED_CHANNEL_IDS:
-            return
-
-        tracked = self.starter_message_ids.get(channel_id)
-        if tracked != message_id:
-            return
-
-        self.starter_message_ids.pop(channel_id, None)
-        self._save_starter_state()
-
-        ch = self.bot.get_channel(channel_id)
-        if ch is None:
-            try:
-                ch = await self.bot.fetch_channel(channel_id)
-            except Exception:
-                return
-
-        if isinstance(ch, discord.TextChannel):
-            try:
-                new_id, deleted = await hard_repost_starter_dropdown(
-                    channel=ch,
-                    session=self.session,
-                    bot_user_id=(self.bot.user.id if self.bot.user else None),
-                    starter_state=self.starter_message_ids,
-                )
-                self._save_starter_state()
-                logger.info("Recreated starter after delete channel=%s new=%s deleted=%s", ch.id, new_id, deleted)
-            except Exception as e:
-                logger.warning("Failed recreate starter on delete channel=%s err=%s", ch.id, e)
-
-    @commands.Cog.listener()
-    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
-        channel_id = payload.channel_id
-        if channel_id not in ALLOWED_CHANNEL_IDS:
-            return
-
-        tracked = self.starter_message_ids.get(channel_id)
-        if tracked is None or tracked not in payload.message_ids:
-            return
-
-        self.starter_message_ids.pop(channel_id, None)
-        self._save_starter_state()
-
-        ch = self.bot.get_channel(channel_id)
-        if ch is None:
-            try:
-                ch = await self.bot.fetch_channel(channel_id)
-            except Exception:
-                return
-
-        if isinstance(ch, discord.TextChannel):
-            try:
-                new_id, deleted = await hard_repost_starter_dropdown(
-                    channel=ch,
-                    session=self.session,
-                    bot_user_id=(self.bot.user.id if self.bot.user else None),
-                    starter_state=self.starter_message_ids,
-                )
-                self._save_starter_state()
-                logger.info("Recreated starter after bulk delete channel=%s new=%s deleted=%s", ch.id, new_id, deleted)
-            except Exception as e:
-                logger.warning("Failed recreate starter on bulk delete channel=%s err=%s", ch.id, e)
+                        await self.ensure_starter_message(channel)
 
 
 async def setup(bot: commands.Bot):
