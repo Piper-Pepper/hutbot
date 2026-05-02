@@ -217,6 +217,7 @@ UNCENSORED_MODELS = {
     "seedream-v5-lite",
     "wan-2-7-text-to-image",
     "wan-2-7-pro-text-to-image",
+    "wai-Illustrious",
 }
 
 # =================================================
@@ -245,7 +246,7 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
 
 
 # =================================================
-# HELPERS
+# HELPER FUNCTIONS
 # =================================================
 def _timing_key(model_id: str, target_res: str, upscale_factor: Optional[int]) -> str:
     return f"{model_id}|{target_res}|up{upscale_factor or 1}"
@@ -431,7 +432,6 @@ def has_role(member: discord.Member, role_id: int) -> bool:
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
-    # native first
     if wanted_resolution in native:
         return wanted_resolution, None
 
@@ -729,10 +729,23 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
 
 
 async def send_ephemeral(interaction: discord.Interaction, content: str):
-    if interaction.response.is_done():
-        await interaction.followup.send(content, ephemeral=True)
-    else:
-        await interaction.response.send_message(content, ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=True)
+        else:
+            await interaction.response.send_message(content, ephemeral=True)
+    except Exception:
+        pass
+
+
+async def send_interaction_error(interaction: discord.Interaction, message: str = "❌ Interaction failed. Please try again."):
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except Exception:
+        pass
 
 
 async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int):
@@ -860,6 +873,10 @@ class OwnerLockedView(discord.ui.View):
             return False
         return True
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        logger.exception("OwnerLockedView interaction error: %s", error)
+        await send_interaction_error(interaction)
+
 
 class AspectRatioSelect(discord.ui.Select):
     def __init__(
@@ -942,6 +959,10 @@ class StarterModelSelect(discord.ui.Select):
         selected = self.values[0]
         hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
 
+        if selected not in (SURPRISE_VALUE, NO_MODEL_VALUE) and selected not in MODEL_CONFIG:
+            await send_ephemeral(interaction, "❌ This model is no longer available.")
+            return
+
         if selected == NO_MODEL_VALUE:
             await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
             return
@@ -991,6 +1012,10 @@ class StarterView(discord.ui.View):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
         self.add_item(StarterModelSelect(session, channel_id))
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        logger.exception("StarterView interaction error: %s", error)
+        await send_interaction_error(interaction)
 
 
 class GenerationModal(discord.ui.Modal):
@@ -1336,6 +1361,15 @@ class ResolutionSelectView(OwnerLockedView):
             except Exception:
                 pass
 
+        # Make starter the newest post
+        if isinstance(interaction.channel, discord.TextChannel):
+            cog = interaction.client.get_cog("VeniceCog")
+            if cog and hasattr(cog, "bump_starter_message"):
+                try:
+                    await cog.bump_starter_message(interaction.channel)
+                except Exception as e:
+                    logger.warning("Failed to bump starter in channel %s: %s", interaction.channel.id, e)
+
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
@@ -1379,6 +1413,10 @@ class ReuseModelSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
+
+        if selected not in (SURPRISE_VALUE, NO_MODEL_VALUE) and selected not in MODEL_CONFIG:
+            await send_ephemeral(interaction, "❌ This model is no longer available.")
+            return
 
         if selected == NO_MODEL_VALUE:
             await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
@@ -1592,7 +1630,6 @@ class VeniceCog(commands.Cog):
                     logger.warning("Failed to create starter in channel %s: %s", channel.id, e)
                     return
 
-            # delete duplicates
             keep_id = keep_msg.id
             for msg in starters:
                 if msg.id == keep_id:
@@ -1605,6 +1642,69 @@ class VeniceCog(commands.Cog):
             self.starter_message_ids[channel.id] = keep_id
             self._save_starter_state()
 
+    async def bump_starter_message(self, channel: discord.TextChannel):
+        if channel.id not in ALLOWED_CHANNEL_IDS:
+            return
+
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            old_id = self.starter_message_ids.get(channel.id)
+
+            try:
+                new_msg = await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(self.session, channel.id))
+            except discord.Forbidden:
+                logger.warning("Missing permissions for bump in channel %s", channel.id)
+                return
+            except Exception as e:
+                logger.warning("Failed to bump starter in channel %s: %s", channel.id, e)
+                return
+
+            self.starter_message_ids[channel.id] = new_msg.id
+            self._save_starter_state()
+
+            if old_id and old_id != new_msg.id:
+                old_msg = await self._fetch_message_safe(channel, old_id)
+                if old_msg and is_model_dropdown_message(old_msg):
+                    try:
+                        await old_msg.delete()
+                    except Exception:
+                        pass
+
+            starters = await self._find_existing_starters(channel, limit=100)
+            for msg in starters:
+                if msg.id == new_msg.id:
+                    continue
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+
+    async def ensure_starter_is_latest(self, channel: discord.TextChannel):
+        if channel.id not in ALLOWED_CHANNEL_IDS:
+            return
+
+        await self.ensure_single_starter_message(channel)
+
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            starter_id = self.starter_message_ids.get(channel.id)
+            if not starter_id:
+                await self.bump_starter_message(channel)
+                return
+
+            starter_msg = await self._fetch_message_safe(channel, starter_id)
+            if not starter_msg or not is_model_dropdown_message(starter_msg):
+                await self.bump_starter_message(channel)
+                return
+
+            latest_msg = None
+            async for m in channel.history(limit=1):
+                latest_msg = m
+                break
+
+            if latest_msg is None or latest_msg.id != starter_msg.id:
+                await self.bump_starter_message(channel)
+
     async def cog_load(self):
         await self._ensure_session()
         load_timing_cache()
@@ -1616,7 +1716,6 @@ class VeniceCog(commands.Cog):
         except Exception as e:
             logger.warning("Model sync failed in cog_load: %s", e)
 
-        # register persistent view handlers for all allowed channels
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
@@ -1638,7 +1737,7 @@ class VeniceCog(commands.Cog):
             for guild in self.bot.guilds:
                 for channel in guild.text_channels:
                     if channel.id in ALLOWED_CHANNEL_IDS:
-                        await self.ensure_single_starter_message(channel)
+                        await self.ensure_starter_is_latest(channel)
 
     @commands.Cog.listener()
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
@@ -1663,7 +1762,32 @@ class VeniceCog(commands.Cog):
                 return
 
         if isinstance(ch, discord.TextChannel):
-            await self.ensure_single_starter_message(ch)
+            await self.ensure_starter_is_latest(ch)
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        channel_id = payload.channel_id
+        if channel_id not in ALLOWED_CHANNEL_IDS:
+            return
+
+        tracked = self.starter_message_ids.get(channel_id)
+        if tracked is None:
+            return
+        if tracked not in payload.message_ids:
+            return
+
+        self.starter_message_ids.pop(channel_id, None)
+        self._save_starter_state()
+
+        ch = self.bot.get_channel(channel_id)
+        if ch is None:
+            try:
+                ch = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+
+        if isinstance(ch, discord.TextChannel):
+            await self.ensure_starter_is_latest(ch)
 
 
 async def setup(bot: commands.Bot):
