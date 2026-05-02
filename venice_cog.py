@@ -96,7 +96,7 @@ RESOLUTION_TIERS = ["1K", "2K", "4K"]
 FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]
 
 # =================================================
-# MODEL CONFIG (API-first + curated list)
+# MODEL CONFIG (API-first with robust baseline)
 # =================================================
 CURATED_IMAGE_MODELS = [
     "hidream",
@@ -162,13 +162,42 @@ DEFAULT_MODEL_ROW = {
     "width_height_divisor": 8,
     "resolutions": [],
     "default_resolution": "1K",
-    "speed_factor": 1.0,  # baseline speed multiplier
+    "speed_factor": 1.0,
+}
+
+# fallback if /models sync fails
+BASELINE_CAPS = {
+    "hidream": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
+    "flux-2-max": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", "1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "gpt-image-2": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]},
+    "gpt-image-1-5": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": []},
+    "hunyuan-image-v3": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "imagineart-1.5-pro": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "nano-banana-2": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]},
+    "nano-banana-pro": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]},
+    "recraft-v4": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "recraft-v4-pro": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "seedream-v4": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "seedream-v5-lite": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "qwen-image-2": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "qwen-image-2-pro": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "wan-2-7-text-to-image": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "wan-2-7-pro-text-to-image": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
+    "grok-imagine-image": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]},
+    "grok-imagine-image-pro": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]},
+    "lustify-v7": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
+    "lustify-v8": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
+    "qwen-image": {"prompt_limit": 1500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
+    "wai-Illustrious": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []},
+    "z-image-turbo": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
+    "chroma": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
 }
 
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
     mid: {
         "label": MODEL_LABELS.get(mid, mid),
-        **DEFAULT_MODEL_ROW
+        **DEFAULT_MODEL_ROW,
+        **BASELINE_CAPS.get(mid, {}),
     }
     for mid in CURATED_IMAGE_MODELS
 }
@@ -191,10 +220,10 @@ UNCENSORED_MODELS = {
 }
 
 # =================================================
-# TIMING (estimate + learned EWMA + optional cache)
+# TIMING
 # =================================================
 NATIVE_RES_TIME_FACTOR = {"1K": 1.00, "2K": 1.30, "4K": 1.70}
-UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}  # 4x handled as 2x + 2x
+UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}
 UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
 
 TIMING_EWMA: dict[str, float] = defaultdict(float)
@@ -216,15 +245,12 @@ def load_timing_cache():
         with open(TIMING_CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        ewma = data.get("ewma", {})
-        nvals = data.get("n", {})
-
         TIMING_EWMA.clear()
         TIMING_N.clear()
 
-        for k, v in ewma.items():
+        for k, v in (data.get("ewma") or {}).items():
             TIMING_EWMA[k] = float(v)
-        for k, v in nvals.items():
+        for k, v in (data.get("n") or {}).items():
             TIMING_N[k] = int(v)
 
         _TIMING_DIRTY_COUNT = 0
@@ -263,7 +289,6 @@ def timing_update(model_id: str, target_res: str, upscale_factor: Optional[int],
     TIMING_N[k] += 1
     _TIMING_DIRTY_COUNT += 1
 
-    # write occasionally
     if _TIMING_DIRTY_COUNT >= 10:
         save_timing_cache()
 
@@ -283,7 +308,7 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
 
 
 # =================================================
-# GENERAL HELPERS
+# HELPERS
 # =================================================
 def _safe_float(v: Any, default: Optional[float] = 0.0) -> Optional[float]:
     try:
@@ -301,6 +326,21 @@ def _to_int(v: Any, default: int) -> int:
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
+
+
+def _resolution_sort_key(x: str) -> int:
+    if x in RESOLUTION_TIERS:
+        return RESOLUTION_TIERS.index(x)
+    return 999
+
+
+def _eta_text(seconds_float: float) -> str:
+    s = max(0, int(round(seconds_float)))
+    if s < 60:
+        return f"{s}s"
+    m = s // 60
+    r = s % 60
+    return f"{m}m {r}s"
 
 
 def get_active_model_ids() -> list[str]:
@@ -405,26 +445,24 @@ def resolution_native_supported(model_id: str, resolution: str) -> bool:
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
     """
     Returns (generation_resolution, upscale_factor).
-    generation_resolution is native resolution to pass if supported by model.
-    upscale_factor is 2 or 4 when post-upscale is needed.
+    Native-first logic:
+    if wanted resolution is natively supported => no upscale.
     """
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
+    # universal native-first
+    if wanted_resolution in native:
+        return wanted_resolution, None
+
     if wanted_resolution == "1K":
-        if "1K" in native:
-            return "1K", None
         return None, None
 
     if wanted_resolution == "2K":
-        if "2K" in native:
-            return "2K", None
         if "1K" in native:
             return "1K", 2
         return None, 2
 
     if wanted_resolution == "4K":
-        if "4K" in native:
-            return "4K", None
         if "2K" in native:
             return "2K", 2
         if "1K" in native:
@@ -477,7 +515,8 @@ def build_resolution_hint(model_id: str) -> str:
     if not native:
         return "1K is native for this model. 2K/4K are delivered via upscale."
 
-    parts = [f"Native: {', '.join(sorted(native, key=lambda x: RESOLUTION_TIERS.index(x)))}"]
+    native_sorted = sorted(native, key=_resolution_sort_key)
+    parts = [f"Native: {', '.join(native_sorted)}"]
 
     if "2K" in native:
         parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
@@ -518,7 +557,7 @@ def estimate_generation_seconds(
     cfg_f = 1.0 + max(0.0, cfg_scale - 5.0) * 0.02
     res_f = NATIVE_RES_TIME_FACTOR.get(generation_resolution or "1K", 1.0)
     est = base * model_f * steps_f * prompt_f * cfg_f * res_f
-    return max(6.0, min(est, 180.0))
+    return max(6.0, min(est, 240.0))
 
 
 def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> float:
@@ -557,7 +596,6 @@ def _b64_to_bytes(s: str) -> Optional[bytes]:
 
 
 def _extract_image_from_json_obj(obj: Any) -> Optional[bytes]:
-    # Check common direct keys first
     if isinstance(obj, dict):
         for key in ("image", "image_base64", "imageBase64", "b64_json", "base64", "upscaled_image"):
             val = obj.get(key)
@@ -565,21 +603,18 @@ def _extract_image_from_json_obj(obj: Any) -> Optional[bytes]:
                 out = _b64_to_bytes(val)
                 if out and _looks_like_image(out):
                     return out
-
-        # dive a bit deeper
-        for _, val in list(obj.items())[:12]:
+        for _, val in list(obj.items())[:16]:
             out = _extract_image_from_json_obj(val)
             if out:
                 return out
 
     elif isinstance(obj, list):
-        for item in obj[:12]:
+        for item in obj[:16]:
             out = _extract_image_from_json_obj(item)
             if out:
                 return out
 
     elif isinstance(obj, str):
-        # sometimes raw base64 string in list
         out = _b64_to_bytes(obj)
         if out and _looks_like_image(out):
             return out
@@ -591,11 +626,9 @@ async def _extract_image_from_response(resp: aiohttp.ClientResponse) -> Optional
     raw = await resp.read()
     ctype = (resp.headers.get("Content-Type") or "").lower()
 
-    # direct image bytes
     if "image/" in ctype and _looks_like_image(raw):
         return raw
 
-    # maybe json
     try:
         data = json.loads(raw.decode("utf-8", errors="ignore"))
     except Exception:
@@ -604,7 +637,6 @@ async def _extract_image_from_response(resp: aiohttp.ClientResponse) -> Optional
     out = _extract_image_from_json_obj(data)
     if out and _looks_like_image(out):
         return out
-
     return None
 
 
@@ -648,7 +680,6 @@ def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
 def _calc_speed_factor_from_price(usd: Optional[float]) -> float:
     if usd is None or usd <= 0:
         return 1.0
-    # smoother mapping
     factor = (usd / 0.05) ** 0.20
     return _clamp(factor, 0.70, 1.55)
 
@@ -665,7 +696,6 @@ def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> floa
     if width_div >= 16:
         return 6.8
 
-    # API-heavy modern models generally behave best lower cfg
     if any(x in mid for x in ["gpt-image", "recraft", "seedream", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "qwen-image-2"]):
         return 5.0
 
@@ -729,8 +759,7 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
 
         m = api_models.get(mid)
         if not m:
-            # robust fallback: keep defaults active if missing
-            logger.warning("Model %s not found in API; keeping fallback defaults.", mid)
+            logger.warning("Model %s not found in API; using baseline fallback.", mid)
             continue
 
         if _is_deprecated(m):
@@ -738,11 +767,10 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
             logger.info("Model disabled (deprecated): %s", mid)
             continue
 
-        caps = _extract_image_caps(m)
-        MODEL_CONFIG[mid].update(caps)
+        MODEL_CONFIG[mid].update(_extract_image_caps(m))
 
     if len(get_active_model_ids()) == 0:
-        logger.warning("No active models after sync. Re-enabling fallback set.")
+        logger.warning("No active models after sync; re-enabling all curated fallback models.")
         DISABLED_MODELS.clear()
 
 
@@ -1221,7 +1249,20 @@ class ResolutionSelectView(OwnerLockedView):
             return
 
         full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
+
         gen_res, upscale_factor = generation_plan(model_id, resolution)
+        # extra safety: if target native, never upscale
+        if gen_res == resolution:
+            upscale_factor = None
+
+        logger.info(
+            "PLAN model=%s target=%s native=%s => gen_res=%s upscale=%s",
+            model_id,
+            resolution,
+            MODEL_CONFIG[model_id]["resolutions"],
+            gen_res,
+            upscale_factor
+        )
 
         payload = build_generate_payload(
             model_id=model_id,
@@ -1249,7 +1290,7 @@ class ResolutionSelectView(OwnerLockedView):
             est_up_fallback = estimate_upscale_seconds(upscale_factor, resolution)
             est_up = timing_get_estimate(model_id, resolution, upscale_factor, est_up_fallback)
 
-        gen_cap = 72 if upscale_factor in (2, 4) else 95
+        gen_cap = 82 if upscale_factor in (2, 4) else 97
         progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True)
 
         gen_started = time.monotonic()
@@ -1258,14 +1299,24 @@ class ResolutionSelectView(OwnerLockedView):
 
         while not gen_task.done():
             elapsed = time.monotonic() - gen_started
-            percent = min(gen_cap, int((elapsed / max(est_gen, 6.0)) * gen_cap))
+
+            # adaptive stretch to avoid getting "stuck" at same %
+            if elapsed > est_gen * 1.15:
+                est_gen = elapsed * 1.20
+
+            ratio_gen = min(0.999, elapsed / max(est_gen, 6.0))
+            percent = min(gen_cap, int(ratio_gen * gen_cap))
+            eta = max(0.0, est_gen - elapsed)
+
             if percent != last_percent:
                 last_percent = percent
                 try:
-                    await progress_msg.edit(content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%")
+                    await progress_msg.edit(
+                        content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}% (ETA ~{_eta_text(eta)})"
+                    )
                 except Exception:
                     pass
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.8)
 
         image_bytes = await gen_task
         gen_measured = time.monotonic() - gen_started
@@ -1287,19 +1338,29 @@ class ResolutionSelectView(OwnerLockedView):
         if upscale_factor in (2, 4):
             up_started = time.monotonic()
             up_task = asyncio.create_task(venice_upscale(self.session, image_bytes, upscale_factor))
+            up_start_percent = gen_cap
+            up_span = 99 - up_start_percent
             up_last_percent = -1
 
             while not up_task.done():
                 up_elapsed = time.monotonic() - up_started
-                up_slice = min(26, int((up_elapsed / max(est_up, 4.0)) * 26))
-                percent = min(98, gen_cap + up_slice)
+
+                if up_elapsed > est_up * 1.15:
+                    est_up = up_elapsed * 1.20
+
+                up_ratio = min(0.999, up_elapsed / max(est_up, 4.0))
+                percent = min(99, up_start_percent + int(up_ratio * up_span))
+                eta = max(0.0, est_up - up_elapsed)
+
                 if percent != up_last_percent:
                     up_last_percent = percent
                     try:
-                        await progress_msg.edit(content=f"{pepper} Upscaling ({upscale_factor}x) for **{interaction.user.display_name}**... {percent}%")
+                        await progress_msg.edit(
+                            content=f"{pepper} Upscaling ({upscale_factor}x) for **{interaction.user.display_name}**... {percent}% (ETA ~{_eta_text(eta)})"
+                        )
                     except Exception:
                         pass
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.8)
 
             upscaled = await up_task
             up_measured = time.monotonic() - up_started
@@ -1576,13 +1637,12 @@ class VeniceCog(commands.Cog):
     async def _ensure_session(self):
         if self.session and not self.session.closed:
             return
-        timeout = aiohttp.ClientTimeout(total=240)
+        timeout = aiohttp.ClientTimeout(total=300)
         connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
     async def cog_load(self):
         await self._ensure_session()
-
         load_timing_cache()
 
         try:
