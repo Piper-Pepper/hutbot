@@ -47,6 +47,10 @@ EASY_MODE_VALUE = "__easy_mode__"
 EASY_MODE_LABEL = "👉Easy Mode (NSFW)👈"
 NO_MODEL_VALUE = "__no_models__"
 
+# Wenn True, bekommt Non-Easy nach Cleanup genau eine neue Reuse-Ephemeral.
+# Wenn False, werden nach dem finalen Post keine neuen Ephemerals mehr gesendet.
+KEEP_NON_EASY_REUSE_EPHEMERAL = True
+
 logger = logging.getLogger("venice_picture_bot")
 
 # =================================================
@@ -309,6 +313,7 @@ def timing_update(model_id: str, target_res: str, upscale_factor: Optional[int],
 # LOCKS
 # =================================================
 _channel_locks: dict[int, asyncio.Lock] = {}
+_ephemeral_messages: dict[tuple[int, int], list[discord.Message]] = {}
 
 
 def get_channel_lock(channel_id: int) -> asyncio.Lock:
@@ -317,6 +322,32 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _channel_locks[channel_id] = lock
     return lock
+
+
+def _ephemeral_key(interaction: discord.Interaction) -> tuple[int, int]:
+    guild_id = interaction.guild.id if interaction.guild else 0
+    return (guild_id, interaction.user.id)
+
+
+async def track_ephemeral_message(interaction: discord.Interaction, msg: Optional[discord.Message]):
+    if not msg:
+        return
+    k = _ephemeral_key(interaction)
+    bucket = _ephemeral_messages.get(k)
+    if bucket is None:
+        bucket = []
+        _ephemeral_messages[k] = bucket
+    bucket.append(msg)
+
+
+async def cleanup_user_ephemerals(interaction: discord.Interaction):
+    k = _ephemeral_key(interaction)
+    msgs = _ephemeral_messages.pop(k, [])
+    for m in msgs:
+        try:
+            await m.delete()
+        except Exception:
+            pass
 
 
 # =================================================
@@ -864,11 +895,24 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
         DISABLED_MODELS.clear()
 
 
-async def send_ephemeral(interaction: discord.Interaction, content: str):
-    if interaction.response.is_done():
-        await interaction.followup.send(content, ephemeral=True)
-    else:
-        await interaction.response.send_message(content, ephemeral=True)
+async def send_ephemeral(interaction: discord.Interaction, content: Optional[str] = None, **kwargs) -> Optional[discord.Message]:
+    payload = dict(kwargs)
+    payload["ephemeral"] = True
+    if content is not None:
+        payload["content"] = content
+
+    try:
+        if interaction.response.is_done():
+            msg = await interaction.followup.send(wait=True, **payload)
+            await track_ephemeral_message(interaction, msg)
+            return msg
+        else:
+            await interaction.response.send_message(**payload)
+            msg = await interaction.original_response()
+            await track_ephemeral_message(interaction, msg)
+            return msg
+    except Exception:
+        return None
 
 
 async def resolve_member_level(interaction: discord.Interaction, member: discord.Member) -> Optional[int]:
@@ -934,7 +978,6 @@ async def send_resolution_lock_message(
     level_name = ROLE_LEVEL_NAMES.get(role_id, "Required level")
     level_txt = f"Level {level_required}+" if level_required else level_name
     role_txt = f"<@&{role_id}> ({level_name})" if role_id else "`required role`"
-
     current_txt = f"\nYour current level: **{current_level}**" if current_level is not None else ""
 
     await send_ephemeral(
@@ -1184,14 +1227,14 @@ class EasyModeModal(discord.ui.Modal):
             }
         }
 
-        await interaction.response.send_message(
+        await send_ephemeral(
+            interaction,
             content=(
                 f"✅ Easy Mode: {get_model_label(self.model_id)} • {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
                 f"{build_resolution_hint(self.model_id)}\n"
                 "Choose resolution:"
             ),
             view=ResolutionSelectView(self.session, generation_data),
-            ephemeral=True
         )
 
 
@@ -1235,10 +1278,7 @@ class StarterModelSelect(discord.ui.Select):
                 )
             )
 
-            try:
-                await interaction.followup.send(embed=build_easy_embed(model_id, ratio), ephemeral=True)
-            except Exception:
-                pass
+            await send_ephemeral(interaction, embed=build_easy_embed(model_id, ratio))
             return
 
         if selected in DISABLED_MODELS:
@@ -1246,7 +1286,8 @@ class StarterModelSelect(discord.ui.Select):
             return
 
         model_id = selected
-        await interaction.response.send_message(
+        await send_ephemeral(
+            interaction,
             content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
                 session=self.session,
@@ -1254,7 +1295,6 @@ class StarterModelSelect(discord.ui.Select):
                 hidden_suffix=hidden_suffix,
                 owner_id=interaction.user.id,
             ),
-            ephemeral=True
         )
 
 
@@ -1377,14 +1417,14 @@ class GenerationModal(discord.ui.Modal):
             }
         }
 
-        await interaction.response.send_message(
+        await send_ephemeral(
+            interaction,
             content=(
                 f"✅ {get_model_label(self.model_id)} • {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
                 f"{build_resolution_hint(self.model_id)}\n"
                 "Choose resolution:"
             ),
             view=ResolutionSelectView(self.session, generation_data),
-            ephemeral=True
         )
 
 
@@ -1511,7 +1551,8 @@ class ResolutionSelectView(OwnerLockedView):
             est_up = timing_get_estimate(model_id, resolution, upscale_factor, est_up_fallback)
 
         gen_cap = 82 if upscale_factor in (2, 4) else 97
-        progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True)
+        progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True, wait=True)
+        await track_ephemeral_message(interaction, progress_msg)
 
         gen_started = time.monotonic()
         gen_task = asyncio.create_task(venice_generate(self.session, payload))
@@ -1672,8 +1713,12 @@ class ResolutionSelectView(OwnerLockedView):
                 bot_user_id=(interaction.client.user.id if interaction.client.user else None)
             )
 
-        if not is_easy_mode:
-            await interaction.followup.send(
+        # Nach erfolgreichem Post: alle getrackten Ephemerals dieses Users aufräumen
+        await cleanup_user_ephemerals(interaction)
+
+        if (not is_easy_mode) and KEEP_NON_EASY_REUSE_EPHEMERAL:
+            await send_ephemeral(
+                interaction,
                 content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
                 view=PostGenerationView(
                     session=self.session,
@@ -1683,10 +1728,7 @@ class ResolutionSelectView(OwnerLockedView):
                     previous_inputs=previous_inputs,
                     hidden_suffix=hidden_suffix
                 ),
-                ephemeral=True
             )
-        else:
-            await interaction.followup.send("✅ Easy Mode done.", ephemeral=True)
 
         self.stop()
 
@@ -1742,10 +1784,7 @@ class ReuseModelSelect(discord.ui.Select):
                 )
             )
 
-            try:
-                await interaction.followup.send(embed=build_easy_embed(model_id, ratio), ephemeral=True)
-            except Exception:
-                pass
+            await send_ephemeral(interaction, embed=build_easy_embed(model_id, ratio))
             return
 
         if selected in DISABLED_MODELS:
@@ -1753,7 +1792,8 @@ class ReuseModelSelect(discord.ui.Select):
             return
 
         model_id = selected
-        await interaction.response.send_message(
+        await send_ephemeral(
+            interaction,
             content=f"{get_model_label(model_id)} selected. Now choose an aspect ratio:",
             view=AspectRatioSelectView(
                 session=self.session,
@@ -1762,7 +1802,6 @@ class ReuseModelSelect(discord.ui.Select):
                 owner_id=self.owner_id,
                 previous_inputs=self.previous_inputs
             ),
-            ephemeral=True
         )
 
 
@@ -1817,7 +1856,8 @@ class PostGenerationView(OwnerLockedView):
         self.add_item(delete_reuse_btn)
 
     async def reuse_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
+        await send_ephemeral(
+            interaction,
             "♻️ Choose a model to re-use your prompt:",
             view=ReuseModelSelectView(
                 session=self.session,
@@ -1826,7 +1866,6 @@ class PostGenerationView(OwnerLockedView):
                 previous_inputs=self.previous_inputs,
                 hidden_suffix=self.hidden_suffix
             ),
-            ephemeral=True
         )
 
     async def delete_callback(self, interaction: discord.Interaction):
@@ -1834,7 +1873,7 @@ class PostGenerationView(OwnerLockedView):
             await self.source_message.delete()
         except Exception:
             pass
-        await interaction.response.send_message("✅ Post deleted.", ephemeral=True)
+        await send_ephemeral(interaction, "✅ Post deleted.")
 
     async def delete_reuse_callback(self, interaction: discord.Interaction):
         try:
