@@ -1018,13 +1018,6 @@ class StarterModelSelect(discord.ui.Select):
                 await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
-
-            if isinstance(interaction.channel, discord.TextChannel):
-                await VeniceCog.delete_recent_model_dropdown_posts(
-                    interaction.channel,
-                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
-                    limit=RECENT_SCAN_LIMIT
-                )
             return
 
         if selected in DISABLED_MODELS:
@@ -1042,13 +1035,6 @@ class StarterModelSelect(discord.ui.Select):
             ),
             ephemeral=True
         )
-
-        if isinstance(interaction.channel, discord.TextChannel):
-            await VeniceCog.delete_recent_model_dropdown_posts(
-                interaction.channel,
-                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
-                limit=RECENT_SCAN_LIMIT
-            )
 
 
 class StarterView(discord.ui.View):
@@ -1323,12 +1309,6 @@ class ResolutionSelectView(OwnerLockedView):
 
         if not image_bytes:
             await interaction.followup.send("❌ Generation failed.", ephemeral=True)
-            if isinstance(interaction.channel, discord.TextChannel):
-                await VeniceCog.ensure_starter_message_static(
-                    interaction.channel,
-                    self.session,
-                    bot_user_id=(interaction.client.user.id if interaction.client.user else None)
-                )
             self.stop()
             return
 
@@ -1409,8 +1389,8 @@ class ResolutionSelectView(OwnerLockedView):
         embed.set_footer(
             text=(
                 f"{get_model_label(model_id)} | "
-                f"Ratio: {ASPECT_LABELS.get(ratio, ratio)} | "
-                f"Target: {resolution} | CFG: {cfg_val} | Steps: {steps}"
+                f"{ASPECT_LABELS.get(ratio, ratio)} | "
+                f"Res: {resolution} | CFG: {cfg_val} | Steps: {steps}"
             ),
             icon_url=guild_icon
         )
@@ -1433,6 +1413,15 @@ class ResolutionSelectView(OwnerLockedView):
             except Exception:
                 pass
 
+        # Erst jetzt: alten Dropdown löschen + neuen posten
+        if isinstance(interaction.channel, discord.TextChannel):
+            await VeniceCog.ensure_starter_message_static(
+                interaction.channel,
+                self.session,
+                bot_user_id=(interaction.client.user.id if interaction.client.user else None)
+            )
+
+        # Danach wie gehabt ephemeral Re-use/Delete Buttons
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
@@ -1445,13 +1434,6 @@ class ResolutionSelectView(OwnerLockedView):
             ),
             ephemeral=True
         )
-
-        if isinstance(interaction.channel, discord.TextChannel):
-            await VeniceCog.ensure_starter_message_static(
-                interaction.channel,
-                self.session,
-                bot_user_id=(interaction.client.user.id if interaction.client.user else None)
-            )
 
         self.stop()
 
@@ -1512,13 +1494,6 @@ class ReuseModelSelect(discord.ui.Select):
                 await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
-
-            if isinstance(interaction.channel, discord.TextChannel):
-                await VeniceCog.delete_recent_model_dropdown_posts(
-                    interaction.channel,
-                    bot_user_id=(interaction.client.user.id if interaction.client.user else None),
-                    limit=RECENT_SCAN_LIMIT
-                )
             return
 
         if selected in DISABLED_MODELS:
@@ -1537,13 +1512,6 @@ class ReuseModelSelect(discord.ui.Select):
             ),
             ephemeral=True
         )
-
-        if isinstance(interaction.channel, discord.TextChannel):
-            await VeniceCog.delete_recent_model_dropdown_posts(
-                interaction.channel,
-                bot_user_id=(interaction.client.user.id if interaction.client.user else None),
-                limit=RECENT_SCAN_LIMIT
-            )
 
 
 class ReuseModelSelectView(OwnerLockedView):
