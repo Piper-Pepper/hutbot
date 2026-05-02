@@ -39,7 +39,7 @@ LEGACY_STARTER_TEXTS = {
 RECENT_SCAN_LIMIT = 10
 
 EASY_MODE_VALUE = "__easy_mode__"
-EASY_MODE_LABEL = "⚡ Easy Mode (NSFW)"
+EASY_MODE_LABEL = "👉Easy Mode (NSFW)👈"
 NO_MODEL_VALUE = "__no_models__"
 
 logger = logging.getLogger("venice_picture_bot")
@@ -531,22 +531,22 @@ def build_resolution_hint(model_id: str) -> str:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
     if not native:
-        return "1K is native for this model. 2K/4K are delivered via upscale."
+        return "1K is native for this model. 2K/4K via upscale."
 
     native_sorted = sorted(native, key=_resolution_sort_key)
     parts = [f"Native: {', '.join(native_sorted)}"]
 
     if "2K" in native:
-        parts.append(f"2K requires <@&{LEVEL4_ROLE_ID}>")
+        parts.append(f"2K")
     else:
         parts.append("2K via upscale")
 
     if "4K" in native:
-        parts.append(f"4K requires <@&{LEVEL11_ROLE_ID}>")
+        parts.append(f"4K")
     else:
         parts.append("4K via upscale")
 
-    parts.append("Earn XP in the server to unlock higher tiers.")
+    parts.append("📈")
     return " • ".join(parts)
 
 
