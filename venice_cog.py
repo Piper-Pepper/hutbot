@@ -38,8 +38,8 @@ LEGACY_STARTER_TEXTS = {
 }
 RECENT_SCAN_LIMIT = 10
 
-SURPRISE_VALUE = "__surprise_me__"
-SURPRISE_LABEL = "🎲 Surprise me"
+EASY_MODE_VALUE = "__easy_mode__"
+EASY_MODE_LABEL = "⚡ Easy Mode (NSFW)"
 NO_MODEL_VALUE = "__no_models__"
 
 logger = logging.getLogger("venice_picture_bot")
@@ -117,6 +117,7 @@ CURATED_IMAGE_MODELS = [
     "wan-2-7-pro-text-to-image",
     "grok-imagine-image",
     "grok-imagine-image-pro",
+    "lustify-sdxl",
     "lustify-v7",
     "lustify-v8",
     "qwen-image",
@@ -144,6 +145,7 @@ MODEL_LABELS = {
     "wan-2-7-pro-text-to-image": "🦈 Wan 2.7 Pro",
     "grok-imagine-image": "🧠 Grok Imagine",
     "grok-imagine-image-pro": "🚀 Grok Imagine Pro",
+    "lustify-sdxl": "💋 Lustify SDXL (Legacy)",
     "lustify-v7": "🥵 Lustify v7",
     "lustify-v8": "🔥 Lustify v8",
     "qwen-image": "🐼 Qwen Image",
@@ -165,7 +167,6 @@ DEFAULT_MODEL_ROW = {
     "speed_factor": 1.0,
 }
 
-# fallback if /models sync fails
 BASELINE_CAPS = {
     "hidream": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
     "flux-2-max": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", "1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
@@ -185,6 +186,7 @@ BASELINE_CAPS = {
     "wan-2-7-pro-text-to-image": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []},
     "grok-imagine-image": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]},
     "grok-imagine-image-pro": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]},
+    "lustify-sdxl": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
     "lustify-v7": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
     "lustify-v8": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
     "qwen-image": {"prompt_limit": 1500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []},
@@ -205,9 +207,10 @@ MODEL_CONFIG: dict[str, dict[str, Any]] = {
 MODEL_ORDER = CURATED_IMAGE_MODELS[:]
 DISABLED_MODELS: set[str] = set()
 
-EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "lustify-sdxl", "bria-bg-remover"}
+EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "bria-bg-remover"}
 
 UNCENSORED_MODELS = {
+    "lustify-sdxl",
     "lustify-v7",
     "lustify-v8",
     "grok-imagine-image",
@@ -347,6 +350,18 @@ def get_active_model_ids() -> list[str]:
     return [m for m in MODEL_ORDER if m not in DISABLED_MODELS]
 
 
+def get_easy_mode_candidates() -> list[str]:
+    active = get_active_model_ids()
+    fixed_pool = {
+        "z-image-turbo",
+        "wan-2-7-text-to-image",
+        "wan-2-7-pro-text-to-image",
+        "grok-imagine-image",
+        "grok-imagine-image-pro",
+    }
+    return [m for m in active if m.startswith("lustify") or m in fixed_pool]
+
+
 def get_model_label(model_id: str) -> str:
     base = MODEL_CONFIG[model_id]["label"]
     return f"{base} 🔞" if model_id in UNCENSORED_MODELS else base
@@ -396,15 +411,15 @@ def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -
     return snap_to_divisor(w, divisor), snap_to_divisor(h, divisor)
 
 
-def build_model_options(channel_id: int, include_surprise: bool = True) -> list[discord.SelectOption]:
+def build_model_options(channel_id: int, include_easy: bool = True) -> list[discord.SelectOption]:
     if channel_id not in ALLOWED_CHANNEL_IDS:
         return [discord.SelectOption(label="No models in this channel", value=NO_MODEL_VALUE)]
 
     active = get_active_model_ids()
     options: list[discord.SelectOption] = []
 
-    if include_surprise and active:
-        options.append(discord.SelectOption(label=SURPRISE_LABEL, value=SURPRISE_VALUE))
+    if include_easy and active:
+        options.append(discord.SelectOption(label=EASY_MODE_LABEL, value=EASY_MODE_VALUE))
 
     for model_id in active:
         options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
@@ -413,6 +428,15 @@ def build_model_options(channel_id: int, include_surprise: bool = True) -> list[
         options.append(discord.SelectOption(label="No models available", value=NO_MODEL_VALUE))
 
     return options[:25]
+
+
+def build_easy_embed(model_id: str, ratio: str) -> discord.Embed:
+    emb = discord.Embed(
+        title="⚡ Easy Mode",
+        description=f"**Model:** {get_model_label(model_id)}\n**Aspect Ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
+        color=discord.Color.gold(),
+    )
+    return emb
 
 
 def is_model_dropdown_message(msg: discord.Message) -> bool:
@@ -443,14 +467,8 @@ def resolution_native_supported(model_id: str, resolution: str) -> bool:
 
 
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
-    """
-    Returns (generation_resolution, upscale_factor).
-    Native-first logic:
-    if wanted resolution is natively supported => no upscale.
-    """
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
-    # universal native-first
     if wanted_resolution in native:
         return wanted_resolution, None
 
@@ -530,15 +548,6 @@ def build_resolution_hint(model_id: str) -> str:
 
     parts.append("Earn XP in the server to unlock higher tiers.")
     return " • ".join(parts)
-
-
-def build_surprise_embed(model_id: str, ratio: str) -> discord.Embed:
-    emb = discord.Embed(
-        title="🎲 Surprise pick!",
-        description=f"**Model:** {get_model_label(model_id)}\n**Aspect Ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
-        color=discord.Color.purple(),
-    )
-    return emb
 
 
 def estimate_generation_seconds(
@@ -762,7 +771,8 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
             logger.warning("Model %s not found in API; using baseline fallback.", mid)
             continue
 
-        if _is_deprecated(m):
+        # legacy lustify-sdxl explizit nicht wegen deprecation sperren
+        if _is_deprecated(m) and mid != "lustify-sdxl":
             DISABLED_MODELS.add(mid)
             logger.info("Model disabled (deprecated): %s", mid)
             continue
@@ -973,6 +983,72 @@ class AspectRatioSelectView(OwnerLockedView):
         )
 
 
+class EasyModeModal(discord.ui.Modal):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        model_id: str,
+        ratio: str,
+        hidden_suffix: str,
+        owner_id: int,
+    ):
+        self.session = session
+        self.model_id = model_id
+        self.ratio = ratio
+        self.hidden_suffix_value = hidden_suffix
+        self.owner_id = owner_id
+
+        cfg = MODEL_CONFIG[model_id]
+        super().__init__(title=f"Easy Mode • {get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}")
+
+        self.prompt = discord.ui.TextInput(
+            label="Describe what you want to see",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=min(int(cfg["prompt_limit"]), 4000),
+        )
+        self.add_item(self.prompt)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This modal does not belong to you.")
+            return
+
+        if self.model_id in DISABLED_MODELS:
+            await send_ephemeral(interaction, "❌ Dieses Modell ist deaktiviert.")
+            return
+
+        cfg = MODEL_CONFIG[self.model_id]
+        generation_data = {
+            "model_id": self.model_id,
+            "ratio": self.ratio,
+            "prompt_text": self.prompt.value,
+            "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
+            "cfg_scale": float(cfg["cfg_default"]),
+            "steps": int(cfg["default_steps"]),
+            "hidden_suffix": self.hidden_suffix_value,
+            "owner_id": self.owner_id,
+            "channel_id": interaction.channel.id if interaction.channel else None,
+            "previous_inputs": {
+                "prompt": self.prompt.value,
+                "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
+                "cfg_value": "",
+                "steps": None,
+                "hidden_suffix": self.hidden_suffix_value
+            }
+        }
+
+        await interaction.response.send_message(
+            content=(
+                f"✅ Easy Mode: {get_model_label(self.model_id)} • {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
+                f"{build_resolution_hint(self.model_id)}\n"
+                "Choose resolution:"
+            ),
+            view=ResolutionSelectView(self.session, generation_data),
+            ephemeral=True
+        )
+
+
 class StarterModelSelect(discord.ui.Select):
     def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         self.session = session
@@ -982,7 +1058,7 @@ class StarterModelSelect(discord.ui.Select):
             placeholder="🎨 Choose your model...",
             min_values=1,
             max_values=1,
-            options=build_model_options(channel_id, include_surprise=True),
+            options=build_model_options(channel_id, include_easy=True),
             custom_id=f"venice_model_select:{channel_id}",
         )
 
@@ -994,28 +1070,27 @@ class StarterModelSelect(discord.ui.Select):
             await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
             return
 
-        if selected == SURPRISE_VALUE:
-            active = get_active_model_ids()
-            if not active:
-                await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
+        if selected == EASY_MODE_VALUE:
+            candidates = get_easy_mode_candidates()
+            if not candidates:
+                await send_ephemeral(interaction, "❌ Keine Easy-Mode-Modelle verfügbar.")
                 return
 
-            model_id = random.choice(active)
+            model_id = random.choice(candidates)
             ratio = random.choice(get_model_ratios(model_id))
 
             await interaction.response.send_modal(
-                GenerationModal(
+                EasyModeModal(
                     session=self.session,
                     model_id=model_id,
                     ratio=ratio,
                     hidden_suffix=hidden_suffix,
                     owner_id=interaction.user.id,
-                    previous_inputs=None
                 )
             )
 
             try:
-                await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
+                await interaction.followup.send(embed=build_easy_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
             return
@@ -1237,7 +1312,6 @@ class ResolutionSelectView(OwnerLockedView):
         full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
 
         gen_res, upscale_factor = generation_plan(model_id, resolution)
-        # extra safety: if target native, never upscale
         if gen_res == resolution:
             upscale_factor = None
 
@@ -1286,7 +1360,6 @@ class ResolutionSelectView(OwnerLockedView):
         while not gen_task.done():
             elapsed = time.monotonic() - gen_started
 
-            # adaptive stretch to avoid getting "stuck" at same %
             if elapsed > est_gen * 1.15:
                 est_gen = elapsed * 1.20
 
@@ -1413,7 +1486,6 @@ class ResolutionSelectView(OwnerLockedView):
             except Exception:
                 pass
 
-        # Erst jetzt: alten Dropdown löschen + neuen posten
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.ensure_starter_message_static(
                 interaction.channel,
@@ -1421,7 +1493,6 @@ class ResolutionSelectView(OwnerLockedView):
                 bot_user_id=(interaction.client.user.id if interaction.client.user else None)
             )
 
-        # Danach wie gehabt ephemeral Re-use/Delete Buttons
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
@@ -1460,7 +1531,7 @@ class ReuseModelSelect(discord.ui.Select):
             placeholder="♻️ Re-use with model...",
             min_values=1,
             max_values=1,
-            options=build_model_options(channel_id, include_surprise=True)
+            options=build_model_options(channel_id, include_easy=True)
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -1470,28 +1541,27 @@ class ReuseModelSelect(discord.ui.Select):
             await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
             return
 
-        if selected == SURPRISE_VALUE:
-            active = get_active_model_ids()
-            if not active:
-                await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
+        if selected == EASY_MODE_VALUE:
+            candidates = get_easy_mode_candidates()
+            if not candidates:
+                await send_ephemeral(interaction, "❌ Keine Easy-Mode-Modelle verfügbar.")
                 return
 
-            model_id = random.choice(active)
+            model_id = random.choice(candidates)
             ratio = random.choice(get_model_ratios(model_id))
 
             await interaction.response.send_modal(
-                GenerationModal(
+                EasyModeModal(
                     session=self.session,
                     model_id=model_id,
                     ratio=ratio,
                     hidden_suffix=self.hidden_suffix,
                     owner_id=self.owner_id,
-                    previous_inputs=self.previous_inputs
                 )
             )
 
             try:
-                await interaction.followup.send(embed=build_surprise_embed(model_id, ratio), ephemeral=True)
+                await interaction.followup.send(embed=build_easy_embed(model_id, ratio), ephemeral=True)
             except Exception:
                 pass
             return
