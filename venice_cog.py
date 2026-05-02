@@ -246,7 +246,7 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
 
 
 # =================================================
-# HELPER FUNCTIONS
+# HELPERS
 # =================================================
 def _timing_key(model_id: str, target_res: str, upscale_factor: Optional[int]) -> str:
     return f"{model_id}|{target_res}|up{upscale_factor or 1}"
@@ -368,7 +368,7 @@ def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -
         side = snap_to_divisor(base_long_side, divisor)
         return side, side
 
-    m = re.match(r"^(\d+):(\d+)\$", ratio)
+    m = re.match(r"^(\d+):(\d+)$", ratio)
     if not m:
         side = snap_to_divisor(base_long_side, divisor)
         return side, side
@@ -771,6 +771,41 @@ async def remove_component_message(interaction: discord.Interaction, fallback_te
         await msg.edit(content=fallback_text, view=None)
     except Exception:
         pass
+
+
+async def hard_repost_starter_dropdown(
+    channel: discord.TextChannel,
+    session: aiohttp.ClientSession,
+    bot_user_id: Optional[int],
+    starter_state: Optional[dict[int, int]] = None,
+    history_limit: int = 200,
+) -> tuple[int, int]:
+    """
+    Guarantees newest starter dropdown:
+    1) post new
+    2) delete old starter dropdown posts
+    """
+    lock = get_channel_lock(channel.id)
+    async with lock:
+        new_msg = await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
+
+        deleted = 0
+        async for msg in channel.history(limit=history_limit):
+            if msg.id == new_msg.id:
+                continue
+            if bot_user_id is not None and msg.author.id != bot_user_id:
+                continue
+            if is_model_dropdown_message(msg):
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except Exception:
+                    pass
+
+        if starter_state is not None:
+            starter_state[channel.id] = new_msg.id
+
+        return new_msg.id, deleted
 
 
 # =================================================
@@ -1361,25 +1396,25 @@ class ResolutionSelectView(OwnerLockedView):
             except Exception:
                 pass
 
-        # hard guarantee: starter dropdown becomes newest message every time
+        # HARD bump (always)
         if isinstance(interaction.channel, discord.TextChannel) and interaction.channel.id in ALLOWED_CHANNEL_IDS:
             try:
                 cog = interaction.client.get_cog("VeniceCog")
                 state_ref = cog.starter_message_ids if cog and hasattr(cog, "starter_message_ids") else None
 
-                new_id, deleted = await VeniceCog.repost_starter_message_atomic(
+                new_id, deleted = await hard_repost_starter_dropdown(
                     channel=interaction.channel,
                     session=self.session,
                     bot_user_id=(interaction.client.user.id if interaction.client.user else None),
-                    starter_state=state_ref
+                    starter_state=state_ref,
                 )
 
                 if cog and hasattr(cog, "_save_starter_state"):
                     cog._save_starter_state()
 
-                logger.info("Starter reposted in channel %s (new=%s, deleted=%s)", interaction.channel.id, new_id, deleted)
+                logger.info("HARD BUMP OK channel=%s new=%s deleted=%s", interaction.channel.id, new_id, deleted)
             except Exception as e:
-                logger.exception("Starter repost failed in channel %s: %s", interaction.channel.id, e)
+                logger.exception("HARD BUMP FAILED channel=%s err=%s", interaction.channel.id, e)
 
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
@@ -1611,41 +1646,6 @@ class VeniceCog(commands.Cog):
                 out.append(msg)
         return out
 
-    @staticmethod
-    async def repost_starter_message_atomic(
-        channel: discord.TextChannel,
-        session: aiohttp.ClientSession,
-        bot_user_id: Optional[int],
-        starter_state: Optional[dict[int, int]] = None,
-        history_limit: int = 200
-    ) -> tuple[int, int]:
-        """
-        Hard guarantee:
-        1) post new starter
-        2) delete all old starter dropdown posts
-        """
-        lock = get_channel_lock(channel.id)
-        async with lock:
-            new_msg = await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
-
-            deleted = 0
-            async for msg in channel.history(limit=history_limit):
-                if msg.id == new_msg.id:
-                    continue
-                if bot_user_id is not None and msg.author.id != bot_user_id:
-                    continue
-                if is_model_dropdown_message(msg):
-                    try:
-                        await msg.delete()
-                        deleted += 1
-                    except Exception:
-                        pass
-
-            if starter_state is not None:
-                starter_state[channel.id] = new_msg.id
-
-            return new_msg.id, deleted
-
     async def ensure_single_starter_message(self, channel: discord.TextChannel):
         if channel.id not in ALLOWED_CHANNEL_IDS:
             return
@@ -1668,36 +1668,180 @@ class VeniceCog(commands.Cog):
 
             if keep_msg is None:
                 try:
-                    keep_msg = await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(self.session, channel.id))
-                except discord.Forbidden:
-                    logger.warning("Missing permissions in channel %s", channel.id)
-                    return
+                    new_id, _ = await hard_repost_starter_dropdown(
+                        channel=channel,
+                        session=self.session,
+                        bot_user_id=(self.bot.user.id if self.bot.user else None),
+                        starter_state=self.starter_message_ids,
+                    )
+                    self._save_starter_state()
+                    keep_msg = await self._fetch_message_safe(channel, new_id)
                 except Exception as e:
-                    logger.warning("Failed to create starter in channel %s: %s", channel.id, e)
+                    logger.warning("Failed creating starter in channel %s: %s", channel.id, e)
                     return
 
-            keep_id = keep_msg.id
+            keep_id = keep_msg.id if keep_msg else self.starter_message_ids.get(channel.id)
+
             for msg in starters:
-                if msg.id == keep_id:
+                if keep_id and msg.id == keep_id:
                     continue
                 try:
                     await msg.delete()
                 except Exception:
                     pass
 
-            self.starter_message_ids[channel.id] = keep_id
-            self._save_starter_state()
+            if keep_id:
+                self.starter_message_ids[channel.id] = keep_id
+                self._save_starter_state()
+
+    async def ensure_starter_is_latest(self, channel: discord.TextChannel):
+        if channel.id not in ALLOWED_CHANNEL_IDS:
+            return
+
+        await self.ensure_single_starter_message(channel)
+
+        lock = get_channel_lock(channel.id)
+        async with lock:
+            starter_id = self.starter_message_ids.get(channel.id)
+            if not starter_id:
+                new_id, deleted = await hard_repost_starter_dropdown(
+                    channel=channel,
+                    session=self.session,
+                    bot_user_id=(self.bot.user.id if self.bot.user else None),
+                    starter_state=self.starter_message_ids,
+                )
+                self._save_starter_state()
+                logger.info("Startup bump (missing starter) channel=%s new=%s deleted=%s", channel.id, new_id, deleted)
+                return
+
+            starter_msg = await self._fetch_message_safe(channel, starter_id)
+            latest_msg = None
+            async for m in channel.history(limit=1):
+                latest_msg = m
+                break
+
+            if not starter_msg or not is_model_dropdown_message(starter_msg) or not latest_msg or latest_msg.id != starter_msg.id:
+                new_id, deleted = await hard_repost_starter_dropdown(
+                    channel=channel,
+                    session=self.session,
+                    bot_user_id=(self.bot.user.id if self.bot.user else None),
+                    starter_state=self.starter_message_ids,
+                )
+                self._save_starter_state()
+                logger.info("Startup bump (not latest) channel=%s new=%s deleted=%s", channel.id, new_id, deleted)
 
     async def bump_starter_message(self, channel: discord.TextChannel):
-        new_id, deleted = await VeniceCog.repost_starter_message_atomic(
+        new_id, deleted = await hard_repost_starter_dropdown(
             channel=channel,
             session=self.session,
             bot_user_id=(self.bot.user.id if self.bot.user else None),
-            starter_state=self.starter_message_ids
+            starter_state=self.starter_message_ids,
         )
         self._save_starter_state()
         logger.info("bump_starter_message done channel=%s new=%s deleted=%s", channel.id, new_id, deleted)
 
-    async def ensure_starter_is_latest(self, channel: discord.TextChannel):
-        if channel.id not in ALLOWED_CHANNEL_IDS:
-           
+    async def cog_load(self):
+        await self._ensure_session()
+        load_timing_cache()
+        self._load_starter_state()
+
+        try:
+            await sync_model_caps_from_api(self.session)
+            logger.info("Model sync done. Active=%s Disabled=%s", len(get_active_model_ids()), len(DISABLED_MODELS))
+        except Exception as e:
+            logger.warning("Model sync failed in cog_load: %s", e)
+
+        for channel_id in ALLOWED_CHANNEL_IDS:
+            self.bot.add_view(StarterView(self.session, channel_id))
+
+    def cog_unload(self):
+        self._save_starter_state()
+        save_timing_cache()
+        if self.session and not self.session.closed:
+            asyncio.create_task(self.session.close())
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        async with self._ready_lock:
+            if self._ready_bootstrap_done:
+                return
+            self._ready_bootstrap_done = True
+
+            await self._ensure_session()
+
+            for guild in self.bot.guilds:
+                for channel in guild.text_channels:
+                    if channel.id in ALLOWED_CHANNEL_IDS:
+                        await self.ensure_starter_is_latest(channel)
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        channel_id = payload.channel_id
+        message_id = payload.message_id
+
+        if channel_id not in ALLOWED_CHANNEL_IDS:
+            return
+
+        tracked = self.starter_message_ids.get(channel_id)
+        if tracked != message_id:
+            return
+
+        self.starter_message_ids.pop(channel_id, None)
+        self._save_starter_state()
+
+        ch = self.bot.get_channel(channel_id)
+        if ch is None:
+            try:
+                ch = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+
+        if isinstance(ch, discord.TextChannel):
+            try:
+                new_id, deleted = await hard_repost_starter_dropdown(
+                    channel=ch,
+                    session=self.session,
+                    bot_user_id=(self.bot.user.id if self.bot.user else None),
+                    starter_state=self.starter_message_ids,
+                )
+                self._save_starter_state()
+                logger.info("Recreated starter after delete channel=%s new=%s deleted=%s", ch.id, new_id, deleted)
+            except Exception as e:
+                logger.warning("Failed recreate starter on delete channel=%s err=%s", ch.id, e)
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        channel_id = payload.channel_id
+        if channel_id not in ALLOWED_CHANNEL_IDS:
+            return
+
+        tracked = self.starter_message_ids.get(channel_id)
+        if tracked is None or tracked not in payload.message_ids:
+            return
+
+        self.starter_message_ids.pop(channel_id, None)
+        self._save_starter_state()
+
+        ch = self.bot.get_channel(channel_id)
+        if ch is None:
+            try:
+                ch = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+
+        if isinstance(ch, discord.TextChannel):
+            try:
+                new_id, deleted = await hard_repost_starter_dropdown(
+                    channel=ch,
+                    session=self.session,
+                    bot_user_id=(self.bot.user.id if self.bot.user else None),
+                    starter_state=self.starter_message_ids,
+                )
+                self._save_starter_state()
+                logger.info("Recreated starter after bulk delete channel=%s new=%s deleted=%s", ch.id, new_id, deleted)
+            except Exception as e:
+                logger.warning("Failed recreate starter on bulk delete channel=%s err=%s", ch.id, e)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(VeniceCog(bot))
