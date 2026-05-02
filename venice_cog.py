@@ -1,13 +1,16 @@
 import asyncio
 import base64
+import binascii
 import io
+import json
 import logging
 import os
 import random
 import re
 import time
 import uuid
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Optional, Any
 
 import aiohttp
@@ -26,6 +29,7 @@ if not VENICE_API_KEY:
 
 VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL", "https://api.venice.ai/api/v1/image/upscale")
+VENICE_MODELS_URL = "https://api.venice.ai/api/v1/models"
 
 BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
 LEGACY_STARTER_TEXTS = {
@@ -36,6 +40,7 @@ RECENT_SCAN_LIMIT = 10
 
 SURPRISE_VALUE = "__surprise_me__"
 SURPRISE_LABEL = "🎲 Surprise me"
+NO_MODEL_VALUE = "__no_models__"
 
 logger = logging.getLogger("venice_picture_bot")
 
@@ -88,146 +93,90 @@ ASPECT_LABELS = {
     "4:5": "🖼️ 4:5",
 }
 RESOLUTION_TIERS = ["1K", "2K", "4K"]
-
-# Fallback for models with no explicit aspectRatios
 FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]
 
 # =================================================
-# MODEL CONFIG (JSON-aligned)
-# removed as previously requested:
-# - venice-sd35
-# - flux-2-pro
-# - lustify-sdxl
-# - bria-bg-remover
+# MODEL CONFIG (API-first + curated list)
 # =================================================
-COMMON_RATIOS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
-GROK_RATIOS = ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"]
-GPT15_RATIOS = ["1:1", "3:2", "2:3"]
+CURATED_IMAGE_MODELS = [
+    "hidream",
+    "flux-2-max",
+    "gpt-image-2",
+    "gpt-image-1-5",
+    "hunyuan-image-v3",
+    "imagineart-1.5-pro",
+    "nano-banana-2",
+    "nano-banana-pro",
+    "recraft-v4",
+    "recraft-v4-pro",
+    "seedream-v4",
+    "seedream-v5-lite",
+    "qwen-image-2",
+    "qwen-image-2-pro",
+    "wan-2-7-text-to-image",
+    "wan-2-7-pro-text-to-image",
+    "grok-imagine-image",
+    "grok-imagine-image-pro",
+    "lustify-v7",
+    "lustify-v8",
+    "qwen-image",
+    "wai-Illustrious",
+    "z-image-turbo",
+    "chroma",
+]
+
+MODEL_LABELS = {
+    "hidream": "🌙 HiDream",
+    "flux-2-max": "🌌 Flux 2 Max",
+    "gpt-image-2": "🧠 GPT Image 2",
+    "gpt-image-1-5": "🪄 GPT Image 1.5",
+    "hunyuan-image-v3": "🐉 Hunyuan Image 3.0",
+    "imagineart-1.5-pro": "🎨 ImagineArt 1.5 Pro",
+    "nano-banana-2": "🐵 Nano Banana 2",
+    "nano-banana-pro": "🍌 Nano Banana Pro",
+    "recraft-v4": "🧱 Recraft V4",
+    "recraft-v4-pro": "🏗️ Recraft V4 Pro",
+    "seedream-v4": "🌊 Seedream V4.5",
+    "seedream-v5-lite": "💧 Seedream V5 Lite",
+    "qwen-image-2": "🔷 Qwen Image 2",
+    "qwen-image-2-pro": "🧩 Qwen Image 2 Pro",
+    "wan-2-7-text-to-image": "🐋 Wan 2.7",
+    "wan-2-7-pro-text-to-image": "🦈 Wan 2.7 Pro",
+    "grok-imagine-image": "🧠 Grok Imagine",
+    "grok-imagine-image-pro": "🚀 Grok Imagine Pro",
+    "lustify-v7": "🥵 Lustify v7",
+    "lustify-v8": "🔥 Lustify v8",
+    "qwen-image": "🐼 Qwen Image",
+    "wai-Illustrious": "🎌 Anime (WAI)",
+    "z-image-turbo": "⚡ Z-Image Turbo",
+    "chroma": "🌈 Chroma",
+}
+
+DEFAULT_MODEL_ROW = {
+    "prompt_limit": 1500,
+    "default_steps": 20,
+    "max_steps": 50,
+    "cfg_default": 5.2,
+    "aspect_ratios": None,
+    "default_aspect_ratio": "1:1",
+    "width_height_divisor": 8,
+    "resolutions": [],
+    "default_resolution": "1K",
+    "speed_factor": 1.0,  # baseline speed multiplier
+}
 
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
-    "hidream": {
-        "label": "🌙 HiDream",
-        "prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5,
-        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
-    },
-    "flux-2-max": {
-        "label": "🌌 Flux 2 Max",
-        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": ["auto", "1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"],
-        "width_height_divisor": 1, "resolutions": [],
-    },
-    "gpt-image-2": {
-        "label": "🧠 GPT Image 2",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"],
-    },
-    "gpt-image-1-5": {
-        "label": "🪄 GPT Image 1.5",
-        "prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": GPT15_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "hunyuan-image-v3": {
-        "label": "🐉 Hunyuan Image 3.0",
-        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "imagineart-1.5-pro": {
-        "label": "🎨 ImagineArt 1.5 Pro",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"],
-        "width_height_divisor": 1, "resolutions": [],
-    },
-    "nano-banana-2": {
-        "label": "🐵 Nano Banana 2",
-        "prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"],
-    },
-    "nano-banana-pro": {
-        "label": "🍌 Nano Banana Pro",
-        "prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"],
-    },
-    "recraft-v4": {
-        "label": "🧱 Recraft V4",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "recraft-v4-pro": {
-        "label": "🏗️ Recraft V4 Pro",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "seedream-v4": {
-        "label": "🌊 Seedream V4.5",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "seedream-v5-lite": {
-        "label": "💧 Seedream V5 Lite",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "qwen-image-2": {
-        "label": "🔷 Qwen Image 2",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "qwen-image-2-pro": {
-        "label": "🧩 Qwen Image 2 Pro",
-        "prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "wan-2-7-text-to-image": {
-        "label": "🐋 Wan 2.7",
-        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "wan-2-7-pro-text-to-image": {
-        "label": "🦈 Wan 2.7 Pro",
-        "prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": COMMON_RATIOS, "width_height_divisor": 1, "resolutions": [],
-    },
-    "grok-imagine-image": {
-        "label": "🧠 Grok Imagine",
-        "prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": GROK_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K"],
-    },
-    "grok-imagine-image-pro": {
-        "label": "🚀 Grok Imagine Pro",
-        "prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": GROK_RATIOS, "width_height_divisor": 1, "resolutions": ["1K", "2K"],
-    },
-    "lustify-v7": {
-        "label": "🥵 Lustify v7",
-        "prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
-    },
-    "lustify-v8": {
-        "label": "🔥 Lustify v8",
-        "prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0,
-        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
-    },
-    "qwen-image": {
-        "label": "🐼 Qwen Image",
-        "prompt_limit": 1500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0,
-        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
-    },
-    "wai-Illustrious": {
-        "label": "🎌 Anime (WAI)",
-        "prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0,
-        "aspect_ratios": None, "width_height_divisor": 16, "resolutions": [],
-    },
-    "z-image-turbo": {
-        "label": "⚡ Z-Image Turbo",
-        "prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0,
-        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
-    },
-    "chroma": {
-        "label": "🌈 Chroma",
-        "prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0,
-        "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [],
-    },
+    mid: {
+        "label": MODEL_LABELS.get(mid, mid),
+        **DEFAULT_MODEL_ROW
+    }
+    for mid in CURATED_IMAGE_MODELS
 }
+
+MODEL_ORDER = CURATED_IMAGE_MODELS[:]
+DISABLED_MODELS: set[str] = set()
+
+EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "lustify-sdxl", "bria-bg-remover"}
 
 UNCENSORED_MODELS = {
     "lustify-v7",
@@ -241,7 +190,83 @@ UNCENSORED_MODELS = {
     "wan-2-7-pro-text-to-image",
 }
 
-MODEL_ORDER = list(MODEL_CONFIG.keys())
+# =================================================
+# TIMING (estimate + learned EWMA + optional cache)
+# =================================================
+NATIVE_RES_TIME_FACTOR = {"1K": 1.00, "2K": 1.30, "4K": 1.70}
+UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}  # 4x handled as 2x + 2x
+UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
+
+TIMING_EWMA: dict[str, float] = defaultdict(float)
+TIMING_N: dict[str, int] = defaultdict(int)
+
+TIMING_CACHE_FILE = os.getenv("VENICE_TIMING_CACHE_FILE", "venice_timing_cache.json")
+_TIMING_DIRTY_COUNT = 0
+
+
+def _timing_key(model_id: str, target_res: str, upscale_factor: Optional[int]) -> str:
+    return f"{model_id}|{target_res}|up{upscale_factor or 1}"
+
+
+def load_timing_cache():
+    global _TIMING_DIRTY_COUNT
+    try:
+        if not os.path.exists(TIMING_CACHE_FILE):
+            return
+        with open(TIMING_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        ewma = data.get("ewma", {})
+        nvals = data.get("n", {})
+
+        TIMING_EWMA.clear()
+        TIMING_N.clear()
+
+        for k, v in ewma.items():
+            TIMING_EWMA[k] = float(v)
+        for k, v in nvals.items():
+            TIMING_N[k] = int(v)
+
+        _TIMING_DIRTY_COUNT = 0
+        logger.info("Timing cache loaded (%s keys)", len(TIMING_EWMA))
+    except Exception as e:
+        logger.warning("Failed to load timing cache: %s", e)
+
+
+def save_timing_cache():
+    global _TIMING_DIRTY_COUNT
+    try:
+        payload = {
+            "ewma": dict(TIMING_EWMA),
+            "n": dict(TIMING_N),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        with open(TIMING_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        _TIMING_DIRTY_COUNT = 0
+    except Exception as e:
+        logger.warning("Failed to save timing cache: %s", e)
+
+
+def timing_get_estimate(model_id: str, target_res: str, upscale_factor: Optional[int], fallback: float) -> float:
+    k = _timing_key(model_id, target_res, upscale_factor)
+    if TIMING_N[k] >= 3 and TIMING_EWMA[k] > 0:
+        return TIMING_EWMA[k]
+    return fallback
+
+
+def timing_update(model_id: str, target_res: str, upscale_factor: Optional[int], measured_seconds: float, alpha: float = 0.25):
+    global _TIMING_DIRTY_COUNT
+    k = _timing_key(model_id, target_res, upscale_factor)
+    old = TIMING_EWMA[k]
+    TIMING_EWMA[k] = measured_seconds if old <= 0 else (alpha * measured_seconds + (1 - alpha) * old)
+    TIMING_N[k] += 1
+    _TIMING_DIRTY_COUNT += 1
+
+    # write occasionally
+    if _TIMING_DIRTY_COUNT >= 10:
+        save_timing_cache()
+
 
 # =================================================
 # LOCKS
@@ -258,15 +283,37 @@ def get_channel_lock(channel_id: int) -> asyncio.Lock:
 
 
 # =================================================
-# HELPERS
+# GENERAL HELPERS
 # =================================================
+def _safe_float(v: Any, default: Optional[float] = 0.0) -> Optional[float]:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _to_int(v: Any, default: int) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def get_active_model_ids() -> list[str]:
+    return [m for m in MODEL_ORDER if m not in DISABLED_MODELS]
+
+
 def get_model_label(model_id: str) -> str:
     base = MODEL_CONFIG[model_id]["label"]
     return f"{base} 🔞" if model_id in UNCENSORED_MODELS else base
 
 
 def get_model_ratios(model_id: str) -> list[str]:
-    ratios = MODEL_CONFIG[model_id]["aspect_ratios"]
+    ratios = MODEL_CONFIG[model_id].get("aspect_ratios")
     return ratios if ratios else FALLBACK_ASPECTS
 
 
@@ -311,14 +358,19 @@ def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -
 
 def build_model_options(channel_id: int, include_surprise: bool = True) -> list[discord.SelectOption]:
     if channel_id not in ALLOWED_CHANNEL_IDS:
-        return []
+        return [discord.SelectOption(label="No models in this channel", value=NO_MODEL_VALUE)]
 
+    active = get_active_model_ids()
     options: list[discord.SelectOption] = []
-    if include_surprise:
+
+    if include_surprise and active:
         options.append(discord.SelectOption(label=SURPRISE_LABEL, value=SURPRISE_VALUE))
 
-    for model_id in MODEL_ORDER:
+    for model_id in active:
         options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
+
+    if not options:
+        options.append(discord.SelectOption(label="No models available", value=NO_MODEL_VALUE))
 
     return options[:25]
 
@@ -403,15 +455,17 @@ def build_generate_payload(
         "return_binary": True,
     }
 
-    native_ratios = cfg["aspect_ratios"]
+    native_ratios = cfg.get("aspect_ratios")
     if native_ratios:
-        payload["aspect_ratio"] = ratio if ratio in native_ratios else native_ratios[0]
+        default_ratio = cfg.get("default_aspect_ratio") or native_ratios[0]
+        payload["aspect_ratio"] = ratio if ratio in native_ratios else default_ratio
     else:
-        w, h = dimensions_for_ratio(ratio, cfg["width_height_divisor"], base_long_side=1024)
+        w, h = dimensions_for_ratio(ratio, cfg.get("width_height_divisor", 8), base_long_side=1024)
         payload["width"] = w
         payload["height"] = h
 
-    if generation_resolution and generation_resolution in cfg["resolutions"]:
+    model_resolutions = set(cfg.get("resolutions", []))
+    if generation_resolution and generation_resolution in model_resolutions:
         payload["resolution"] = generation_resolution
 
     return payload
@@ -448,6 +502,250 @@ def build_surprise_embed(model_id: str, ratio: str) -> discord.Embed:
     return emb
 
 
+def estimate_generation_seconds(
+    model_id: str,
+    steps: int,
+    cfg_scale: float,
+    prompt_len: int,
+    generation_resolution: Optional[str],
+) -> float:
+    base = 8.5
+    cfg = MODEL_CONFIG[model_id]
+    model_f = float(cfg.get("speed_factor", 1.0))
+    default_steps = max(1, int(cfg.get("default_steps", 20)))
+    steps_f = max(0.55, steps / default_steps)
+    prompt_f = 1.0 + min(prompt_len, 4000) / 8000.0
+    cfg_f = 1.0 + max(0.0, cfg_scale - 5.0) * 0.02
+    res_f = NATIVE_RES_TIME_FACTOR.get(generation_resolution or "1K", 1.0)
+    est = base * model_f * steps_f * prompt_f * cfg_f * res_f
+    return max(6.0, min(est, 180.0))
+
+
+def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> float:
+    if scale not in (2, 4):
+        return 0.0
+    base = UPSCALE_BASE_SECONDS.get(scale, 10.0)
+    target_f = UPSCALE_TARGET_FACTOR.get(target_resolution, 1.0)
+    est = base * target_f
+    return max(4.0, min(est, 180.0))
+
+
+def _looks_like_image(b: bytes) -> bool:
+    if not b or len(b) < 12:
+        return False
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if b.startswith(b"\xff\xd8\xff"):
+        return True
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return True
+    if b.startswith((b"GIF87a", b"GIF89a")):
+        return True
+    return False
+
+
+def _b64_to_bytes(s: str) -> Optional[bytes]:
+    if not s:
+        return None
+    s = s.strip()
+    if s.startswith("data:image") and "," in s:
+        s = s.split(",", 1)[1]
+    try:
+        return base64.b64decode(s)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _extract_image_from_json_obj(obj: Any) -> Optional[bytes]:
+    # Check common direct keys first
+    if isinstance(obj, dict):
+        for key in ("image", "image_base64", "imageBase64", "b64_json", "base64", "upscaled_image"):
+            val = obj.get(key)
+            if isinstance(val, str):
+                out = _b64_to_bytes(val)
+                if out and _looks_like_image(out):
+                    return out
+
+        # dive a bit deeper
+        for _, val in list(obj.items())[:12]:
+            out = _extract_image_from_json_obj(val)
+            if out:
+                return out
+
+    elif isinstance(obj, list):
+        for item in obj[:12]:
+            out = _extract_image_from_json_obj(item)
+            if out:
+                return out
+
+    elif isinstance(obj, str):
+        # sometimes raw base64 string in list
+        out = _b64_to_bytes(obj)
+        if out and _looks_like_image(out):
+            return out
+
+    return None
+
+
+async def _extract_image_from_response(resp: aiohttp.ClientResponse) -> Optional[bytes]:
+    raw = await resp.read()
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+
+    # direct image bytes
+    if "image/" in ctype and _looks_like_image(raw):
+        return raw
+
+    # maybe json
+    try:
+        data = json.loads(raw.decode("utf-8", errors="ignore"))
+    except Exception:
+        return raw if _looks_like_image(raw) else None
+
+    out = _extract_image_from_json_obj(data)
+    if out and _looks_like_image(out):
+        return out
+
+    return None
+
+
+def _is_deprecated(model_obj: dict[str, Any]) -> bool:
+    dep = (model_obj.get("model_spec") or {}).get("deprecation") or {}
+    d = dep.get("date")
+    if not d:
+        return False
+    try:
+        dt = datetime.fromisoformat(d.replace("Z", "+00:00"))
+        return dt <= datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
+def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
+    spec = model_obj.get("model_spec") or {}
+    pricing = spec.get("pricing") or {}
+
+    gen = pricing.get("generation")
+    if isinstance(gen, dict) and "usd" in gen:
+        return _safe_float(gen["usd"], None)
+
+    res = pricing.get("resolutions")
+    if isinstance(res, dict) and res:
+        if "1K" in res and isinstance(res["1K"], dict):
+            return _safe_float(res["1K"].get("usd"), None)
+
+        vals = []
+        for _, row in res.items():
+            if isinstance(row, dict) and "usd" in row:
+                v = _safe_float(row.get("usd"), None)
+                if v is not None:
+                    vals.append(v)
+        if vals:
+            return min(vals)
+
+    return None
+
+
+def _calc_speed_factor_from_price(usd: Optional[float]) -> float:
+    if usd is None or usd <= 0:
+        return 1.0
+    # smoother mapping
+    factor = (usd / 0.05) ** 0.20
+    return _clamp(factor, 0.70, 1.55)
+
+
+def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> float:
+    mid = model_id.lower()
+
+    if "wai-illustrious" in mid or "anime" in mid:
+        return 7.0
+    if model_id == "qwen-image":
+        return 6.0
+    if default_steps <= 10:
+        return 6.0
+    if width_div >= 16:
+        return 6.8
+
+    # API-heavy modern models generally behave best lower cfg
+    if any(x in mid for x in ["gpt-image", "recraft", "seedream", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "qwen-image-2"]):
+        return 5.0
+
+    return 5.4
+
+
+def _extract_image_caps(model_obj: dict[str, Any]) -> dict[str, Any]:
+    spec = model_obj.get("model_spec") or {}
+    cons = spec.get("constraints") or {}
+    steps = cons.get("steps") or {}
+
+    prompt_limit = _to_int(cons.get("promptCharacterLimit"), 1500)
+    default_steps = _to_int(steps.get("default"), 20)
+    max_steps = _to_int(steps.get("max"), max(default_steps, 20))
+    aspect_ratios = cons.get("aspectRatios") or None
+    default_aspect = cons.get("defaultAspectRatio") or ((aspect_ratios[0] if aspect_ratios else "1:1"))
+    width_div = _to_int(cons.get("widthHeightDivisor"), 8)
+    resolutions = cons.get("resolutions") or []
+    default_resolution = cons.get("defaultResolution") or ("1K" if "1K" in resolutions else (resolutions[0] if resolutions else "1K"))
+
+    usd = _extract_price_usd(model_obj)
+    speed_factor = _calc_speed_factor_from_price(usd)
+    cfg_default = _auto_cfg_default(model_obj.get("id", ""), default_steps, width_div)
+
+    return {
+        "prompt_limit": prompt_limit,
+        "default_steps": default_steps,
+        "max_steps": max_steps,
+        "aspect_ratios": aspect_ratios,
+        "default_aspect_ratio": default_aspect,
+        "width_height_divisor": width_div,
+        "resolutions": resolutions,
+        "default_resolution": default_resolution,
+        "cfg_default": cfg_default,
+        "speed_factor": speed_factor,
+    }
+
+
+async def sync_model_caps_from_api(session: aiohttp.ClientSession):
+    headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
+    async with session.get(VENICE_MODELS_URL, headers=headers) as resp:
+        if resp.status != 200:
+            logger.warning("Model sync failed %s: %s", resp.status, await resp.text())
+            return
+        payload = await resp.json(content_type=None)
+
+    DISABLED_MODELS.clear()
+
+    api_models: dict[str, dict[str, Any]] = {}
+    for m in payload.get("data", []):
+        if m.get("type") != "image":
+            continue
+        mid = m.get("id")
+        if mid:
+            api_models[mid] = m
+
+    for mid in MODEL_ORDER:
+        if mid in EXCLUDED_IMAGE_MODELS:
+            DISABLED_MODELS.add(mid)
+            continue
+
+        m = api_models.get(mid)
+        if not m:
+            # robust fallback: keep defaults active if missing
+            logger.warning("Model %s not found in API; keeping fallback defaults.", mid)
+            continue
+
+        if _is_deprecated(m):
+            DISABLED_MODELS.add(mid)
+            logger.info("Model disabled (deprecated): %s", mid)
+            continue
+
+        caps = _extract_image_caps(m)
+        MODEL_CONFIG[mid].update(caps)
+
+    if len(get_active_model_ids()) == 0:
+        logger.warning("No active models after sync. Re-enabling fallback set.")
+        DISABLED_MODELS.clear()
+
+
 async def send_ephemeral(interaction: discord.Interaction, content: str):
     if interaction.response.is_done():
         await interaction.followup.send(content, ephemeral=True)
@@ -465,21 +763,28 @@ async def send_resolution_lock_message(interaction: discord.Interaction, resolut
     )
 
 
+# =================================================
+# API CALLS
+# =================================================
 async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     for attempt in range(retries + 1):
         try:
             async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
                 if resp.status == 200:
-                    return await resp.read()
+                    img = await _extract_image_from_response(resp)
+                    if img and _looks_like_image(img):
+                        return img
+                    logger.warning("Generate 200 but no valid image payload")
+                    return None
 
                 body = await resp.text()
                 logger.warning("Venice generate error %s: %s", resp.status, body)
-
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
                 return None
+
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.warning("Venice generate request failed (attempt %s): %s", attempt + 1, e)
             if attempt < retries:
@@ -492,7 +797,7 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
     return None
 
 
-async def venice_upscale(
+async def _upscale_once(
     session: aiohttp.ClientSession,
     image_bytes: bytes,
     scale: int,
@@ -500,51 +805,51 @@ async def venice_upscale(
 ) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
 
+    if not _looks_like_image(image_bytes):
+        logger.warning("Upscale input is not a valid image")
+        return None
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    payloads = [
+        {"image": b64, "scale": scale},
+        {"image": f"data:image/png;base64,{b64}", "scale": scale},
+    ]
+
     for attempt in range(retries + 1):
-        try:
-            # Try multipart first
-            form = aiohttp.FormData()
-            form.add_field("file", image_bytes, filename="image.png", content_type="image/png")
-            form.add_field("scale", str(scale))
-            form.add_field("return_binary", "true")
+        for payload in payloads:
+            try:
+                async with session.post(VENICE_UPSCALE_URL, headers=headers, json=payload) as resp:
+                    if resp.status == 200:
+                        out = await _extract_image_from_response(resp)
+                        if out and _looks_like_image(out):
+                            return out
+                    else:
+                        body = await resp.text()
+                        logger.warning("Venice upscale json error %s: %s", resp.status, body)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning("Venice upscale request failed (attempt %s): %s", attempt + 1, e)
+            except Exception as e:
+                logger.exception("Unexpected error in _upscale_once: %s", e)
 
-            async with session.post(VENICE_UPSCALE_URL, headers=headers, data=form) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-
-                body = await resp.text()
-                logger.warning("Venice upscale multipart error %s: %s", resp.status, body)
-
-            # Fallback: JSON base64
-            payload = {
-                "image": base64.b64encode(image_bytes).decode("utf-8"),
-                "scale": scale,
-                "return_binary": True,
-            }
-            async with session.post(VENICE_UPSCALE_URL, headers=headers, json=payload) as resp2:
-                if resp2.status == 200:
-                    return await resp2.read()
-
-                body2 = await resp2.text()
-                logger.warning("Venice upscale json error %s: %s", resp2.status, body2)
-
-            if attempt < retries:
-                await asyncio.sleep(1.2 * (attempt + 1))
-                continue
-
-            return None
-
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning("Venice upscale request failed (attempt %s): %s", attempt + 1, e)
-            if attempt < retries:
-                await asyncio.sleep(1.2 * (attempt + 1))
-                continue
-            return None
-        except Exception as e:
-            logger.exception("Unexpected error in venice_upscale: %s", e)
-            return None
+        if attempt < retries:
+            await asyncio.sleep(1.2 * (attempt + 1))
 
     return None
+
+
+async def venice_upscale(
+    session: aiohttp.ClientSession,
+    image_bytes: bytes,
+    scale: int,
+    retries: int = 2
+) -> Optional[bytes]:
+    if scale == 4:
+        first = await _upscale_once(session, image_bytes, 2, retries=retries)
+        if not first:
+            return None
+        second = await _upscale_once(session, first, 2, retries=retries)
+        return second
+    return await _upscale_once(session, image_bytes, scale, retries=retries)
 
 
 # =================================================
@@ -594,6 +899,10 @@ class AspectRatioSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if self.model_id in DISABLED_MODELS:
+            await send_ephemeral(interaction, "❌ Dieses Modell ist deaktiviert.")
+            return
+
         ratio = self.values[0]
         source_msg = interaction.message
 
@@ -608,7 +917,6 @@ class AspectRatioSelect(discord.ui.Select):
             )
         )
 
-        # Remove aspect dropdown post once clicked
         if source_msg:
             try:
                 await source_msg.edit(view=None, content="✅ Aspect ratio selected.")
@@ -654,8 +962,17 @@ class StarterModelSelect(discord.ui.Select):
         selected = self.values[0]
         hidden_suffix = NSFW_PROMPT_SUFFIX if interaction.channel and interaction.channel.id in NSFW_CHANNELS else SFW_PROMPT_SUFFIX
 
+        if selected == NO_MODEL_VALUE:
+            await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
+            return
+
         if selected == SURPRISE_VALUE:
-            model_id = random.choice(MODEL_ORDER)
+            active = get_active_model_ids()
+            if not active:
+                await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
+                return
+
+            model_id = random.choice(active)
             ratio = random.choice(get_model_ratios(model_id))
 
             await interaction.response.send_modal(
@@ -674,13 +991,16 @@ class StarterModelSelect(discord.ui.Select):
             except Exception:
                 pass
 
-            # requested: when dropdown action happens, clean model dropdown in recent 10
             if isinstance(interaction.channel, discord.TextChannel):
                 await VeniceCog.delete_recent_model_dropdown_posts(
                     interaction.channel,
                     bot_user_id=(interaction.client.user.id if interaction.client.user else None),
                     limit=RECENT_SCAN_LIMIT
                 )
+            return
+
+        if selected in DISABLED_MODELS:
+            await send_ephemeral(interaction, "❌ Dieses Modell ist deaktiviert.")
             return
 
         model_id = selected
@@ -695,7 +1015,6 @@ class StarterModelSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        # requested logic: after aspect dropdown post, remove model dropdown in recent 10
         if isinstance(interaction.channel, discord.TextChannel):
             await VeniceCog.delete_recent_model_dropdown_posts(
                 interaction.channel,
@@ -736,7 +1055,7 @@ class GenerationModal(discord.ui.Modal):
             label="Describe your image",
             style=discord.TextStyle.paragraph,
             required=True,
-            max_length=min(cfg["prompt_limit"], 4000),
+            max_length=min(int(cfg["prompt_limit"]), 4000),
             default=self.previous_inputs.get("prompt", ""),
         )
         self.negative_prompt = discord.ui.TextInput(
@@ -779,22 +1098,26 @@ class GenerationModal(discord.ui.Modal):
             await send_ephemeral(interaction, "🚫 This modal does not belong to you.")
             return
 
+        if self.model_id in DISABLED_MODELS:
+            await send_ephemeral(interaction, "❌ Dieses Modell ist deaktiviert.")
+            return
+
         cfg = MODEL_CONFIG[self.model_id]
         fixed_steps = cfg["default_steps"] == cfg["max_steps"]
 
         try:
             cfg_val = float(self.cfg_value.value)
         except Exception:
-            cfg_val = cfg["cfg_default"]
+            cfg_val = float(cfg["cfg_default"])
 
         if fixed_steps:
-            steps_val = cfg["default_steps"]
+            steps_val = int(cfg["default_steps"])
         else:
             try:
                 steps_val = int(self.steps_value.value)
-                steps_val = max(1, min(steps_val, cfg["max_steps"]))
+                steps_val = max(1, min(steps_val, int(cfg["max_steps"])))
             except Exception:
-                steps_val = cfg["default_steps"]
+                steps_val = int(cfg["default_steps"])
 
         negative_prompt = (self.negative_prompt.value or "").strip() or DEFAULT_NEGATIVE_PROMPT
         hidden_suffix = (self.hidden_suffix.value or "").strip() or self.hidden_suffix_value
@@ -841,12 +1164,12 @@ class ResolutionSelectView(OwnerLockedView):
         for res in RESOLUTION_TIERS:
             label = res
             if res not in native and res in ("2K", "4K"):
-                label = f"{res} ↗"  # indicates upscale path
+                label = f"{res} ↗"
 
             style = (
                 discord.ButtonStyle.success if res == "1K"
                 else discord.ButtonStyle.primary if res == "2K"
-                else discord.ButtonStyle.danger  # 4K red
+                else discord.ButtonStyle.danger
             )
 
             btn = discord.ui.Button(
@@ -871,7 +1194,6 @@ class ResolutionSelectView(OwnerLockedView):
 
             await interaction.response.defer(ephemeral=True)
 
-            # remove resolution post after click
             if interaction.message:
                 try:
                     await interaction.message.edit(view=None, content="✅ Resolution selected.")
@@ -893,8 +1215,12 @@ class ResolutionSelectView(OwnerLockedView):
         previous_inputs = self.generation_data["previous_inputs"]
         channel_id = self.generation_data["channel_id"]
 
-        full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
+        if model_id in DISABLED_MODELS:
+            await interaction.followup.send("❌ Dieses Modell ist deaktiviert.", ephemeral=True)
+            self.stop()
+            return
 
+        full_prompt = f"{(prompt_text or '').strip()} {(hidden_suffix or '').strip()}".strip()
         gen_res, upscale_factor = generation_plan(model_id, resolution)
 
         payload = build_generate_payload(
@@ -907,25 +1233,43 @@ class ResolutionSelectView(OwnerLockedView):
             steps=steps,
         )
 
+        effective_gen_res = gen_res or "1K"
+
+        est_gen_fallback = estimate_generation_seconds(
+            model_id=model_id,
+            steps=steps,
+            cfg_scale=cfg_val,
+            prompt_len=len(prompt_text or ""),
+            generation_resolution=effective_gen_res,
+        )
+        est_gen = timing_get_estimate(model_id, effective_gen_res, None, est_gen_fallback)
+
+        est_up = 0.0
+        if upscale_factor in (2, 4):
+            est_up_fallback = estimate_upscale_seconds(upscale_factor, resolution)
+            est_up = timing_get_estimate(model_id, resolution, upscale_factor, est_up_fallback)
+
+        gen_cap = 72 if upscale_factor in (2, 4) else 95
         progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True)
 
+        gen_started = time.monotonic()
         gen_task = asyncio.create_task(venice_generate(self.session, payload))
-        started = time.monotonic()
         last_percent = -1
 
         while not gen_task.done():
-            elapsed = time.monotonic() - started
-            est_total = max(10.0, min(75.0, 8 + steps * 0.9 + cfg_val * 0.6 + len(prompt_text) / 220))
-            percent = min(95, int((elapsed / est_total) * 95))
+            elapsed = time.monotonic() - gen_started
+            percent = min(gen_cap, int((elapsed / max(est_gen, 6.0)) * gen_cap))
             if percent != last_percent:
                 last_percent = percent
                 try:
                     await progress_msg.edit(content=f"{pepper} Generating image for **{interaction.user.display_name}**... {percent}%")
                 except Exception:
                     pass
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(1.0)
 
         image_bytes = await gen_task
+        gen_measured = time.monotonic() - gen_started
+
         if not image_bytes:
             await interaction.followup.send("❌ Generation failed.", ephemeral=True)
             if isinstance(interaction.channel, discord.TextChannel):
@@ -937,17 +1281,33 @@ class ResolutionSelectView(OwnerLockedView):
             self.stop()
             return
 
+        timing_update(model_id, effective_gen_res, None, gen_measured)
+
         upscale_note = None
         if upscale_factor in (2, 4):
-            try:
-                await progress_msg.edit(content=f"{pepper} Upscaling {upscale_factor}x...")
-            except Exception:
-                pass
+            up_started = time.monotonic()
+            up_task = asyncio.create_task(venice_upscale(self.session, image_bytes, upscale_factor))
+            up_last_percent = -1
 
-            upscaled = await venice_upscale(self.session, image_bytes, upscale_factor)
+            while not up_task.done():
+                up_elapsed = time.monotonic() - up_started
+                up_slice = min(26, int((up_elapsed / max(est_up, 4.0)) * 26))
+                percent = min(98, gen_cap + up_slice)
+                if percent != up_last_percent:
+                    up_last_percent = percent
+                    try:
+                        await progress_msg.edit(content=f"{pepper} Upscaling ({upscale_factor}x) for **{interaction.user.display_name}**... {percent}%")
+                    except Exception:
+                        pass
+                await asyncio.sleep(1.0)
+
+            upscaled = await up_task
+            up_measured = time.monotonic() - up_started
+
             if upscaled:
                 image_bytes = upscaled
-                upscale_note = f"Upscaled {upscale_factor}x"
+                timing_update(model_id, resolution, upscale_factor, up_measured)
+                upscale_note = "Upscaled 2x" if upscale_factor == 2 else "Upscaled 4x (2x + 2x)"
             else:
                 upscale_note = f"Upscale {upscale_factor}x failed (kept base output)"
 
@@ -1063,8 +1423,17 @@ class ReuseModelSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
 
+        if selected == NO_MODEL_VALUE:
+            await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
+            return
+
         if selected == SURPRISE_VALUE:
-            model_id = random.choice(MODEL_ORDER)
+            active = get_active_model_ids()
+            if not active:
+                await send_ephemeral(interaction, "❌ Aktuell keine Modelle verfügbar.")
+                return
+
+            model_id = random.choice(active)
             ratio = random.choice(get_model_ratios(model_id))
 
             await interaction.response.send_modal(
@@ -1089,6 +1458,10 @@ class ReuseModelSelect(discord.ui.Select):
                     bot_user_id=(interaction.client.user.id if interaction.client.user else None),
                     limit=RECENT_SCAN_LIMIT
                 )
+            return
+
+        if selected in DISABLED_MODELS:
+            await send_ephemeral(interaction, "❌ Dieses Modell ist deaktiviert.")
             return
 
         model_id = selected
@@ -1210,11 +1583,23 @@ class VeniceCog(commands.Cog):
     async def cog_load(self):
         await self._ensure_session()
 
-        # persistent starter dropdowns
+        load_timing_cache()
+
+        try:
+            await sync_model_caps_from_api(self.session)
+            logger.info(
+                "Model sync done. Active=%s Disabled=%s",
+                len(get_active_model_ids()),
+                len(DISABLED_MODELS)
+            )
+        except Exception as e:
+            logger.warning("Model sync failed in cog_load: %s", e)
+
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
     def cog_unload(self):
+        save_timing_cache()
         if self.session and not self.session.closed:
             asyncio.create_task(self.session.close())
 
@@ -1250,7 +1635,6 @@ class VeniceCog(commands.Cog):
         lock = get_channel_lock(channel.id)
         async with lock:
             try:
-                # requested: last 10 cleanup before repost
                 await VeniceCog._delete_recent_model_dropdown_posts_unlocked(
                     channel,
                     bot_user_id=(self.bot.user.id if self.bot.user else None),
