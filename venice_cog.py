@@ -18,6 +18,11 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
 # =================================================
 # ENV / API
 # =================================================
@@ -65,6 +70,10 @@ LEVEL11_ROLE_ID = 1375147276413964408
 RESOLUTION_ROLE_REQUIREMENTS = {
     "2K": LEVEL4_ROLE_ID,
     "4K": LEVEL11_ROLE_ID,
+}
+RESOLUTION_LEVEL_REQUIREMENTS = {
+    "2K": 4,
+    "4K": 11,
 }
 ROLE_LEVEL_NAMES = {
     LEVEL4_ROLE_ID: "Level 4",
@@ -372,10 +381,11 @@ def get_model_ratios(model_id: str) -> list[str]:
     return ratios if ratios else FALLBACK_ASPECTS
 
 
-def make_safe_filename(prompt: str) -> str:
+def make_safe_filename(prompt: str, ext: str = "png") -> str:
     base = "_".join((prompt or "").split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
-    return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.png"
+    ext = (ext or "png").lower().strip(".")
+    return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.{ext}"
 
 
 def snap_to_divisor(value: int, divisor: int) -> int:
@@ -458,6 +468,10 @@ def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
     return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
 
 
+def required_level_for_resolution(resolution: Optional[str]) -> Optional[int]:
+    return RESOLUTION_LEVEL_REQUIREMENTS.get(resolution) if resolution else None
+
+
 def has_role(member: discord.Member, role_id: int) -> bool:
     return any(r.id == role_id for r in member.roles)
 
@@ -537,12 +551,12 @@ def build_resolution_hint(model_id: str) -> str:
     parts = [f"Native: {', '.join(native_sorted)}"]
 
     if "2K" in native:
-        parts.append(f"2K")
+        parts.append("2K")
     else:
         parts.append("2K via upscale")
 
     if "4K" in native:
-        parts.append(f"4K")
+        parts.append("4K")
     else:
         parts.append("4K via upscale")
 
@@ -590,6 +604,73 @@ def _looks_like_image(b: bytes) -> bool:
     if b.startswith((b"GIF87a", b"GIF89a")):
         return True
     return False
+
+
+def _infer_image_ext(b: bytes) -> str:
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if b.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "webp"
+    if b.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return "png"
+
+
+def _discord_upload_limit_bytes(interaction: discord.Interaction) -> int:
+    if interaction.guild and getattr(interaction.guild, "filesize_limit", None):
+        return int(interaction.guild.filesize_limit)
+    return 8 * 1024 * 1024
+
+
+def _fit_image_for_discord(image_bytes: bytes, max_bytes: int) -> tuple[bytes, str]:
+    target = max(256 * 1024, max_bytes - 96 * 1024)
+
+    if len(image_bytes) <= target and _looks_like_image(image_bytes):
+        return image_bytes, _infer_image_ext(image_bytes)
+
+    if Image is None:
+        return image_bytes, _infer_image_ext(image_bytes)
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+    except Exception:
+        return image_bytes, _infer_image_ext(image_bytes)
+
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+
+    resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
+    for max_side in (4096, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 896, 768, 640):
+        work = img.copy()
+        work.thumbnail((max_side, max_side), resample)
+
+        for q in (92, 86, 80, 74, 68, 62, 56, 50, 44, 38):
+            try:
+                buf = io.BytesIO()
+                work.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
+                data = buf.getvalue()
+                if len(data) <= target:
+                    return data, "jpg"
+            except Exception:
+                continue
+
+    for max_side in (2048, 1536, 1280, 1024, 896, 768, 640, 512):
+        work = img.copy()
+        work.thumbnail((max_side, max_side), resample)
+        for q in (90, 80, 70, 60, 50, 40):
+            try:
+                buf = io.BytesIO()
+                work.save(buf, format="WEBP", quality=q, method=6)
+                data = buf.getvalue()
+                if len(data) <= target:
+                    return data, "webp"
+            except Exception:
+                continue
+
+    return image_bytes, _infer_image_ext(image_bytes)
 
 
 def _b64_to_bytes(s: str) -> Optional[bytes]:
@@ -771,7 +852,6 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
             logger.warning("Model %s not found in API; using baseline fallback.", mid)
             continue
 
-        # legacy lustify-sdxl explizit nicht wegen deprecation sperren
         if _is_deprecated(m) and mid != "lustify-sdxl":
             DISABLED_MODELS.add(mid)
             logger.info("Model disabled (deprecated): %s", mid)
@@ -791,13 +871,78 @@ async def send_ephemeral(interaction: discord.Interaction, content: str):
         await interaction.response.send_message(content, ephemeral=True)
 
 
-async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int):
+async def resolve_member_level(interaction: discord.Interaction, member: discord.Member) -> Optional[int]:
+    bot = interaction.client
+    guild_id = interaction.guild.id if interaction.guild else None
+    user_id = member.id
+
+    candidate_funcs = [
+        "get_user_level",
+        "get_level",
+        "xp_get_level",
+        "fetch_user_level",
+        "level_for_user",
+    ]
+
+    for fn_name in candidate_funcs:
+        fn = getattr(bot, fn_name, None)
+        if not callable(fn):
+            continue
+        try:
+            try:
+                res = fn(guild_id, user_id)
+            except TypeError:
+                try:
+                    res = fn(user_id, guild_id)
+                except TypeError:
+                    res = fn(member)
+
+            if asyncio.iscoroutine(res):
+                res = await res
+
+            if res is None:
+                continue
+            return int(res)
+        except Exception:
+            continue
+
+    for attr in ("level", "lvl", "xp_level"):
+        try:
+            val = getattr(member, attr, None)
+            if val is not None:
+                return int(val)
+        except Exception:
+            pass
+
+    max_from_roles: Optional[int] = None
+    for r in member.roles:
+        m = re.search(r"(?:lvl|level)\s*(\d+)", r.name or "", flags=re.IGNORECASE)
+        if m:
+            lv = int(m.group(1))
+            max_from_roles = lv if max_from_roles is None else max(max_from_roles, lv)
+
+    return max_from_roles
+
+
+async def send_resolution_lock_message(
+    interaction: discord.Interaction,
+    resolution: str,
+    role_id: int,
+    level_required: Optional[int] = None,
+    current_level: Optional[int] = None
+):
     level_name = ROLE_LEVEL_NAMES.get(role_id, "Required level")
+    level_txt = f"Level {level_required}+" if level_required else level_name
+    role_txt = f"<@&{role_id}> ({level_name})" if role_id else "`required role`"
+
+    current_txt = f"\nYour current level: **{current_level}**" if current_level is not None else ""
+
     await send_ephemeral(
         interaction,
         f"🔒 **{resolution}** is locked.\n"
-        f"You need <@&{role_id}> (**{level_name}**) to use this quality tier.\n"
-        f"💡 Earn XP in the server to unlock this role."
+        f"You need **{level_txt}** and role {role_txt}.{current_txt}\n"
+        f"💡 Earn XP by being active and generating images.\n"
+        f"🗳️ Voting on images also gives XP."
     )
 
 
@@ -1029,6 +1174,7 @@ class EasyModeModal(discord.ui.Modal):
             "hidden_suffix": self.hidden_suffix_value,
             "owner_id": self.owner_id,
             "channel_id": interaction.channel.id if interaction.channel else None,
+            "is_easy_mode": True,
             "previous_inputs": {
                 "prompt": self.prompt.value,
                 "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
@@ -1221,6 +1367,7 @@ class GenerationModal(discord.ui.Modal):
             "hidden_suffix": hidden_suffix,
             "owner_id": self.owner_id,
             "channel_id": interaction.channel.id if interaction.channel else None,
+            "is_easy_mode": False,
             "previous_inputs": {
                 "prompt": self.prompt.value,
                 "negative_prompt": negative_prompt,
@@ -1277,8 +1424,20 @@ class ResolutionSelectView(OwnerLockedView):
                 return
 
             role_needed = required_role_for_resolution(resolution)
-            if role_needed and not has_role(interaction.user, role_needed):
-                await send_resolution_lock_message(interaction, resolution, role_needed)
+            level_needed = required_level_for_resolution(resolution)
+            current_level = await resolve_member_level(interaction, interaction.user)
+
+            missing_role = bool(role_needed and not has_role(interaction.user, role_needed))
+            missing_level = bool(level_needed and current_level is not None and current_level < level_needed)
+
+            if missing_role or missing_level:
+                await send_resolution_lock_message(
+                    interaction=interaction,
+                    resolution=resolution,
+                    role_id=(role_needed or 0),
+                    level_required=level_needed,
+                    current_level=current_level
+                )
                 return
 
             await interaction.response.defer(ephemeral=True)
@@ -1303,6 +1462,7 @@ class ResolutionSelectView(OwnerLockedView):
         steps = int(self.generation_data["steps"])
         previous_inputs = self.generation_data["previous_inputs"]
         channel_id = self.generation_data["channel_id"]
+        is_easy_mode = bool(self.generation_data.get("is_easy_mode", False))
 
         if model_id in DISABLED_MODELS:
             await interaction.followup.send("❌ Dieses Modell ist deaktiviert.", ephemeral=True)
@@ -1387,7 +1547,7 @@ class ResolutionSelectView(OwnerLockedView):
 
         timing_update(model_id, effective_gen_res, None, gen_measured)
 
-        upscale_note = None
+        upscaled_success = False
         if upscale_factor in (2, 4):
             up_started = time.monotonic()
             up_task = asyncio.create_task(venice_upscale(self.session, image_bytes, upscale_factor))
@@ -1420,19 +1580,28 @@ class ResolutionSelectView(OwnerLockedView):
 
             if upscaled:
                 image_bytes = upscaled
+                upscaled_success = True
                 timing_update(model_id, resolution, upscale_factor, up_measured)
-                upscale_note = "Upscaled 2x" if upscale_factor == 2 else "Upscaled 4x (2x + 2x)"
-            else:
-                upscale_note = f"Upscale {upscale_factor}x failed (kept base output)"
 
         try:
             await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
         except Exception:
             pass
 
-        fp = io.BytesIO(image_bytes)
+        upload_limit = _discord_upload_limit_bytes(interaction)
+        safe_bytes, out_ext = _fit_image_for_discord(image_bytes, upload_limit)
+
+        if len(safe_bytes) > upload_limit:
+            await interaction.followup.send(
+                f"❌ Upload failed: file too large for this server limit ({upload_limit // (1024 * 1024)} MB). Try lower resolution.",
+                ephemeral=True
+            )
+            self.stop()
+            return
+
+        fp = io.BytesIO(safe_bytes)
         fp.seek(0)
-        dfile = discord.File(fp, filename=make_safe_filename(prompt_text))
+        dfile = discord.File(fp, filename=make_safe_filename(prompt_text, ext=out_ext))
 
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(
@@ -1453,17 +1622,17 @@ class ResolutionSelectView(OwnerLockedView):
         if negative_prompt and negative_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative prompt:\n{negative_prompt}"
 
-        if upscale_note:
-            embed.description += f"\n\n🛠️ {upscale_note}"
-
         embed.set_image(url=f"attachment://{dfile.filename}")
 
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
+        upscale_flag = " 📈" if upscaled_success else ""
         embed.set_footer(
             text=(
                 f"{get_model_label(model_id)} | "
                 f"{ASPECT_LABELS.get(ratio, ratio)} | "
-                f"Res: {resolution} | CFG: {cfg_val} | Steps: {steps}"
+                f"🧱 {resolution}{upscale_flag} | "
+                f"🤖 {cfg_val} | "
+                f"🪜 {steps}"
             ),
             icon_url=guild_icon
         )
@@ -1473,12 +1642,22 @@ class ResolutionSelectView(OwnerLockedView):
             self.stop()
             return
 
-        posted = await interaction.channel.send(
-            content=interaction.user.mention,
-            embed=embed,
-            file=dfile,
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-        )
+        try:
+            posted = await interaction.channel.send(
+                content=interaction.user.mention,
+                embed=embed,
+                file=dfile,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except discord.HTTPException as e:
+            if e.status == 413 or getattr(e, "code", None) == 40005:
+                await interaction.followup.send(
+                    f"❌ Upload failed: file too large for this server limit ({upload_limit // (1024 * 1024)} MB). Try lower resolution.",
+                    ephemeral=True
+                )
+                self.stop()
+                return
+            raise
 
         for emo in REACTIONS:
             try:
@@ -1493,18 +1672,21 @@ class ResolutionSelectView(OwnerLockedView):
                 bot_user_id=(interaction.client.user.id if interaction.client.user else None)
             )
 
-        await interaction.followup.send(
-            content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
-            view=PostGenerationView(
-                session=self.session,
-                author_id=interaction.user.id,
-                source_message=posted,
-                channel_id=(interaction.channel.id if interaction.channel else 0),
-                previous_inputs=previous_inputs,
-                hidden_suffix=hidden_suffix
-            ),
-            ephemeral=True
-        )
+        if not is_easy_mode:
+            await interaction.followup.send(
+                content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
+                view=PostGenerationView(
+                    session=self.session,
+                    author_id=interaction.user.id,
+                    source_message=posted,
+                    channel_id=(interaction.channel.id if interaction.channel else 0),
+                    previous_inputs=previous_inputs,
+                    hidden_suffix=hidden_suffix
+                ),
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send("✅ Easy Mode done.", ephemeral=True)
 
         self.stop()
 
