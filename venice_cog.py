@@ -217,7 +217,6 @@ UNCENSORED_MODELS = {
     "seedream-v5-lite",
     "wan-2-7-text-to-image",
     "wan-2-7-pro-text-to-image",
-    "wai-Illustrious",
 }
 
 # =================================================
@@ -432,6 +431,7 @@ def has_role(member: discord.Member, role_id: int) -> bool:
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
 
+    # native first
     if wanted_resolution in native:
         return wanted_resolution, None
 
@@ -1336,15 +1336,6 @@ class ResolutionSelectView(OwnerLockedView):
             except Exception:
                 pass
 
-        # Ensure starter dropdown is always the newest message after image post
-        if isinstance(interaction.channel, discord.TextChannel):
-            cog = interaction.client.get_cog("VeniceCog")
-            if cog and hasattr(cog, "bump_starter_message"):
-                try:
-                    await cog.bump_starter_message(interaction.channel)
-                except Exception as e:
-                    logger.warning("Failed to bump starter message in channel %s: %s", interaction.channel.id, e)
-
         await interaction.followup.send(
             content=f"🚨 {interaction.user.mention}, re-use and edit your prompt?",
             view=PostGenerationView(
@@ -1533,7 +1524,6 @@ class VeniceCog(commands.Cog):
         connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
-    # ---------- starter state persistence ----------
     def _load_starter_state(self):
         try:
             if not os.path.exists(STARTER_STATE_FILE):
@@ -1573,9 +1563,6 @@ class VeniceCog(commands.Cog):
         return out
 
     async def ensure_single_starter_message(self, channel: discord.TextChannel):
-        """
-        Ensure exactly one starter dropdown exists (startup/recovery).
-        """
         if channel.id not in ALLOWED_CHANNEL_IDS:
             return
 
@@ -1605,6 +1592,7 @@ class VeniceCog(commands.Cog):
                     logger.warning("Failed to create starter in channel %s: %s", channel.id, e)
                     return
 
+            # delete duplicates
             keep_id = keep_msg.id
             for msg in starters:
                 if msg.id == keep_id:
@@ -1617,51 +1605,6 @@ class VeniceCog(commands.Cog):
             self.starter_message_ids[channel.id] = keep_id
             self._save_starter_state()
 
-    async def bump_starter_message(self, channel: discord.TextChannel):
-        """
-        After an image post, make starter dropdown the newest message:
-        post new -> update state -> remove old/duplicates.
-        """
-        if channel.id not in ALLOWED_CHANNEL_IDS:
-            return
-
-        lock = get_channel_lock(channel.id)
-        async with lock:
-            old_id = self.starter_message_ids.get(channel.id)
-
-            # 1) post new first
-            try:
-                new_msg = await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(self.session, channel.id))
-            except discord.Forbidden:
-                logger.warning("Missing permissions for bump in channel %s", channel.id)
-                return
-            except Exception as e:
-                logger.warning("Failed to bump starter in channel %s: %s", channel.id, e)
-                return
-
-            # 2) update state immediately
-            self.starter_message_ids[channel.id] = new_msg.id
-            self._save_starter_state()
-
-            # 3) delete previous tracked starter
-            if old_id and old_id != new_msg.id:
-                old_msg = await self._fetch_message_safe(channel, old_id)
-                if old_msg and is_model_dropdown_message(old_msg):
-                    try:
-                        await old_msg.delete()
-                    except Exception:
-                        pass
-
-            # 4) cleanup duplicates
-            starters = await self._find_existing_starters(channel, limit=100)
-            for msg in starters:
-                if msg.id == new_msg.id:
-                    continue
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
-
     async def cog_load(self):
         await self._ensure_session()
         load_timing_cache()
@@ -1673,7 +1616,7 @@ class VeniceCog(commands.Cog):
         except Exception as e:
             logger.warning("Model sync failed in cog_load: %s", e)
 
-        # register persistent view handlers
+        # register persistent view handlers for all allowed channels
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
