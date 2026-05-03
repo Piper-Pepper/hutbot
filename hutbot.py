@@ -73,8 +73,7 @@ async def main():
             "reset",
             "riddle",
             "hutvote",
-            "hutthreadvote",
-            "riddle_post"
+            "hutthreadvote"
         ]
 
         for ext in extensions:
