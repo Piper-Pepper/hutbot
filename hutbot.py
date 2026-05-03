@@ -73,6 +73,7 @@ async def main():
             "reset",
             "riddle",
             "hutvote",
+            "birthday",
             "hutthreadvote"
         ]
 
