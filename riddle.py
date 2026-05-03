@@ -1053,7 +1053,7 @@ class RiddleSystem(commands.Cog):
             return
 
         next_num = await self._get_next_riddle_number()
-        title = f"🧩Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n#️⃣{next_num} ({now_date_str()})"
+        title = f"🧩Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n#️{next_num} ({now_date_str()})"
 
         image_url = riddle.get("image-url")
         if not is_http_url(image_url):
@@ -1102,7 +1102,7 @@ class RiddleSystem(commands.Cog):
             return
 
         next_num = await self._get_next_riddle_number()
-        title = f"🧩Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n#️⃣{next_num} ({now_date_str()})"
+        title = f"🧩Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n#️{next_num} ({now_date_str()})"
 
         image_url = riddle.get("image-url")
         if not is_http_url(image_url):
