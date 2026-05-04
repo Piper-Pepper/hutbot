@@ -22,19 +22,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("riddle_system")
 
 # --- API ---
-JSONBIN_API_KEY = "PASTE_YOUR_JSONBIN_MASTER_KEY_HERE"
-BIN_BASE = "https://api.jsonbin.io/v3/b"
+JSONBIN_API_KEY = (os.getenv("JSONBIN_API_KEY") or "").strip()
 
-# --- Bin IDs ---
-RIDDLE_BIN_ID = "685442458a456b7966b13207"
-SOLVED_BIN_ID = "686699c18960c979a5b67e34"
-ARCHIVE_BIN_ID = "6869a6fa8960c979a5b7c527"
+# Bin IDs
+RIDDLE_BIN_ID = (os.getenv("RIDDLE_BIN_ID") or "685442458a456b7966b13207").strip()
+SOLVED_BIN_ID = (os.getenv("SOLVED_BIN_ID") or "686699c18960c979a5b67e34").strip()
+ARCHIVE_BIN_ID = (os.getenv("ARCHIVE_BIN_ID") or "6869a6fa8960c979a5b7c527").strip()
 
-# --- Channels / Roles ---
-RIDDLE_CHANNEL_ID = 1349697597232906292
-VOTE_CHANNEL_ID = 1381754826710585527
-RIDDLE_ROLE_ID = 1380610400416043089
-RIDDLE_MANAGER_ROLE_ID = 1393762463861702787
+# Channels / Roles
+RIDDLE_CHANNEL_ID = int(os.getenv("RIDDLE_CHANNEL_ID", "1349697597232906292"))
+VOTE_CHANNEL_ID = int(os.getenv("VOTE_CHANNEL_ID", "1381754826710585527"))
+RIDDLE_ROLE_ID = int(os.getenv("RIDDLE_ROLE_ID", "1380610400416043089"))
+
+# Nur diese Rolle darf: /riddle, /riddle_view, /riddle_close, /riddle_post
+RIDDLE_MANAGER_ROLE_ID = int(os.getenv("RIDDLE_MANAGER_ROLE_ID", "1393762463861702787"))
+
 
 # --- Images ---
 DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
