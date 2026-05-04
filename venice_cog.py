@@ -44,7 +44,8 @@ LEGACY_STARTER_TEXTS = {
 RECENT_SCAN_LIMIT = 10
 
 EASY_MODE_VALUE = "__easy_mode__"
-EASY_MODE_LABEL = "👉Easy Mode (NSFW)👈"
+EASY_MODE_ICON = "🔞"
+EASY_MODE_LABEL = f"👉Easy Mode {EASY_MODE_ICON}👈"
 NO_MODEL_VALUE = "__no_models__"
 
 # Wenn True, bekommt Non-Easy nach Cleanup genau eine neue Reuse-Ephemeral.
@@ -228,10 +229,13 @@ UNCENSORED_MODELS = {
     "lustify-v8",
     "grok-imagine-image-pro",
     "z-image-turbo",
+    "seedream-v4",
     "seedream-v5-lite",
     "hunyuan-image-v3",
+    "recraft-v4",
     "recraft-v4-pro",
     "qwen-image",
+    "grok-imagine-image",
 }
 
 # =================================================
@@ -389,21 +393,19 @@ def get_active_model_ids() -> list[str]:
     return [m for m in MODEL_ORDER if m not in DISABLED_MODELS]
 
 
+def is_uncensored_model(model_id: str) -> bool:
+    return model_id in UNCENSORED_MODELS
+
+
 def get_easy_mode_candidates() -> list[str]:
-    active = get_active_model_ids()
-    fixed_pool = {
-        "z-image-turbo",
-        "wan-2-7-text-to-image",
-        "wan-2-7-pro-text-to-image",
-        "grok-imagine-image",
-        "grok-imagine-image-pro",
-    }
-    return [m for m in active if m.startswith("lustify") or m in fixed_pool]
+    active = set(get_active_model_ids())
+    # Reihenfolge bleibt konsistent zur globalen MODEL_ORDER
+    return [m for m in MODEL_ORDER if m in active and is_uncensored_model(m)]
 
 
 def get_model_label(model_id: str) -> str:
-    base = MODEL_CONFIG[model_id]["label"]
-    return f"{base} 🔞" if model_id in UNCENSORED_MODELS else base
+    base = (MODEL_CONFIG.get(model_id) or {}).get("label", MODEL_LABELS.get(model_id, model_id))
+    return f"{base} {EASY_MODE_ICON}" if is_uncensored_model(model_id) else base
 
 
 def get_model_ratios(model_id: str) -> list[str]:
@@ -458,7 +460,7 @@ def build_model_options(channel_id: int, include_easy: bool = True) -> list[disc
     active = get_active_model_ids()
     options: list[discord.SelectOption] = []
 
-    if include_easy and active:
+    if include_easy and get_easy_mode_candidates():
         options.append(discord.SelectOption(label=EASY_MODE_LABEL, value=EASY_MODE_VALUE))
 
     for model_id in active:
@@ -472,7 +474,7 @@ def build_model_options(channel_id: int, include_easy: bool = True) -> list[disc
 
 def build_easy_embed(model_id: str, ratio: str) -> discord.Embed:
     emb = discord.Embed(
-        title="⚡ Easy Mode",
+        title=f"⚡ Easy Mode {EASY_MODE_ICON}",
         description=f"**Model:** {get_model_label(model_id)}\n**Aspect Ratio:** {ASPECT_LABELS.get(ratio, ratio)}",
         color=discord.Color.gold(),
     )
@@ -1186,7 +1188,7 @@ class EasyModeModal(discord.ui.Modal):
         self.owner_id = owner_id
 
         cfg = MODEL_CONFIG[model_id]
-        super().__init__(title=f"Easy Mode • {get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}")
+        super().__init__(title=f"Easy Mode {EASY_MODE_ICON} • {get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}")
 
         self.prompt = discord.ui.TextInput(
             label="Describe what you want to see",
@@ -1229,7 +1231,7 @@ class EasyModeModal(discord.ui.Modal):
         await send_ephemeral(
             interaction,
             content=(
-                f"✅ Easy Mode: {get_model_label(self.model_id)} • {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
+                f"✅ Easy Mode {EASY_MODE_ICON}: {get_model_label(self.model_id)} • {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
                 f"{build_resolution_hint(self.model_id)}\n"
                 "Choose resolution:"
             ),
