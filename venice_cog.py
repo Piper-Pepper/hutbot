@@ -45,7 +45,7 @@ RECENT_SCAN_LIMIT = 10
 
 EASY_MODE_VALUE = "__easy_mode__"
 EASY_MODE_ICON = "🔞"
-EASY_MODE_LABEL = f"👉Easy Mode {EASY_MODE_ICON}👈"
+EASY_MODE_LABEL = f"👉EASY MODE {EASY_MODE_ICON}👈"
 NO_MODEL_VALUE = "__no_models__"
 
 # Wenn True, bekommt Non-Easy nach Cleanup genau eine neue Reuse-Ephemeral.
@@ -236,6 +236,7 @@ UNCENSORED_MODELS = {
     "recraft-v4-pro",
     "qwen-image",
     "grok-imagine-image",
+    "wai-Illustrious",
 }
 
 # =================================================
