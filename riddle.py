@@ -35,7 +35,7 @@ RIDDLE_CHANNEL_ID = int(os.getenv("RIDDLE_CHANNEL_ID", "1349697597232906292"))
 VOTE_CHANNEL_ID = int(os.getenv("VOTE_CHANNEL_ID", "1381754826710585527"))
 RIDDLE_ROLE_ID = int(os.getenv("RIDDLE_ROLE_ID", "1380610400416043089"))
 
-# Nur diese Rolle darf: /riddle, /riddle_view, /riddle_close, /riddle_post
+# Nur diese Rolle darf: /riddle, /riddle_view, /riddle_close, /riddle_post, /riddle_cache_refresh
 RIDDLE_MANAGER_ROLE_ID = int(os.getenv("RIDDLE_MANAGER_ROLE_ID", "1393762463861702787"))
 
 # Bilder
@@ -48,6 +48,10 @@ ACCESS_DENIED_IMAGE_URL = os.getenv(
     "RIDDLE_ACCESS_DENIED_IMAGE_URL",
     "https://example.com/apply-role-placeholder.jpg"  # Placeholder
 ).strip()
+
+# Manual-only Steuerung (standardmäßig aus)
+RIDDLE_ENABLE_BACKGROUND_CACHE = os.getenv("RIDDLE_ENABLE_BACKGROUND_CACHE", "false").lower() == "true"
+RIDDLE_CACHE_REFRESH_SECONDS = int(os.getenv("RIDDLE_CACHE_REFRESH_SECONDS", "45"))
 
 BIN_BASE = "https://api.jsonbin.io/v3/b"
 
@@ -479,6 +483,7 @@ class VoteSuccessButton(discord.ui.Button):
             # Stats + Clear
             await self.cog._update_user_riddle_count(submitter_id, award_text=award_text)
             await self.cog._clear_riddle_data()
+            await self.cog._update_riddle_cache(empty_riddle())
 
             try:
                 await msg.delete()
@@ -708,13 +713,19 @@ class RiddleSystem(commands.Cog):
     async def cog_load(self):
         self.session = aiohttp.ClientSession()
 
-        # persistent views
+        # persistent views (nur reaktiv auf Button-Klicks, kein Auto-Post)
         self.bot.add_view(SubmitButtonView(self))
         self.bot.add_view(VoteButtons(self))
 
-        # cache worker
-        self._cache_task = asyncio.create_task(self._cache_worker())
-        logger.info("RiddleSystem loaded (persistent views + cache worker active).")
+        # optional background cache worker (standardmäßig AUS)
+        if RIDDLE_ENABLE_BACKGROUND_CACHE:
+            self._cache_task = asyncio.create_task(self._cache_worker())
+            logger.info(
+                "RiddleSystem loaded (persistent views + cache worker active every %ss).",
+                RIDDLE_CACHE_REFRESH_SECONDS
+            )
+        else:
+            logger.info("RiddleSystem loaded (manual-only mode, no background polling).")
 
     def cog_unload(self):
         if self._cache_task and not self._cache_task.done():
@@ -748,7 +759,7 @@ class RiddleSystem(commands.Cog):
                 raise
             except Exception as e:
                 logger.warning(f"cache worker error: {e}")
-            await asyncio.sleep(45)
+            await asyncio.sleep(RIDDLE_CACHE_REFRESH_SECONDS)
 
     async def _update_riddle_cache(self, data: dict):
         async with self._cache_lock:
@@ -757,18 +768,18 @@ class RiddleSystem(commands.Cog):
             self._riddle_cache_ready = True
 
     async def _get_riddle_for_modal(self) -> Optional[dict]:
-        # 1) quick live fetch
+        # manual-first: live fetch on command usage
         try:
-            ok, data = await asyncio.wait_for(self._fetch_riddle_safe(retries=0), timeout=1.7)
+            ok, data = await asyncio.wait_for(self._fetch_riddle_safe(retries=1), timeout=3.0)
             if ok:
                 await self._update_riddle_cache(data)
                 return data
         except asyncio.TimeoutError:
-            logger.warning("/riddle live fetch timeout, using cache fallback")
+            logger.warning("/riddle fetch timeout, using cache fallback")
         except Exception as e:
-            logger.warning(f"/riddle live fetch failed: {e}")
+            logger.warning(f"/riddle fetch failed: {e}")
 
-        # 2) cache fallback
+        # cache fallback
         async with self._cache_lock:
             if self._riddle_cache_ready:
                 return dict(self._riddle_cache)
@@ -825,7 +836,10 @@ class RiddleSystem(commands.Cog):
                         return False, resp.status, parsed
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning("JSONBin %s exception: %s (attempt %s/%s)", method, e, attempt + 1, retries + 1)
+                logger.warning(
+                    "JSONBin %s exception: %r (%s) attempt %s/%s",
+                    method, e, type(e).__name__, attempt + 1, retries + 1
+                )
                 if attempt >= retries:
                     break
             except Exception as e:
@@ -1207,6 +1221,24 @@ class RiddleSystem(commands.Cog):
         await self._update_riddle_cache(empty_riddle())
 
         await interaction.followup.send("✅ Riddle closed, archived and cleared.", ephemeral=True)
+
+    @app_commands.command(name="riddle_cache_refresh", description="Manually refresh riddle cache from JSONBin.")
+    @app_commands.guild_only()
+    @riddle_manager_required()
+    async def riddle_cache_refresh(self, interaction: Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        if not is_configured():
+            await interaction.followup.send("❌ JSONBIN_API_KEY is missing in .env.", ephemeral=True)
+            return
+
+        ok, data = await self._fetch_riddle_safe(retries=1)
+        if not ok:
+            await interaction.followup.send("❌ Failed to refresh cache from JSONBin.", ephemeral=True)
+            return
+
+        await self._update_riddle_cache(data)
+        await interaction.followup.send("✅ Cache refreshed manually.", ephemeral=True)
 
     @app_commands.command(name="riddle_champ", description="Show the riddle champions leaderboard.")
     @app_commands.describe(
