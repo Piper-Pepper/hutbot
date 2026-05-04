@@ -231,8 +231,9 @@ UNCENSORED_MODELS = {
     "z-image-turbo",
     "seedream-v4",
     "seedream-v5-lite",
-    "wan-2-7-text-to-image",
-    "wan-2-7-pro-text-to-image",
+    "hunyuan-image-v3",
+    "recraft-v4-pro",
+    "qwen-image",
 }
 
 # =================================================
