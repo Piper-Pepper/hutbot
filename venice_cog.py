@@ -254,7 +254,6 @@ UNCENSORED_MODELS = {
     "recraft-v4",
     "recraft-v4-pro",
     "qwen-image",
-    "grok-imagine-image",
 }
 
 # =================================================
