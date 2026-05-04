@@ -46,17 +46,16 @@ DEFAULT_IMAGE_URL = os.getenv(
 
 ACCESS_DENIED_IMAGE_URL = os.getenv(
     "RIDDLE_ACCESS_DENIED_IMAGE_URL",
-    "https://example.com/apply-role-placeholder.jpg"  # Placeholder
+    "https://example.com/apply-role-placeholder.jpg"
 ).strip()
 
-# Manual-only Steuerung (standardmäßig aus)
+# Manual-only Steuerung
 RIDDLE_ENABLE_BACKGROUND_CACHE = os.getenv("RIDDLE_ENABLE_BACKGROUND_CACHE", "false").lower() == "true"
 RIDDLE_CACHE_REFRESH_SECONDS = int(os.getenv("RIDDLE_CACHE_REFRESH_SECONDS", "45"))
 
 BIN_BASE = "https://api.jsonbin.io/v3/b"
-
-HTTP_TIMEOUT_SEC = 12
-HTTP_RETRIES = 2
+HTTP_TIMEOUT_SEC = 8
+HTTP_RETRIES = 1
 
 
 # =========================
@@ -377,7 +376,7 @@ class SubmitButton(discord.ui.Button):
 
 class SubmitButtonView(View):
     def __init__(self, cog: "RiddleSystem"):
-        super().__init__(timeout=None)  # persistent
+        super().__init__(timeout=None)
         self.add_item(SubmitButton(cog))
 
 
@@ -411,13 +410,11 @@ class VoteSuccessButton(discord.ui.Button):
             submitter_id = safe_int(get_field_value(src, "🆔 User ID"), interaction.user.id)
             button_role_id = safe_int(get_field_value(src, "🔖 Assigned Group"), None)
 
-            # sofort Buttons weg, um doppelte Klicks visuell zu blocken
             try:
                 await msg.edit(view=None)
             except discord.HTTPException:
                 pass
 
-            # Submitter
             submitter_obj: Optional[discord.abc.User] = None
             if interaction.guild:
                 submitter_obj = interaction.guild.get_member(submitter_id)
@@ -431,13 +428,11 @@ class VoteSuccessButton(discord.ui.Button):
             submitter_name = str(submitter_obj) if submitter_obj else f"User {submitter_id}"
             submitter_avatar = submitter_obj.display_avatar.url if submitter_obj else None
 
-            # Lösung formatieren
             clean_solution, more_link = extract_link(correct_solution_raw)
             solution_display = clean_solution or "*None*"
             if more_link:
                 solution_display += f"\n🔗 [🧠**MORE**]({more_link})"
 
-            # solution image
             ok_r, riddle_record = await self.cog._fetch_riddle_safe(retries=1)
             solution_url = riddle_record.get("solution-url") if ok_r else None
             if not is_http_url(solution_url):
@@ -460,7 +455,6 @@ class VoteSuccessButton(discord.ui.Button):
             solved_embed.set_image(url=solution_url)
             solved_embed.set_footer(text=footer_text(interaction.guild))
 
-            # Original-Riddle-Post markieren + Submit-Buttons entfernen
             await self.cog._mark_original_riddle_as_solved(
                 riddle_text=riddle_text,
                 solver_mention=submitter_mention,
@@ -468,7 +462,6 @@ class VoteSuccessButton(discord.ui.Button):
                 more_link=more_link
             )
 
-            # Ergebnis posten
             riddle_channel = interaction.client.get_channel(RIDDLE_CHANNEL_ID)
             if riddle_channel:
                 mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, button_role_id)
@@ -480,7 +473,6 @@ class VoteSuccessButton(discord.ui.Button):
                     allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False)
                 )
 
-            # Stats + Clear
             await self.cog._update_user_riddle_count(submitter_id, award_text=award_text)
             await self.cog._clear_riddle_data()
             await self.cog._update_riddle_cache(empty_riddle())
@@ -580,117 +572,61 @@ class VoteFailButton(discord.ui.Button):
 
 class VoteButtons(View):
     def __init__(self, cog: "RiddleSystem"):
-        super().__init__(timeout=None)  # persistent
+        super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
 
 
 # =========================
-# CHAMPIONS VIEW
+# PERSISTENT CHAMPIONS VIEW
 # =========================
-class ChampionsView(View):
-    def __init__(
-        self,
-        *,
-        entries: list[tuple[int, int, float, int]],
-        total_solved: int,
-        name_cache: dict[int, str],
-        avatar_cache: dict[int, str],
-        image_url: Optional[str] = None,
-        owner_id: Optional[int] = None
-    ):
-        super().__init__(timeout=300)
+class PersistentChampionsView(View):
+    def __init__(self, cog: "RiddleSystem", page1_image_url: Optional[str] = None):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.page1_image_url = page1_image_url or DEFAULT_IMAGE_URL
 
-        self.entries = entries
-        self.total_solved = total_solved
-        self.name_cache = name_cache
-        self.avatar_cache = avatar_cache
+    @staticmethod
+    def _read_current_page_from_embed(msg: discord.Message) -> int:
+        if not msg.embeds:
+            return 0
+        desc = (msg.embeds[0].description or "")
+        m = re.search(r"Page\s+(\d+)/(\d+)", desc)
+        if not m:
+            return 0
+        page = max(1, int(m.group(1))) - 1
+        return max(0, page)
 
-        self.page = 0
-        self.entries_per_page = 6
-        self.max_page = max((len(entries) - 1) // self.entries_per_page, 0)
+    async def _render_page(self, interaction: Interaction, target_page: int):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Guild only.", ephemeral=True)
+            return
 
-        self.page1_image_url = image_url or DEFAULT_IMAGE_URL
-        self.default_image_url = DEFAULT_IMAGE_URL
-        self.owner_id = owner_id
-        self.message: Optional[discord.Message] = None
+        entries, total_solved, name_cache, avatar_cache = await self.cog._get_champion_entries(interaction.guild)
 
-        self._sync_buttons()
+        max_page = max((len(entries) - 1) // 6, 0)
+        target_page = max(0, min(target_page, max_page))
 
-    def _sync_buttons(self):
-        self.prev_btn.disabled = self.page <= 0
-        self.next_btn.disabled = self.page >= self.max_page
-
-    def _name(self, uid: int) -> str:
-        return self.name_cache.get(uid, f"Unknown User ({uid})")
-
-    def _avatar(self, uid: int) -> Optional[str]:
-        return self.avatar_cache.get(uid)
-
-    def build_embed(self) -> discord.Embed:
-        start = self.page * self.entries_per_page
-        end = start + self.entries_per_page
-        page_entries = self.entries[start:end]
-
-        embed = discord.Embed(
-            title=f"🏆 Riddle Champions ⁉️ Total: 🧩 {self.total_solved}",
-            description=f"Page {self.page + 1}/{self.max_page + 1}",
-            color=discord.Color.gold()
+        embed = self.cog._build_champion_embed(
+            entries=entries,
+            total_solved=total_solved,
+            name_cache=name_cache,
+            avatar_cache=avatar_cache,
+            page=target_page,
+            entries_per_page=6,
+            page1_image_url=self.page1_image_url
         )
+        await interaction.response.edit_message(embed=embed, view=self)
 
-        if self.entries:
-            top_uid = self.entries[0][0]
-            top_name = self._name(top_uid)
-            top_avatar = self._avatar(top_uid)
-
-            if top_avatar:
-                embed.set_author(name=f"👑 Riddle Master #1: {top_name}", icon_url=top_avatar)
-                embed.set_thumbnail(url=top_avatar)
-            else:
-                embed.set_author(name=f"👑 Riddle Master #1: {top_name}")
-
-        if not page_entries:
-            embed.add_field(name="No data yet", value="No riddles have been solved yet.", inline=False)
-        else:
-            for i, (uid, solved, percent, xp) in enumerate(page_entries, start=start + 1):
-                embed.add_field(
-                    name=f"🎖️ {i}. {self._name(uid)}",
-                    value=f"🧩 {solved} | 📊 {percent:.1f}% | 🧠 {xp} XP",
-                    inline=False
-                )
-
-        embed.set_image(url=self.page1_image_url if self.page == 0 else self.default_image_url)
-        return embed
-
-    async def interaction_check(self, interaction: Interaction) -> bool:
-        if self.owner_id is not None and interaction.user.id != self.owner_id:
-            await interaction.response.send_message("🚫 This menu is not yours.", ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self):
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except Exception:
-                pass
-
-    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="riddle_champ_prev")
     async def prev_btn(self, interaction: Interaction, _: discord.ui.Button):
-        if self.page > 0:
-            self.page -= 1
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        current = self._read_current_page_from_embed(interaction.message)
+        await self._render_page(interaction, current - 1)
 
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="riddle_champ_next")
     async def next_btn(self, interaction: Interaction, _: discord.ui.Button):
-        if self.page < self.max_page:
-            self.page += 1
-        self._sync_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        current = self._read_current_page_from_embed(interaction.message)
+        await self._render_page(interaction, current + 1)
 
 
 # =========================
@@ -713,17 +649,14 @@ class RiddleSystem(commands.Cog):
     async def cog_load(self):
         self.session = aiohttp.ClientSession()
 
-        # persistent views (nur reaktiv auf Button-Klicks, kein Auto-Post)
+        # persistent views
         self.bot.add_view(SubmitButtonView(self))
         self.bot.add_view(VoteButtons(self))
+        self.bot.add_view(PersistentChampionsView(self))  # global persistent for old/new champ messages
 
-        # optional background cache worker (standardmäßig AUS)
         if RIDDLE_ENABLE_BACKGROUND_CACHE:
             self._cache_task = asyncio.create_task(self._cache_worker())
-            logger.info(
-                "RiddleSystem loaded (persistent views + cache worker active every %ss).",
-                RIDDLE_CACHE_REFRESH_SECONDS
-            )
+            logger.info("RiddleSystem loaded (cache worker every %ss).", RIDDLE_CACHE_REFRESH_SECONDS)
         else:
             logger.info("RiddleSystem loaded (manual-only mode, no background polling).")
 
@@ -758,7 +691,7 @@ class RiddleSystem(commands.Cog):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.warning(f"cache worker error: {e}")
+                logger.warning("cache worker error: %r", e)
             await asyncio.sleep(RIDDLE_CACHE_REFRESH_SECONDS)
 
     async def _update_riddle_cache(self, data: dict):
@@ -767,24 +700,20 @@ class RiddleSystem(commands.Cog):
             self._riddle_cache_ts = time.monotonic()
             self._riddle_cache_ready = True
 
-    async def _get_riddle_for_modal(self) -> Optional[dict]:
-        # manual-first: live fetch on command usage
-        try:
-            ok, data = await asyncio.wait_for(self._fetch_riddle_safe(retries=1), timeout=3.0)
-            if ok:
-                await self._update_riddle_cache(data)
-                return data
-        except asyncio.TimeoutError:
-            logger.warning("/riddle fetch timeout, using cache fallback")
-        except Exception as e:
-            logger.warning(f"/riddle fetch failed: {e}")
-
-        # cache fallback
+    async def _get_riddle_for_modal(self) -> dict:
+        # Kein Netzwerkcall vor erster Interaction-Response
         async with self._cache_lock:
             if self._riddle_cache_ready:
                 return dict(self._riddle_cache)
+        return empty_riddle()
 
-        return None
+    async def _refresh_cache_silent(self):
+        try:
+            ok, data = await self._fetch_riddle_safe(retries=0)
+            if ok:
+                await self._update_riddle_cache(data)
+        except Exception as e:
+            logger.warning("silent cache refresh failed: %r", e)
 
     # ---------- JSONBin ----------
     async def _jsonbin_request(
@@ -1008,6 +937,98 @@ class RiddleSystem(commands.Cog):
         await asyncio.gather(*(worker(uid) for uid in unique_ids))
         return name_cache, avatar_cache
 
+    async def _get_champion_entries(
+        self,
+        guild: discord.Guild
+    ) -> tuple[list[tuple[int, int, float, int]], int, dict[int, str], dict[int, str]]:
+        raw = await self._get_bin_record(SOLVED_BIN_ID, retries=HTTP_RETRIES, default={})
+        if not isinstance(raw, dict):
+            raw = {}
+
+        entries_raw: list[tuple[int, int, int]] = []
+        for uid, stats in raw.items():
+            uid_i = to_int(uid, default=-1)
+            if uid_i <= 0:
+                continue
+
+            solved = 0
+            xp = 0
+            if isinstance(stats, dict):
+                solved = max(0, to_int(stats.get("solved_riddles", 0), default=0))
+                xp = max(0, to_int(stats.get("xp", 0), default=0))
+            else:
+                solved = max(0, to_int(stats, default=0))
+                xp = 0
+
+            entries_raw.append((uid_i, solved, xp))
+
+        entries_raw.sort(key=lambda x: (x[1], x[2]), reverse=True)
+        total_solved = sum(s for _, s, _ in entries_raw)
+
+        entries: list[tuple[int, int, float, int]] = [
+            (uid, solved, (solved / total_solved * 100.0 if total_solved else 0.0), xp)
+            for uid, solved, xp in entries_raw
+        ]
+
+        name_cache, avatar_cache = await self._build_identity_cache(guild, entries_raw)
+        return entries, total_solved, name_cache, avatar_cache
+
+    def _build_champion_embed(
+        self,
+        *,
+        entries: list[tuple[int, int, float, int]],
+        total_solved: int,
+        name_cache: dict[int, str],
+        avatar_cache: dict[int, str],
+        page: int,
+        entries_per_page: int = 6,
+        page1_image_url: Optional[str] = None
+    ) -> discord.Embed:
+        page = max(0, page)
+        max_page = max((len(entries) - 1) // entries_per_page, 0)
+        page = min(page, max_page)
+
+        start = page * entries_per_page
+        end = start + entries_per_page
+        page_entries = entries[start:end]
+
+        embed = discord.Embed(
+            title=f"🏆 Riddle Champions ⁉️ Total: 🧩 {total_solved}",
+            description=f"Page {page + 1}/{max_page + 1}",
+            color=discord.Color.gold()
+        )
+
+        def _name(uid: int) -> str:
+            return name_cache.get(uid, f"Unknown User ({uid})")
+
+        if entries:
+            top_uid = entries[0][0]
+            top_name = _name(top_uid)
+            top_avatar = avatar_cache.get(top_uid)
+
+            if top_avatar:
+                embed.set_author(name=f"👑 Riddle Master #1: {top_name}", icon_url=top_avatar)
+                embed.set_thumbnail(url=top_avatar)
+            else:
+                embed.set_author(name=f"👑 Riddle Master #1: {top_name}")
+
+        if not page_entries:
+            embed.add_field(name="No data yet", value="No riddles have been solved yet.", inline=False)
+        else:
+            for i, (uid, solved, percent, xp) in enumerate(page_entries, start=start + 1):
+                embed.add_field(
+                    name=f"🎖️ {i}. {_name(uid)}",
+                    value=f"🧩 {solved} | 📊 {percent:.1f}% | 🧠 {xp} XP",
+                    inline=False
+                )
+
+        if page == 0:
+            embed.set_image(url=page1_image_url or DEFAULT_IMAGE_URL)
+        else:
+            embed.set_image(url=DEFAULT_IMAGE_URL)
+
+        return embed
+
     # ---------- commands ----------
     @app_commands.command(name="riddle", description="Create a new riddle or edit the stored riddle.")
     @app_commands.describe(mention="Optional role to store as the riddle mention/button role.")
@@ -1018,15 +1039,10 @@ class RiddleSystem(commands.Cog):
             await interaction.response.send_message("❌ JSONBIN_API_KEY is missing in .env.", ephemeral=True)
             return
 
+        # Kein API-Call vor erster Response
         data = await self._get_riddle_for_modal()
-        if data is None:
-            await interaction.response.send_message(
-                "❌ Could not load the current riddle in time. Please run `/riddle` again.",
-                ephemeral=True
-            )
-            return
-
         mode = "edit" if has_riddle_data(data) else "create"
+
         modal = RiddleUpsertModal(
             cog=self,
             mode=mode,
@@ -1037,12 +1053,11 @@ class RiddleSystem(commands.Cog):
 
         try:
             await interaction.response.send_modal(modal)
+            asyncio.create_task(self._refresh_cache_silent())
         except discord.NotFound:
             logger.warning("send_modal failed: interaction expired (10062)")
         except discord.HTTPException as e:
             logger.exception("send_modal HTTPException: %s", e)
-            if not interaction.response.is_done():
-                await interaction.response.send_message("❌ Interaction expired. Please run `/riddle` again.", ephemeral=True)
 
     @app_commands.command(name="riddle_post", description="Post the current riddle in the riddle channel.")
     @app_commands.guild_only()
@@ -1260,59 +1275,32 @@ class RiddleSystem(commands.Cog):
 
         await interaction.response.defer(ephemeral=not visible, thinking=True)
 
-        raw = await self._get_bin_record(SOLVED_BIN_ID, retries=HTTP_RETRIES, default={})
-        if not isinstance(raw, dict):
-            raw = {}
-
-        entries_raw: list[tuple[int, int, int]] = []
-        for uid, stats in raw.items():
-            uid_i = to_int(uid, default=-1)
-            if uid_i <= 0:
-                continue
-
-            solved = 0
-            xp = 0
-            if isinstance(stats, dict):
-                solved = max(0, to_int(stats.get("solved_riddles", 0), default=0))
-                xp = max(0, to_int(stats.get("xp", 0), default=0))
-            else:
-                solved = max(0, to_int(stats, default=0))
-                xp = 0
-
-            entries_raw.append((uid_i, solved, xp))
-
-        entries_raw.sort(key=lambda x: (x[1], x[2]), reverse=True)
-        total_solved = sum(s for _, s, _ in entries_raw)
-
-        entries: list[tuple[int, int, float, int]] = [
-            (uid, solved, (solved / total_solved * 100.0 if total_solved else 0.0), xp)
-            for uid, solved, xp in entries_raw
-        ]
-
         if interaction.guild is None:
             await interaction.followup.send("❌ This command can only be used in a server.", ephemeral=True)
             return
 
-        name_cache, avatar_cache = await self._build_identity_cache(interaction.guild, entries_raw)
+        entries, total_solved, name_cache, avatar_cache = await self._get_champion_entries(interaction.guild)
 
-        view = ChampionsView(
+        page1_img = image if is_http_url(image) else DEFAULT_IMAGE_URL
+        embed = self._build_champion_embed(
             entries=entries,
             total_solved=total_solved,
             name_cache=name_cache,
             avatar_cache=avatar_cache,
-            image_url=image,
-            owner_id=(interaction.user.id if not visible else None)
+            page=0,
+            entries_per_page=6,
+            page1_image_url=page1_img
         )
 
-        sent = await interaction.followup.send(
+        view = PersistentChampionsView(self, page1_image_url=page1_img)
+
+        await interaction.followup.send(
             content=mention.mention if (visible and mention) else None,
-            embed=view.build_embed(),
+            embed=embed,
             view=view,
             ephemeral=not visible,
-            wait=True,
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False)
         )
-        view.message = sent
 
     # ---------- error handling ----------
     async def cog_app_command_error(self, interaction: Interaction, error: app_commands.AppCommandError):
