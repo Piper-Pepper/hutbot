@@ -74,6 +74,7 @@ async def main():
             "riddle",
             "hutvote",
             "birthday",
+            "champions_cog",
             "hutthreadvote"
         ]
 
