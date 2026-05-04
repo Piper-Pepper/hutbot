@@ -36,6 +36,22 @@ VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL", "https://api.venice.ai/api/v1/image/upscale")
 VENICE_MODELS_URL = "https://api.venice.ai/api/v1/models"
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+# Upload tuning
+# 0 = deaktiviert, sonst harter Override (z. B. 50)
+DISCORD_UPLOAD_LIMIT_FORCE_MB = _env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)
+# Fallback wenn Discord kein Limit liefert
+DISCORD_UPLOAD_LIMIT_FALLBACK_MB = _env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)
+# Sicherheitsmarge für Multipart/Overhead
+DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
+
 BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
 LEGACY_STARTER_TEXTS = {
     "💡 Choose Model for 🖼️ NEW image!",
@@ -45,7 +61,7 @@ RECENT_SCAN_LIMIT = 10
 
 EASY_MODE_VALUE = "__easy_mode__"
 EASY_MODE_ICON = "🔞"
-EASY_MODE_LABEL = f"👉EASY MODE {EASY_MODE_ICON}👈"
+EASY_MODE_LABEL = f"👉Easy Mode {EASY_MODE_ICON}👈"
 NO_MODEL_VALUE = "__no_models__"
 
 # Wenn True, bekommt Non-Easy nach Cleanup genau eine neue Reuse-Ephemeral.
@@ -53,6 +69,9 @@ NO_MODEL_VALUE = "__no_models__"
 KEEP_NON_EASY_REUSE_EPHEMERAL = True
 
 logger = logging.getLogger("venice_picture_bot")
+
+if Image is None:
+    logger.warning("Pillow (PIL) not available. Upload downscaling/compression is limited.")
 
 # =================================================
 # CHANNELS / ROLES
@@ -236,7 +255,6 @@ UNCENSORED_MODELS = {
     "recraft-v4-pro",
     "qwen-image",
     "grok-imagine-image",
-    "wai-Illustrious",
 }
 
 # =================================================
@@ -400,7 +418,6 @@ def is_uncensored_model(model_id: str) -> bool:
 
 def get_easy_mode_candidates() -> list[str]:
     active = set(get_active_model_ids())
-    # Reihenfolge bleibt konsistent zur globalen MODEL_ORDER
     return [m for m in MODEL_ORDER if m in active and is_uncensored_model(m)]
 
 
@@ -507,10 +524,6 @@ def required_level_for_resolution(resolution: Optional[str]) -> Optional[int]:
 
 def has_role(member: discord.Member, role_id: int) -> bool:
     return any(r.id == role_id for r in member.roles)
-
-
-def resolution_native_supported(model_id: str, resolution: str) -> bool:
-    return resolution in set(MODEL_CONFIG[model_id]["resolutions"])
 
 
 def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
@@ -652,13 +665,33 @@ def _infer_image_ext(b: bytes) -> str:
 
 
 def _discord_upload_limit_bytes(interaction: discord.Interaction) -> int:
-    if interaction.guild and getattr(interaction.guild, "filesize_limit", None):
-        return int(interaction.guild.filesize_limit)
-    return 8 * 1024 * 1024
+    if DISCORD_UPLOAD_LIMIT_FORCE_MB > 0:
+        forced = DISCORD_UPLOAD_LIMIT_FORCE_MB * 1024 * 1024
+        logger.info("Upload limit forced via env: %s bytes", forced)
+        return forced
+
+    inter_limit = getattr(interaction, "filesize_limit", None)
+    guild_limit = getattr(interaction.guild, "filesize_limit", None) if interaction.guild else None
+
+    candidates: list[int] = []
+    for v in (inter_limit, guild_limit):
+        if isinstance(v, int) and v > 0:
+            candidates.append(v)
+
+    if candidates:
+        chosen = max(candidates)
+    else:
+        chosen = DISCORD_UPLOAD_LIMIT_FALLBACK_MB * 1024 * 1024
+
+    logger.info(
+        "Upload limit detected: interaction=%s guild=%s chosen=%s",
+        inter_limit, guild_limit, chosen
+    )
+    return chosen
 
 
 def _fit_image_for_discord(image_bytes: bytes, max_bytes: int) -> tuple[bytes, str]:
-    target = max(256 * 1024, max_bytes - 96 * 1024)
+    target = max(256 * 1024, int(max_bytes - DISCORD_UPLOAD_SAFETY_BYTES))
 
     if len(image_bytes) <= target and _looks_like_image(image_bytes):
         return image_bytes, _infer_image_ext(image_bytes)
@@ -676,34 +709,48 @@ def _fit_image_for_discord(image_bytes: bytes, max_bytes: int) -> tuple[bytes, s
 
     resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
 
-    for max_side in (4096, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 896, 768, 640):
+    best_data = image_bytes
+    best_ext = _infer_image_ext(image_bytes)
+
+    def remember(data: bytes, ext: str):
+        nonlocal best_data, best_ext
+        if len(data) < len(best_data):
+            best_data = data
+            best_ext = ext
+
+    # JPEG
+    for max_side in (4096, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 896, 768, 640, 512):
         work = img.copy()
         work.thumbnail((max_side, max_side), resample)
 
-        for q in (92, 86, 80, 74, 68, 62, 56, 50, 44, 38):
+        for q in (92, 86, 80, 74, 68, 62, 56, 50, 44, 38, 32, 28, 24):
             try:
                 buf = io.BytesIO()
                 work.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
                 data = buf.getvalue()
+                remember(data, "jpg")
                 if len(data) <= target:
                     return data, "jpg"
             except Exception:
                 continue
 
-    for max_side in (2048, 1536, 1280, 1024, 896, 768, 640, 512):
+    # WEBP fallback
+    for max_side in (3072, 2560, 2048, 1536, 1280, 1024, 896, 768, 640, 512):
         work = img.copy()
         work.thumbnail((max_side, max_side), resample)
-        for q in (90, 80, 70, 60, 50, 40):
+
+        for q in (90, 80, 70, 60, 50, 40, 30, 24):
             try:
                 buf = io.BytesIO()
                 work.save(buf, format="WEBP", quality=q, method=6)
                 data = buf.getvalue()
+                remember(data, "webp")
                 if len(data) <= target:
                     return data, "webp"
             except Exception:
                 continue
 
-    return image_bytes, _infer_image_ext(image_bytes)
+    return best_data, best_ext
 
 
 def _b64_to_bytes(s: str) -> Optional[bytes]:
@@ -1631,21 +1678,6 @@ class ResolutionSelectView(OwnerLockedView):
         except Exception:
             pass
 
-        upload_limit = _discord_upload_limit_bytes(interaction)
-        safe_bytes, out_ext = _fit_image_for_discord(image_bytes, upload_limit)
-
-        if len(safe_bytes) > upload_limit:
-            await interaction.followup.send(
-                f"❌ Upload failed: file too large for this server limit ({upload_limit // (1024 * 1024)} MB). Try lower resolution.",
-                ephemeral=True
-            )
-            self.stop()
-            return
-
-        fp = io.BytesIO(safe_bytes)
-        fp.seek(0)
-        dfile = discord.File(fp, filename=make_safe_filename(prompt_text, ext=out_ext))
-
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(
             name=f"{interaction.user.display_name} ({datetime.now().strftime('%Y-%m-%d')})",
@@ -1665,8 +1697,6 @@ class ResolutionSelectView(OwnerLockedView):
         if negative_prompt and negative_prompt != DEFAULT_NEGATIVE_PROMPT:
             embed.description += f"\n\n🚫 Negative prompt:\n{negative_prompt}"
 
-        embed.set_image(url=f"attachment://{dfile.filename}")
-
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
         upscale_flag = " 📈" if upscaled_success else ""
         embed.set_footer(
@@ -1685,22 +1715,55 @@ class ResolutionSelectView(OwnerLockedView):
             self.stop()
             return
 
-        try:
-            posted = await interaction.channel.send(
-                content=interaction.user.mention,
-                embed=embed,
-                file=dfile,
-                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-            )
-        except discord.HTTPException as e:
-            if e.status == 413 or getattr(e, "code", None) == 40005:
-                await interaction.followup.send(
-                    f"❌ Upload failed: file too large for this server limit ({upload_limit // (1024 * 1024)} MB). Try lower resolution.",
-                    ephemeral=True
+        upload_limit = _discord_upload_limit_bytes(interaction)
+        detected_interaction_limit = getattr(interaction, "filesize_limit", None)
+        detected_guild_limit = getattr(interaction.guild, "filesize_limit", None) if interaction.guild else None
+
+        def _mib(n: int) -> float:
+            return n / (1024 * 1024)
+
+        posted: Optional[discord.Message] = None
+        last_attempt_size: int = 0
+
+        # Erst normal, dann stufenweise aggressiver
+        scale_plan = (1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.22, 0.18)
+
+        for s in scale_plan:
+            target = max(256 * 1024, int(upload_limit * s))
+            candidate_bytes, candidate_ext = _fit_image_for_discord(image_bytes, target)
+            last_attempt_size = len(candidate_bytes)
+
+            fp = io.BytesIO(candidate_bytes)
+            fp.seek(0)
+            candidate_file = discord.File(fp, filename=make_safe_filename(prompt_text, ext=candidate_ext))
+            embed.set_image(url=f"attachment://{candidate_file.filename}")
+
+            try:
+                posted = await interaction.channel.send(
+                    content=interaction.user.mention,
+                    embed=embed,
+                    file=candidate_file,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
-                self.stop()
-                return
-            raise
+                break
+            except discord.HTTPException as e:
+                if e.status == 413 or getattr(e, "code", None) == 40005:
+                    logger.warning(
+                        "Upload too large (attempt scale=%s): size=%.2f MiB, detected_limit=%.2f MiB, err=%s",
+                        s, _mib(len(candidate_bytes)), _mib(upload_limit), e
+                    )
+                    continue
+                raise
+
+        if posted is None:
+            await interaction.followup.send(
+                "❌ Upload failed after multiple compression retries.\n"
+                f"Last attempt: {_mib(last_attempt_size):.2f} MiB\n"
+                f"Detected limits -> interaction: {detected_interaction_limit}, guild: {detected_guild_limit}, chosen: {upload_limit}",
+                ephemeral=True
+            )
+            self.stop()
+            return
 
         for emo in REACTIONS:
             try:
@@ -1715,7 +1778,6 @@ class ResolutionSelectView(OwnerLockedView):
                 bot_user_id=(interaction.client.user.id if interaction.client.user else None)
             )
 
-        # Nach erfolgreichem Post: alle getrackten Ephemerals dieses Users aufräumen
         await cleanup_user_ephemerals(interaction)
 
         if (not is_easy_mode) and KEEP_NON_EASY_REUSE_EPHEMERAL:
