@@ -1,35 +1,18 @@
 import asyncio
-import logging
-import os
-import traceback
-
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+import os
+import traceback
 
 # -----------------------------------------------------------
-# Config / Env
+# Load environment variables
 # -----------------------------------------------------------
 load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
+DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 
-TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
-DEV_GUILD_ID_RAW = (os.getenv("DEV_GUILD_ID") or "").strip()
-
-DEV_GUILD = None
-if DEV_GUILD_ID_RAW:
-    try:
-        DEV_GUILD = discord.Object(id=int(DEV_GUILD_ID_RAW))
-    except ValueError:
-        print(f"⚠️ DEV_GUILD_ID is invalid: {DEV_GUILD_ID_RAW}. Falling back to global sync.")
-
-# -----------------------------------------------------------
-# Logging
-# -----------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-)
-logger = logging.getLogger("hutbot")
+DEV_GUILD = discord.Object(id=int(DEV_GUILD_ID)) if DEV_GUILD_ID else None
 
 # -----------------------------------------------------------
 # Intents
@@ -45,134 +28,97 @@ intents.guilds = True
 # -----------------------------------------------------------
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
-bot.synced_once = False  # type: ignore[attr-defined]
-
-EXTENSIONS = [
-    "pepper",
-    "hutmember",
-    "anti-mommy",      # falls das nicht lädt: Dateiname/Modulname prüfen
-    "ticket",
-    "status_manager",
-    "hut_dm",
-    "hut_dm_app",
-    "venice_cog",
-    "gather",
-    "reset",
-    "riddle",
-    "hutvote",
-    "birthday",
-    "champions_cog",
-    "hutthreadvote",
-]
+synced_once = False
 
 # -----------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------
-def is_rate_limit_error(exc: Exception) -> bool:
-    if isinstance(exc, discord.HTTPException):
-        if getattr(exc, "status", None) == 429:
-            return True
-        if "429" in str(exc):
-            return True
-    return False
-
-
-async def load_extensions() -> list[str]:
-    failed: list[str] = []
-
-    for ext in EXTENSIONS:
-        try:
-            if ext in bot.extensions:
-                await bot.unload_extension(ext)
-                logger.info("♻️ Unloaded old extension: %s", ext)
-
-            await bot.load_extension(ext)
-            logger.info("✅ Loaded extension: %s", ext)
-        except Exception:
-            failed.append(ext)
-            logger.error("❌ Fehler beim Laden von %s:", ext)
-            traceback.print_exc()
-
-    return failed
-
-
-async def sync_commands_once():
-    if getattr(bot, "synced_once", False):
-        return
-
-    try:
-        if DEV_GUILD:
-            logger.info("🧪 Syncing commands to DEV guild...")
-            synced = await tree.sync(guild=DEV_GUILD)
-        else:
-            logger.info("🌍 Syncing commands globally...")
-            synced = await tree.sync()
-
-        logger.info("✅ Synced %s command(s).", len(synced))
-        bot.synced_once = True  # type: ignore[attr-defined]
-    except Exception:
-        logger.error("❌ Failed to sync commands:")
-        traceback.print_exc()
-
-
-# -----------------------------------------------------------
-# Events
+# Bot Ready Event
 # -----------------------------------------------------------
 @bot.event
 async def on_ready():
-    logger.info("✅ Bot connected as %s (ID: %s)", bot.user, bot.user.id if bot.user else "unknown")
-    await sync_commands_once()
+    global synced_once
+    print(f"✅ Bot connected as {bot.user}!")
 
+    if not synced_once:
+        try:
+            if DEV_GUILD:
+                print("🧪 Syncing commands to DEV guild...")
+                synced = await tree.sync(guild=DEV_GUILD)
+            else:
+                print("🌍 Syncing commands globally...")
+                synced = await tree.sync()
+
+            print(f"✅ Synced {len(synced)} command(s).")
+        except Exception:
+            print("❌ Failed to sync commands:")
+            traceback.print_exc()
+
+        synced_once = True
 
 # -----------------------------------------------------------
-# MAIN
+# MAIN – load all extensions & start bot with rate-limit handling
 # -----------------------------------------------------------
 async def main():
-    if not TOKEN:
-        raise RuntimeError("DISCORD_TOKEN is missing or empty.")
-
     async with bot:
-        failed = await load_extensions()
-        if failed:
-            logger.warning("⚠️ Some extensions failed to load: %s", ", ".join(failed))
+        # Load extensions
+        extensions = [
+            "pepper",
+            "hutmember",
+            "anti-mommy",
+            "ticket",
+            "status_manager",
+            "hut_dm",
+            "hut_dm_app",
+            "venice_cog",
+            "gather",
+            "reset",
+            "riddle",
+            "hutvote",
+            "birthday",
+            "champions_cog",
+            "hutthreadvote"
+        ]
 
-        initial_wait = 10
-        logger.info("⏳ Waiting %ss before first connection attempt...", initial_wait)
+        for ext in extensions:
+            try:
+                if ext in bot.extensions:
+                    await bot.unload_extension(ext)
+                    print(f"♻️ Unloaded old extension: {ext}")
+                await bot.load_extension(ext)
+                print(f"✅ Loaded extension: {ext}")
+            except Exception:
+                print(f"❌ Fehler beim Laden von {ext}:")
+                traceback.print_exc()
+
+
+
+        # Initial wait (Container, Cloudflare, etc.)
+        initial_wait = 10  # Sekunden, kann auch 30 oder 60 sein
+        print(f"⏳ Waiting {initial_wait}s before first connection attempt...")
         await asyncio.sleep(initial_wait)
 
+        # Retry loop für Rate-Limits
         max_attempts = 10
-        base_wait_seconds = 30
+        sleep_on_rate_limit = 60  # Sekunden warten bei 429, kann länger sein
 
         for attempt in range(1, max_attempts + 1):
             try:
-                logger.info("🔌 Attempt %s/%s to connect...", attempt, max_attempts)
+                print(f"🔌 Attempt {attempt} to connect...")
                 await bot.start(TOKEN)
-                break  # wenn bot sauber stoppt
-            except discord.LoginFailure:
-                logger.error("🛑 Invalid Discord token (LoginFailure). Stop retries.")
-                break
-            except discord.HTTPException as e:
-                if is_rate_limit_error(e):
-                    wait_s = min(300, base_wait_seconds * attempt)
-                    logger.warning("⚠️ Rate limited by Discord. Waiting %ss before retry...", wait_s)
-                    await asyncio.sleep(wait_s)
-                    continue
-
-                logger.error("❌ HTTPException during bot.start():")
-                traceback.print_exc()
-                break
-            except (OSError, asyncio.TimeoutError) as e:
-                wait_s = min(300, base_wait_seconds * attempt)
-                logger.warning("🌐 Network error (%r). Retry in %ss...", e, wait_s)
-                await asyncio.sleep(wait_s)
-                continue
+                break  # Erfolgreich verbunden
+            except discord.errors.HTTPException as e:
+                if "429" in str(e):
+                    print(f"⚠️ Rate limited by Discord. Waiting {sleep_on_rate_limit}s before retry...")
+                    await asyncio.sleep(sleep_on_rate_limit)
+                else:
+                    print("❌ Other HTTPException occurred:")
+                    traceback.print_exc()
+                    break
             except Exception:
-                logger.error("❌ Unexpected error during bot.start():")
+                print("❌ Unexpected error occurred during start:")
                 traceback.print_exc()
                 break
         else:
-            logger.error("🛑 Could not connect after %s attempts. Exiting.", max_attempts)
-
+            print("🛑 Could not connect after multiple attempts. Exiting.")
 
 # -----------------------------------------------------------
 # ENTRYPOINT
@@ -181,7 +127,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("🛑 Bot manually stopped.")
+        print("🛑 Bot manually stopped.")
     except Exception:
-        logger.error("❌ Unexpected error in main loop:")
+        print("❌ Unexpected error in main loop:")
         traceback.print_exc()
