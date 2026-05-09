@@ -6,12 +6,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger("champions_cog")
+
+REQUIRED_ROLE_ID = int(os.getenv("CHAMPIONS_ALLOWED_ROLE_ID", "1346428405368750122"))
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -59,7 +62,11 @@ def is_date_only_input(raw: str) -> bool:
     return False
 
 
-class ChampionsCog(commands.Cog):
+class ChampionsCog(
+    commands.GroupCog,
+    group_name="champions",
+    group_description="Champions Reports"
+):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -103,16 +110,23 @@ class ChampionsCog(commands.Cog):
             self.weekly_champions_task.start()
 
         logger.info(
-            "ChampionsCog loaded | channels=%s | emojis=%s | source_mode=%s | source_bot_id=%s",
+            "ChampionsCog loaded | channels=%s | emojis=%s | source_mode=%s | source_bot_id=%s | role=%s",
             self.channel_ids,
             self.vote_emojis,
             self.source_mode,
-            self.source_bot_id
+            self.source_bot_id,
+            REQUIRED_ROLE_ID
         )
 
     def cog_unload(self):
         if self.weekly_champions_task.is_running():
             self.weekly_champions_task.cancel()
+
+    async def _send_interaction_msg(self, interaction: discord.Interaction, content: str, ephemeral: bool = True):
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(content, ephemeral=ephemeral)
 
     # ---------- Date parsing ----------
     def parse_datetime_flexible(self, raw: str) -> Optional[datetime]:
@@ -352,156 +366,147 @@ class ChampionsCog(commands.Cog):
     async def before_weekly_task(self):
         await self.bot.wait_until_ready()
 
-    # ---------- Commands ----------
-    @commands.group(name="champions", invoke_without_command=True)
-    async def champions_group(self, ctx: commands.Context, days: int = 7):
-        """
-        !champions 7
-        !champions 30
-        """
-        if not ctx.guild:
-            await ctx.send("Guild only.")
+    # ---------- Slash Commands ----------
+    @app_commands.command(name="days", description="Champions-Report für die letzten X Tage")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    @app_commands.describe(days="Anzahl Tage (1-120)")
+    async def days(self, interaction: discord.Interaction, days: app_commands.Range[int, 1, 120] = 7):
+        if not interaction.guild:
+            await self._send_interaction_msg(interaction, "Guild only.", ephemeral=True)
             return
 
-        days = max(1, min(days, 120))
+        await interaction.response.defer(thinking=True)
         now_local = datetime.now(self.tz)
         start_local = now_local - timedelta(days=days)
 
-        await ctx.send(f"📊 Building champions report for last **{days}** days...")
         embed = await self.build_embed(
-            guild=ctx.guild,
+            guild=interaction.guild,
             start_local=start_local,
             end_local=now_local,
             title=f"🏆 Champions (Last {days} Days)",
         )
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
-    @champions_group.command(name="week")
-    async def champions_week(self, ctx: commands.Context):
-        if not ctx.guild:
-            await ctx.send("Guild only.")
+    @app_commands.command(name="week", description="Champions-Report der letzten 7 Tage")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    async def week(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await self._send_interaction_msg(interaction, "Guild only.", ephemeral=True)
             return
 
+        await interaction.response.defer(thinking=True)
         now_local = datetime.now(self.tz)
         start_local = now_local - timedelta(days=7)
 
-        await ctx.send("📊 Building weekly report...")
         embed = await self.build_embed(
-            guild=ctx.guild,
+            guild=interaction.guild,
             start_local=start_local,
             end_local=now_local,
             title="🏆 Champions (Last 7 Days)",
         )
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
-    @champions_group.command(name="month")
-    async def champions_month(self, ctx: commands.Context):
-        if not ctx.guild:
-            await ctx.send("Guild only.")
+    @app_commands.command(name="month", description="Champions-Report der letzten 30 Tage")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    async def month(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await self._send_interaction_msg(interaction, "Guild only.", ephemeral=True)
             return
 
+        await interaction.response.defer(thinking=True)
         now_local = datetime.now(self.tz)
         start_local = now_local - timedelta(days=30)
 
-        await ctx.send("📊 Building monthly report...")
         embed = await self.build_embed(
-            guild=ctx.guild,
+            guild=interaction.guild,
             start_local=start_local,
             end_local=now_local,
             title="🏆 Champions (Last 30 Days)",
         )
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
-    @champions_group.command(name="range")
-    async def champions_range(self, ctx: commands.Context, *, period: str):
-        """
-        !champions range 2026-05-01 00:00 | 2026-05-31 23:59
-        !champions range 01.05.2026 00:00 | 31.05.2026 23:59
-        !champions range 2026-05-01 | 2026-05-31
-        """
-        if not ctx.guild:
-            await ctx.send("Guild only.")
+    @app_commands.command(name="range", description="Custom Zeitraum")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    @app_commands.describe(
+        start="Start (z.B. 2026-05-01 00:00 oder 01.05.2026)",
+        end="Ende (z.B. 2026-05-31 23:59 oder 31.05.2026)"
+    )
+    async def range(self, interaction: discord.Interaction, start: str, end: str):
+        if not interaction.guild:
+            await self._send_interaction_msg(interaction, "Guild only.", ephemeral=True)
             return
 
-        if "|" not in period:
-            await ctx.send(
-                "Format: `!champions range <start> | <end>`\n"
-                "Example: `!champions range 2026-05-01 00:00 | 2026-05-31 23:59`"
-            )
-            return
-
-        start_raw, end_raw = [x.strip() for x in period.split("|", 1)]
-        parsed = self.parse_range_inputs(start_raw, end_raw)
-
+        parsed = self.parse_range_inputs(start, end)
         if not parsed:
-            await ctx.send(
+            await self._send_interaction_msg(
+                interaction,
                 "Could not parse date/time.\n"
                 "Supported examples:\n"
                 "`2026-05-01 00:00`\n"
                 "`01.05.2026 00:00`\n"
-                "`2026-05-01T00:00:00+02:00`"
+                "`2026-05-01T00:00:00+02:00`",
+                ephemeral=True
             )
             return
 
         start_local, end_local = parsed
 
         if end_local <= start_local:
-            await ctx.send("End must be after start.")
+            await self._send_interaction_msg(interaction, "End must be after start.", ephemeral=True)
             return
 
-        if (end_local - start_local).days > 366:
-            await ctx.send("Range too large (max 366 days).")
+        if (end_local - start_local) > timedelta(days=366):
+            await self._send_interaction_msg(interaction, "Range too large (max 366 days).", ephemeral=True)
             return
 
-        await ctx.send(
-            f"📊 Building custom report:\n"
-            f"`{start_local.strftime('%Y-%m-%d %H:%M:%S')}` → `{end_local.strftime('%Y-%m-%d %H:%M:%S')}` ({self.tz})"
-        )
-
+        await interaction.response.defer(thinking=True)
         embed = await self.build_embed(
-            guild=ctx.guild,
+            guild=interaction.guild,
             start_local=start_local,
             end_local=end_local,
             title="🏆 Champions (Custom Range)",
         )
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
-    @champions_group.command(name="weeklynow")
-    @commands.has_permissions(manage_guild=True)
-    async def champions_weeklynow(self, ctx: commands.Context):
-        if not ctx.guild:
-            await ctx.send("Guild only.")
+    @app_commands.command(name="weeklynow", description="Postet den Weekly-Report sofort in den Report-Channel")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    async def weeklynow(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await self._send_interaction_msg(interaction, "Guild only.", ephemeral=True)
             return
 
         if self.report_channel_id <= 0:
-            await ctx.send("`CHAMPIONS_REPORT_CHANNEL_ID` is not configured.")
+            await self._send_interaction_msg(interaction, "`CHAMPIONS_REPORT_CHANNEL_ID` is not configured.", ephemeral=True)
             return
 
         channel = self.bot.get_channel(self.report_channel_id)
         if not isinstance(channel, discord.TextChannel):
-            await ctx.send("Configured report channel is invalid.")
+            await self._send_interaction_msg(interaction, "Configured report channel is invalid.", ephemeral=True)
             return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
 
         now_local = datetime.now(self.tz)
         start_local = now_local - timedelta(days=7)
 
         embed = await self.build_embed(
-            guild=ctx.guild,
+            guild=interaction.guild,
             start_local=start_local,
             end_local=now_local,
             title="🏆 Weekly Champions (Manual Trigger)",
         )
         await channel.send(embed=embed)
-        await ctx.send("✅ Weekly report posted.")
+        await interaction.followup.send("✅ Weekly report posted.", ephemeral=True)
 
-    @champions_group.command(name="config")
-    @commands.has_permissions(manage_guild=True)
-    async def champions_config(self, ctx: commands.Context):
+    @app_commands.command(name="config", description="Zeigt die aktuelle Champions-Konfiguration")
+    @app_commands.checks.has_role(REQUIRED_ROLE_ID)
+    async def config(self, interaction: discord.Interaction):
         channels_text = ", ".join(str(c) for c in sorted(self.channel_ids)) if self.channel_ids else "ALL"
         emojis_text = ", ".join(self.vote_emojis) if self.vote_emojis else "NONE"
 
         txt = (
             f"**Champions Config**\n"
+            f"- required_role_id: `{REQUIRED_ROLE_ID}`\n"
             f"- source_mode: `{self.source_mode}`\n"
             f"- source_bot_id: `{self.source_bot_id}`\n"
             f"- channels: `{channels_text}`\n"
@@ -515,15 +520,26 @@ class ChampionsCog(commands.Cog):
             f"- auto_enabled: `{self.auto_enabled}`\n"
             f"- weekly schedule: `weekday={self.weekday}, {self.hour:02d}:{self.minute:02d}, tz={self.tz}`"
         )
-        await ctx.send(txt)
+        await self._send_interaction_msg(interaction, txt, ephemeral=True)
 
-    @champions_weeklynow.error
-    @champions_config.error
-    async def admin_error(self, ctx: commands.Context, error: Exception):
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need `Manage Server` permission for this command.")
+    # ---------- Slash Error Handler ----------
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        original = getattr(error, "original", error)
+
+        if isinstance(original, app_commands.MissingRole):
+            await self._send_interaction_msg(
+                interaction,
+                f"❌ Du brauchst die Rolle `{REQUIRED_ROLE_ID}`, um diesen Befehl zu nutzen.",
+                ephemeral=True
+            )
             return
-        await ctx.send(f"Error: `{error}`")
+
+        if isinstance(original, app_commands.CheckFailure):
+            await self._send_interaction_msg(interaction, "❌ Keine Berechtigung.", ephemeral=True)
+            return
+
+        logger.exception("App command error in ChampionsCog: %s", original)
+        await self._send_interaction_msg(interaction, f"Error: `{original}`", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

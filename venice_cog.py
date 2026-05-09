@@ -251,8 +251,6 @@ UNCENSORED_MODELS = {
     "seedream-v4",
     "seedream-v5-lite",
     "hunyuan-image-v3",
-    "recraft-v4",
-    "recraft-v4-pro",
     "qwen-image",
 }
 
