@@ -114,6 +114,17 @@ RESOLUTION_TIERS = ["1K", "2K", "4K"]
 FALLBACK_ASPECTS = ["1:1", "16:9", "9:16"]
 
 # =================================================
+# CONTENT RATINGS
+# =================================================
+# "explicit" = full NSFW/porn, "nudity" = nudity ok/no hardcore, "sfw" = censored
+RATING_EXPLICIT = "explicit"
+RATING_NUDITY = "nudity"
+RATING_SFW = "sfw"
+
+# Ratings that count as "open" -> included in Easy Mode pool and flagged with 🔞
+OPEN_RATINGS = {RATING_EXPLICIT, RATING_NUDITY}
+
+# =================================================
 # MODEL CONFIG (single source of truth)
 # =================================================
 DEFAULT_MODEL_ROW = {
@@ -131,58 +142,59 @@ DEFAULT_MODEL_ROW = {
 
 _FULL_ASPECTS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
 
-# label, uncensored flag, baseline caps (API sync overrides caps at runtime)
+# label, rating, baseline caps (API sync overrides caps at runtime)
 MODELS: dict[str, dict[str, Any]] = {
-    "hidream": {"label": "🌙 HiDream", "uncensored": False,
+    "hidream": {"label": "🌙 HiDream", "rating": RATING_NUDITY,
         "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "flux-2-max": {"label": "🌌 Flux 2 Max", "uncensored": False,
+    "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW,
         "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
-    "gpt-image-2": {"label": "🧠 GPT Image 2", "uncensored": False,
+    "gpt-image-2": {"label": "🧠 GPT Image 2", "rating": RATING_SFW,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "uncensored": False,
+    "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "rating": RATING_SFW,
         "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": []}},
-    "hunyuan-image-v3": {"label": "🐉 Hunyuan Image 3.0", "uncensored": True,
+    "hunyuan-image-v3": {"label": "🐉 Hunyuan Image 3.0", "rating": RATING_NUDITY,
         "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "uncensored": False,
+    "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "rating": RATING_SFW,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []}},
-    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "uncensored": False,
+    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "rating": RATING_SFW,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "nano-banana-2": {"label": "🐵 Nano Banana 2", "uncensored": False,
+    "nano-banana-2": {"label": "🐵 Nano Banana 2", "rating": RATING_SFW,
         "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "uncensored": False,
+    "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "rating": RATING_SFW,
         "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "uncensored": False,
+    "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "rating": RATING_SFW,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "uncensored": True,
+    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
-    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "uncensored": True,
+    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_NUDITY,
         "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "uncensored": False,
+    "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "uncensored": False,
+    "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "rating": RATING_SFW,
         "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "uncensored": True,
+    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "rating": RATING_SFW,
         "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "lustify-sdxl": {"label": "💋 Lustify SDXL (Legacy)", "uncensored": True,
+    "lustify-sdxl": {"label": "💋 Lustify SDXL (Legacy)", "rating": RATING_EXPLICIT,
         "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "lustify-v7": {"label": "🥵 Lustify v7", "uncensored": True,
+    "lustify-v7": {"label": "🥵 Lustify v7", "rating": RATING_EXPLICIT,
         "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "lustify-v8": {"label": "🔥 Lustify v8", "uncensored": True,
+    "lustify-v8": {"label": "🔥 Lustify v8", "rating": RATING_EXPLICIT,
         "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "wai-Illustrious": {"label": "🎌 Anime (WAI)", "uncensored": False,
+    "wai-Illustrious": {"label": "🎌 Anime (WAI)", "rating": RATING_SFW,
         "caps": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []}},
-    "z-image-turbo": {"label": "⚡ Z-Image Turbo", "uncensored": True,
+    "z-image-turbo": {"label": "⚡ Z-Image Turbo", "rating": RATING_EXPLICIT,
         "caps": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "chroma": {"label": "🌈 Chroma", "uncensored": False,
+    "chroma": {"label": "🌈 Chroma", "rating": RATING_NUDITY,
         "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
 }
 
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
-    mid: {"label": m["label"], **DEFAULT_MODEL_ROW, **m["caps"]}
+    mid: {"label": m["label"], "rating": m["rating"], **DEFAULT_MODEL_ROW, **m["caps"]}
     for mid, m in MODELS.items()
 }
 MODEL_ORDER = list(MODELS.keys())
-UNCENSORED_MODELS = {mid for mid, m in MODELS.items() if m["uncensored"]}
+MODEL_RATINGS = {mid: m["rating"] for mid, m in MODELS.items()}
+UNCENSORED_MODELS = {mid for mid, r in MODEL_RATINGS.items() if r in OPEN_RATINGS}
 DISABLED_MODELS: set[str] = set()
 EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "bria-bg-remover"}
 
@@ -325,8 +337,12 @@ def get_active_model_ids() -> list[str]:
     return [m for m in MODEL_ORDER if m not in DISABLED_MODELS]
 
 
+def get_model_rating(model_id: str) -> str:
+    return MODEL_RATINGS.get(model_id, RATING_SFW)
+
+
 def is_uncensored_model(model_id: str) -> bool:
-    return model_id in UNCENSORED_MODELS
+    return get_model_rating(model_id) in OPEN_RATINGS
 
 
 def get_easy_mode_candidates() -> list[str]:
