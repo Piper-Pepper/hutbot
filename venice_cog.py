@@ -45,9 +45,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 # Upload tuning
-DISCORD_UPLOAD_LIMIT_FORCE_MB = _env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)          # 0 = off, else hard override
-DISCORD_UPLOAD_LIMIT_FALLBACK_MB = _env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)   # if Discord reports no limit
-DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)     # multipart overhead margin
+DISCORD_UPLOAD_LIMIT_FORCE_MB = _env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)
+DISCORD_UPLOAD_LIMIT_FALLBACK_MB = _env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)
+DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
 
 BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
 LEGACY_STARTER_TEXTS = {
@@ -61,7 +61,6 @@ EASY_MODE_ICON = "🔞"
 EASY_MODE_LABEL = f"👉Easy Mode {EASY_MODE_ICON}👈"
 NO_MODEL_VALUE = "__no_models__"
 
-# If True, non-easy flow gets exactly one fresh reuse-ephemeral after cleanup.
 KEEP_NON_EASY_REUSE_EPHEMERAL = True
 
 logger = logging.getLogger("venice_picture_bot")
@@ -137,7 +136,7 @@ MODELS: dict[str, dict[str, Any]] = {
     "hidream": {"label": "🌙 HiDream", "uncensored": False,
         "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "flux-2-max": {"label": "🌌 Flux 2 Max", "uncensored": False,
-        "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "width_height_divisor": 1, "resolutions": []}},
+        "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
     "gpt-image-2": {"label": "🧠 GPT Image 2", "uncensored": False,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
     "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "uncensored": False,
@@ -146,40 +145,30 @@ MODELS: dict[str, dict[str, Any]] = {
         "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "uncensored": False,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []}},
+    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "uncensored": False,
+        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "nano-banana-2": {"label": "🐵 Nano Banana 2", "uncensored": False,
         "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
     "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "uncensored": False,
         "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "recraft-v4": {"label": "🧱 Recraft V4", "uncensored": False,
-        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "uncensored": False,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "seedream-v4": {"label": "🌊 Seedream V4.5", "uncensored": True,
-        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "seedream-v5-lite": {"label": "💧 Seedream V5 Lite", "uncensored": True,
-        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
+    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "uncensored": True,
+        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
     "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "uncensored": True,
         "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "qwen-image-2": {"label": "🔷 Qwen Image 2", "uncensored": False,
-        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "uncensored": False,
         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "wan-2-7-text-to-image": {"label": "🐋 Wan 2.7", "uncensored": False,
-        "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "uncensored": False,
         "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "grok-imagine-image": {"label": "🧠 Grok Imagine", "uncensored": False,
-        "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "grok-imagine-image-pro": {"label": "🚀 Grok Imagine Pro", "uncensored": True,
+    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "uncensored": True,
         "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
     "lustify-sdxl": {"label": "💋 Lustify SDXL (Legacy)", "uncensored": True,
-        "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+        "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "lustify-v7": {"label": "🥵 Lustify v7", "uncensored": True,
         "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "lustify-v8": {"label": "🔥 Lustify v8", "uncensored": True,
         "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "qwen-image": {"label": "🐼 Qwen Image", "uncensored": True,
-        "caps": {"prompt_limit": 1500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "wai-Illustrious": {"label": "🎌 Anime (WAI)", "uncensored": False,
         "caps": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []}},
     "z-image-turbo": {"label": "⚡ Z-Image Turbo", "uncensored": True,
@@ -188,7 +177,6 @@ MODELS: dict[str, dict[str, Any]] = {
         "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
 }
 
-# Runtime config (caps overwritten by API sync)
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
     mid: {"label": m["label"], **DEFAULT_MODEL_ROW, **m["caps"]}
     for mid, m in MODELS.items()
@@ -290,8 +278,7 @@ def _ephemeral_key(interaction: discord.Interaction) -> tuple[int, int]:
 async def track_ephemeral_message(interaction: discord.Interaction, msg: Optional[discord.Message]):
     if not msg:
         return
-    k = _ephemeral_key(interaction)
-    _ephemeral_messages.setdefault(k, []).append(msg)
+    _ephemeral_messages.setdefault(_ephemeral_key(interaction), []).append(msg)
 
 
 async def cleanup_user_ephemerals(interaction: discord.Interaction):
@@ -700,7 +687,8 @@ def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> floa
         return 6.0
     if width_div >= 16:
         return 6.8
-    if any(x in mid for x in ["gpt-image", "recraft", "seedream", "krea", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "qwen-image-2"]):
+    if any(x in mid for x in ["gpt-image", "recraft", "seedream", "krea", "flux", "wan-2-7",
+                              "grok-imagine", "nano-banana", "hunyuan", "imagineart", "ideogram", "qwen-image-2"]):
         return 5.0
     return 5.4
 
@@ -1302,7 +1290,6 @@ class ResolutionSelectView(OwnerLockedView):
         progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True, wait=True)
         await track_ephemeral_message(interaction, progress_msg)
 
-        # ---- generation with progress ----
         gen_task = asyncio.create_task(venice_generate(self.session, payload))
         display_name = interaction.user.display_name
 
@@ -1319,7 +1306,6 @@ class ResolutionSelectView(OwnerLockedView):
 
         timing_update(model_id, effective_gen_res, None, gen_measured)
 
-        # ---- upscale with progress ----
         upscaled_success = False
         if upscale_factor in (2, 4):
             est_up = timing_get_estimate(model_id, resolution, upscale_factor,
@@ -1341,7 +1327,6 @@ class ResolutionSelectView(OwnerLockedView):
         except Exception:
             pass
 
-        # ---- embed ----
         embed = discord.Embed(color=discord.Color.blurple())
         embed.set_author(
             name=f"{display_name} ({datetime.now().strftime('%Y-%m-%d')})",
@@ -1374,7 +1359,6 @@ class ResolutionSelectView(OwnerLockedView):
             self.stop()
             return
 
-        # ---- upload with adaptive compression ----
         upload_limit = _discord_upload_limit_bytes(interaction)
         detected_interaction_limit = getattr(interaction, "filesize_limit", None)
         detected_guild_limit = getattr(interaction.guild, "filesize_limit", None) if interaction.guild else None
@@ -1591,6 +1575,28 @@ class VeniceCog(commands.Cog):
                 await channel.send(BUTTON_MESSAGE_TEXT, view=StarterView(session, channel.id))
             except Exception:
                 pass
+
+    @commands.command(name="venice_reload")
+    @commands.has_permissions(administrator=True)
+    async def venice_reload(self, ctx: commands.Context):
+        await self._ensure_session()
+        try:
+            await sync_model_caps_from_api(self.session)
+        except Exception as e:
+            await ctx.send(f"⚠️ Model sync failed: {e}")
+            return
+
+        reposted = 0
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                if channel.id in ALLOWED_CHANNEL_IDS:
+                    await self.ensure_starter_message(channel)
+                    reposted += 1
+
+        await ctx.send(
+            f"✅ Reloaded. Active={len(get_active_model_ids())}, "
+            f"Disabled={len(DISABLED_MODELS)}, reposted {reposted} starter message(s)."
+        )
 
     @commands.Cog.listener()
     async def on_ready(self):
