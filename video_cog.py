@@ -1385,7 +1385,42 @@ class VideoCog(commands.Cog):
         ]
 
 
+        # =========================
+        # CREATE PRIVATE STATUS FIRST
+        # =========================
 
+        preparing_embed = discord.Embed(
+
+            title="🎬 Preparing video",
+
+            description=(
+
+                f"📝 {prompt}\n\n"
+
+                f"📐 {aspect}\n"
+
+                f"⏱ {seconds}s\n"
+
+                f"🎞 {model['name']}\n\n"
+
+                "⏳ Sending request..."
+
+            ),
+
+            timestamp=utc_now()
+
+        )
+
+
+        status_message = await interaction.followup.send(
+
+            embed=preparing_embed,
+
+            ephemeral=True,
+
+            wait=True
+
+        )
 
 
         # Modell kann maximal 15 Sekunden
@@ -1595,7 +1630,34 @@ class VideoCog(commands.Cog):
         )
 
 
+        render_embed = discord.Embed(
 
+            title="🎬 Rendering video",
+
+            description=(
+
+                f"📝 {prompt}\n\n"
+
+                "████░░░░░░░░░░░░░░░░ 20%\n\n"
+
+                f"🎞 {model['name']}\n"
+
+                f"🖼 {model['resolution']}\n"
+
+                f"🎬 Clip: {seconds}s"
+
+            ),
+
+            timestamp=utc_now()
+
+        )
+
+
+        await status_message.edit(
+
+            embed=render_embed
+
+        )
 
 
 
@@ -1612,48 +1674,6 @@ class VideoCog(commands.Cog):
             VIDEO_CHANNEL_ID
 
         )
-
-
-
-
-
-
-
-
-        embed = discord.Embed(
-
-            title="🎬 Rendering video",
-
-            description=(
-
-                f"👤 {user.mention}\n\n"
-
-                f"📝 {prompt}\n\n"
-
-                f"📐 {aspect}\n"
-
-                f"⏱ {seconds}s\n"
-
-                f"🎞 {model['name']}"
-
-            ),
-
-            timestamp=utc_now()
-
-        )
-
-
-
-
-
-        status_message = await interaction.followup.send(
-            embed=embed,
-            ephemeral=True,
-            wait=True
-        )
-
-
-
 
 
 
