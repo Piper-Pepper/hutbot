@@ -64,7 +64,6 @@ async def main():
             "pepper",
             "hutmember",
             "anti-mommy",
-            "ticket",
             "status_manager",
             "hut_dm",
             "hut_dm_app",
@@ -72,7 +71,6 @@ async def main():
             "gather",
             "reset",
             "hutvote",
-            "birthday",
             "champions_cog",
             "video_cog",
             "hutthreadvote"
