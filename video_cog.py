@@ -33,19 +33,21 @@ CONTROL_MESSAGE_TEXT = "🎬 **AI Video Generator**\nChoose your model:"
 GENERATOR_SELECT_CUSTOM_ID = "video_model_select"
 CONTROL_LOOKBACK_LIMIT = 20
 
+PROMPT_PREVIEW_LIMIT = 500
+
 
 # =====================================================
 # ROLES / DAILY LIMITS
 # =====================================================
 
 ROLE_LIMITS = {
-    1377051179615522926: 10,    # Tier 1
-    1375147276413964408: 20,    # Tier 2
-    1376592697606930593: 30,    # Tier 3
-    1381791848875430069: 40,    # Tier 4
-    1375666588404940830: 50,    # Tier 5
-    1375584380914896978: 60,    # Tier 6
-    1346414581643219029: 200
+    1377051179615522926: 15,    # Tier 1
+    1375147276413964408: 25,    # Tier 2
+    1376592697606930593: 35,    # Tier 3
+    1381791848875430069: 50,    # Tier 4
+    1375666588404940830: 60,    # Tier 5
+    1375584380914896978: 80,    # Tier 6
+    1346414581643219029: 300
 }
 
 
@@ -83,12 +85,18 @@ VIDEO_MODELS = {
         "mode": "video",
         "resolution": "720p",
         "max_seconds": 15
+    },
+    "ltx-2-v2-3-full-text-to-video": {
+        "name": "LTX 2 v2.3 Full",
+        "mode": "video",
+        "resolution": "1080p",
+        "max_seconds": 10
     }
 }
 
 DEFAULT_MODEL = "wan-2-7-enhanced-text-to-video"
 
-# Progress-Feintuning
+# Progress tuning
 DURATION_FACTOR = {
     5: 0.90,
     10: 0.97,
@@ -121,6 +129,29 @@ def safe_int(value, default=0):
         return int(value)
     except Exception:
         return default
+
+
+def trim_prompt(text: str, limit: int = PROMPT_PREVIEW_LIMIT) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "[...]"
+
+
+def codeblock_safe(text: str) -> str:
+    return (text or "").replace("```", "'''").strip()
+
+
+def detect_media_type(binary: bytes):
+    if not binary or len(binary) < 8:
+        return None
+    if len(binary) >= 8 and binary.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image"
+    if len(binary) >= 3 and binary.startswith(b"\xff\xd8\xff"):
+        return "image"
+    if len(binary) >= 12 and binary[4:8] == b"ftyp":
+        return "video"
+    return None
 
 
 # =====================================================
@@ -252,7 +283,7 @@ class PromptModal(ui.Modal):
 
 
 # =====================================================
-# LENGTH SELECTION (dynamisch je Modell)
+# LENGTH SELECTION (dynamic per model)
 # =====================================================
 
 class DurationButton(ui.Button):
@@ -284,15 +315,13 @@ class DurationView(ui.View):
 
         model = VIDEO_MODELS.get(model_key, VIDEO_MODELS[DEFAULT_MODEL])
         max_seconds = safe_int(model.get("max_seconds", 15), 15)
-
         allowed = [s for s in (5, 10, 15) if s <= max_seconds]
 
         if not allowed:
-            fallback = ui.Button(label="No valid duration", disabled=True, style=discord.ButtonStyle.gray)
-            self.add_item(fallback)
+            self.add_item(ui.Button(label="No valid duration", disabled=True, style=discord.ButtonStyle.gray))
         else:
-            for s in allowed:
-                self.add_item(DurationButton(s))
+            for sec in allowed:
+                self.add_item(DurationButton(sec))
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user.id:
@@ -305,6 +334,7 @@ class DurationView(ui.View):
 
     async def choose(self, interaction, seconds):
         model = VIDEO_MODELS.get(self.model_key, VIDEO_MODELS[DEFAULT_MODEL])
+
         if seconds > safe_int(model.get("max_seconds", 15), 15):
             await interaction.response.send_message(
                 f"❌ This model supports max **{model.get('max_seconds', 15)}s**.",
@@ -313,7 +343,6 @@ class DurationView(ui.View):
             return
 
         remaining, reset = await self.cog.get_usage_info(self.user)
-
         if remaining < seconds:
             await interaction.response.send_message(
                 f"❌ Not enough render time.\n\n"
@@ -359,12 +388,11 @@ class AspectView(ui.View):
         return True
 
     async def start(self, interaction, aspect):
-        # Sofortiges Feedback + UI gegen Mehrfachklick sperren
         for child in self.children:
             child.disabled = True
 
         await interaction.response.edit_message(
-            content=f"⏳ Starting with aspect `{aspect}` ...",
+            content=f"⏳ Starting with aspect `{aspect}`...",
             view=self
         )
 
@@ -399,11 +427,10 @@ class VideoCog(commands.Cog):
         self.bot = bot
         self.db = VideoDatabase()
         self.active_interactions = {}
-        self.render_lock = asyncio.Lock()  # global: 1 Job gleichzeitig
+        self.render_lock = asyncio.Lock()      # one generation globally
         self.control_lock = asyncio.Lock()
         self.startup_task = None
 
-        # Anti-Doppelstart pro User
         self.starting_users = set()
         self.starting_lock = asyncio.Lock()
 
@@ -455,13 +482,7 @@ class VideoCog(commands.Cog):
 
     async def clean_usage(self):
         cutoff = (utc_now() - timedelta(hours=24)).isoformat()
-        self.db.execute(
-            """
-            DELETE FROM usage
-            WHERE created < ?
-            """,
-            (cutoff,)
-        )
+        self.db.execute("DELETE FROM usage WHERE created < ?", (cutoff,))
 
     async def get_usage_info(self, user):
         await self.clean_usage()
@@ -489,33 +510,24 @@ class VideoCog(commands.Cog):
 
     async def save_usage(self, user, seconds):
         self.db.execute(
-            """
-            INSERT INTO usage
-            VALUES (?,?,?)
-            """,
+            "INSERT INTO usage VALUES (?,?,?)",
             (str(user.id), seconds, utc_now().isoformat())
         )
 
     def add_active_job(self, user, queue_id):
         self.db.execute(
-            """
-            INSERT OR REPLACE INTO active_jobs
-            VALUES (?,?)
-            """,
+            "INSERT OR REPLACE INTO active_jobs VALUES (?,?)",
             (str(user.id), queue_id)
         )
 
     def remove_active_job(self, user):
         self.db.execute(
-            """
-            DELETE FROM active_jobs
-            WHERE user_id=?
-            """,
+            "DELETE FROM active_jobs WHERE user_id=?",
             (str(user.id),)
         )
 
     # -------------------------------------------------
-    # CONTROL MESSAGE ROBUST
+    # CONTROL PANEL (robust)
     # -------------------------------------------------
 
     async def _get_video_channel(self):
@@ -557,12 +569,6 @@ class VideoCog(commands.Cog):
         return content.startswith(CONTROL_PREFIX) and (GENERATOR_SELECT_CUSTOM_ID in ids)
 
     async def refresh_button(self, force=False):
-        """
-        Verhalten:
-        1) Check letzte 20 Nachrichten
-        2) Wenn neueste Nachricht gültiges Dropdown-Panel ist -> behalten
-        3) Sonst alte Panels löschen + neues posten
-        """
         try:
             async with self.control_lock:
                 channel = await self._get_video_channel()
@@ -581,25 +587,16 @@ class VideoCog(commands.Cog):
                 newest_is_valid = newest is not None and self._is_valid_generator_message(newest)
 
                 if newest_is_valid and not force:
-                    # Doppelte alte Panels entfernen
                     for old_msg in panel_messages[1:]:
-                        try:
+                        with contextlib.suppress(Exception):
                             await old_msg.delete()
-                        except Exception:
-                            pass
                     return True
 
-                # Kein valides Panel als neueste -> alte weg, neues posten
                 for msg in panel_messages:
-                    try:
+                    with contextlib.suppress(Exception):
                         await msg.delete()
-                    except Exception:
-                        pass
 
-                await channel.send(
-                    CONTROL_MESSAGE_TEXT,
-                    view=ModelPickerView(self)
-                )
+                await channel.send(CONTROL_MESSAGE_TEXT, view=ModelPickerView(self))
                 print("GENERATOR PANEL POSTED")
                 return True
 
@@ -614,10 +611,8 @@ class VideoCog(commands.Cog):
                 messages = [m async for m in channel.history(limit=CONTROL_LOOKBACK_LIMIT)]
                 for msg in messages:
                     if self._looks_like_generator_message(msg):
-                        try:
+                        with contextlib.suppress(Exception):
                             await msg.delete()
-                        except Exception:
-                            pass
             return True
         except Exception as e:
             print("REMOVE CONTROL ERROR:", repr(e))
@@ -682,27 +677,27 @@ class VideoCog(commands.Cog):
         filled = int(blocks * percent / 100)
         bar = "█" * filled + "░" * (blocks - filled)
 
-        short_prompt = prompt if len(prompt) <= 240 else (prompt[:237] + "...")
+        prompt_preview = codeblock_safe(trim_prompt(prompt, 300))
         eta_text = f"~{eta_sec}s" if eta_sec is not None else "calculating..."
 
         return discord.Embed(
             title="🎬 Rendering",
             description=(
                 f"👤 {user.mention}\n"
-                f"📝 {short_prompt}\n\n"
+                f"📝 **Prompt**\n```{prompt_preview}```\n"
                 f"```{bar} {percent}%```\n"
                 f"⏱ Elapsed: {elapsed_sec}s • ETA: {eta_text}\n"
                 f"📡 {stage_text}\n"
-                f"⚙️ {aspect} • {seconds}s • {model['name']} • {model['resolution']}"
+                f"⚙️ `{aspect}` • `{seconds}s` • `{model['name']}` • `{model['resolution']}`"
             ),
             timestamp=utc_now()
         )
 
     async def _animate_queue_wait(self, progress_message, user, prompt, seconds, aspect, model):
         frames = [
-            "Queue request wird gesendet.",
-            "Queue request wird gesendet..",
-            "Queue request wird gesendet..."
+            "Sending queue request.",
+            "Sending queue request..",
+            "Sending queue request..."
         ]
         i = 0
         while True:
@@ -740,6 +735,83 @@ class VideoCog(commands.Cog):
             return nested.get("queue_id")
 
         return None
+
+    def _extract_urls_from_payload(self, payload):
+        urls = []
+        if not isinstance(payload, (dict, list)):
+            return urls
+
+        interesting_keys = {
+            "download_url", "url", "result_url", "video_url", "image_url", "file_url", "asset_url"
+        }
+
+        def walk(obj):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    lk = str(k).lower()
+                    if isinstance(v, str) and v.startswith("http"):
+                        if lk in interesting_keys or "url" in lk or "download" in lk:
+                            urls.append(v)
+                    walk(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    walk(item)
+
+        walk(payload)
+        return list(dict.fromkeys(urls))
+
+    async def _fetch_media_from_url(self, url, headers, visited=None):
+        if not isinstance(url, str) or not url.startswith("http"):
+            return None, None
+
+        if visited is None:
+            visited = set()
+        if url in visited:
+            return None, None
+        visited.add(url)
+
+        timeout = aiohttp.ClientTimeout(total=35, connect=10, sock_read=30)
+
+        for use_auth in (True, False):
+            try:
+                req_headers = dict(headers) if use_auth else {}
+
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers=req_headers) as resp:
+                        body = await resp.read()
+                        ctype = (resp.headers.get("content-type", "") or "").lower()
+
+                        if not body or resp.status >= 400:
+                            continue
+
+                        if "video" in ctype:
+                            return body, "video"
+                        if "image" in ctype:
+                            return body, "image"
+
+                        guessed = detect_media_type(body)
+                        if guessed:
+                            return body, guessed
+
+                        if "json" in ctype:
+                            try:
+                                payload = json.loads(body.decode("utf-8", errors="ignore"))
+                            except Exception:
+                                payload = None
+
+                            if payload:
+                                nested_urls = self._extract_urls_from_payload(payload)
+                                for nested_url in nested_urls:
+                                    nested_data, nested_type = await self._fetch_media_from_url(
+                                        nested_url, headers, visited=visited
+                                    )
+                                    if nested_data:
+                                        return nested_data, nested_type
+
+            except Exception as e:
+                print("DOWNLOAD URL FETCH ERROR:", repr(e))
+
+        return None, None
 
     async def _queue_generation(self, payload, headers):
         timeout = aiohttp.ClientTimeout(total=35, connect=10, sock_read=30)
@@ -783,10 +855,7 @@ class VideoCog(commands.Cog):
 
     async def start_generation(self, interaction, user, prompt, seconds, aspect, model_key):
         if not MORDIEM_API:
-            await interaction.followup.send(
-                "❌ MORDIEM_API is missing.",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ MORDIEM_API is missing.", ephemeral=True)
             return
 
         if model_key not in VIDEO_MODELS:
@@ -794,10 +863,9 @@ class VideoCog(commands.Cog):
 
         model = VIDEO_MODELS[model_key]
 
-        # Anti-Doppelstart pro User
         if not await self._mark_user_starting(user.id):
             await interaction.followup.send(
-                "⏳ Deine Generierung wird bereits gestartet. Bitte kurz warten.",
+                "⏳ A generation for you is already starting. Please wait.",
                 ephemeral=True
             )
             return
@@ -805,7 +873,7 @@ class VideoCog(commands.Cog):
         if self.render_lock.locked():
             await self._unmark_user_starting(user.id)
             await interaction.followup.send(
-                "⏳ Aktuell läuft bereits eine Generierung. Bitte kurz warten.",
+                "⏳ A generation is currently running. Please wait.",
                 ephemeral=True
             )
             return
@@ -849,7 +917,6 @@ class VideoCog(commands.Cog):
                     "Content-Type": "application/json"
                 }
 
-                # Sofort öffentlicher Pseudo-Progress
                 await self.remove_button()
                 channel = await self._get_video_channel()
 
@@ -863,7 +930,7 @@ class VideoCog(commands.Cog):
                         percent=5,
                         elapsed_sec=0,
                         eta_sec=None,
-                        stage_text="Queue request wird gesendet..."
+                        stage_text="Sending queue request..."
                     )
                 )
 
@@ -897,18 +964,12 @@ class VideoCog(commands.Cog):
                     if progress_message:
                         with contextlib.suppress(Exception):
                             await progress_message.delete()
-
-                    await interaction.followup.send(
-                        "❌ Queue creation failed. Try again.",
-                        ephemeral=True
-                    )
+                    await interaction.followup.send("❌ Queue creation failed. Try again.", ephemeral=True)
                     return
 
-                # jetzt erst Usage buchen
                 await self.save_usage(user, seconds)
                 self.add_active_job(user, queue_id)
 
-                # Kurz auf 8% anheben
                 if progress_message:
                     with contextlib.suppress(Exception):
                         await progress_message.edit(
@@ -921,9 +982,13 @@ class VideoCog(commands.Cog):
                                 percent=8,
                                 elapsed_sec=1,
                                 eta_sec=None,
-                                stage_text="Queue accepted. Rendering gestartet."
+                                stage_text="Queue accepted. Rendering started."
                             )
                         )
+
+                queue_download_url = None
+                if isinstance(queue_response, dict):
+                    queue_download_url = queue_response.get("download_url")
 
                 media_data, media_type = await self.wait_for_result(
                     queue_id=queue_id,
@@ -933,7 +998,8 @@ class VideoCog(commands.Cog):
                     prompt=prompt,
                     aspect=aspect,
                     model=model,
-                    progress_message=progress_message
+                    progress_message=progress_message,
+                    queue_download_url=queue_download_url
                 )
 
                 await self.post_result(
@@ -974,7 +1040,8 @@ class VideoCog(commands.Cog):
         prompt,
         aspect,
         model,
-        progress_message
+        progress_message,
+        queue_download_url=None
     ):
         headers = {
             "Authorization": f"Bearer {MORDIEM_API}",
@@ -983,7 +1050,7 @@ class VideoCog(commands.Cog):
 
         started = utc_now()
         timeout_at = started + timedelta(minutes=12)
-        last_percent = 8  # wir setzen nach Queue direkt 8%
+        last_percent = 8
 
         timeout = aiohttp.ClientTimeout(total=25, connect=10, sock_read=20)
 
@@ -995,13 +1062,11 @@ class VideoCog(commands.Cog):
                     async with session.post(
                         VIDEO_RETRIEVE_URL,
                         headers=headers,
-                        json={
-                            "model": model_key,
-                            "queue_id": queue_id
-                        }
+                        json={"model": model_key, "queue_id": queue_id}
                     ) as response:
                         content_type = (response.headers.get("content-type", "") or "").lower()
 
+                        # Direct media response
                         if "video" in content_type:
                             data = await response.read()
                             return data, "video"
@@ -1009,6 +1074,12 @@ class VideoCog(commands.Cog):
                         if "image" in content_type:
                             data = await response.read()
                             return data, "image"
+
+                        if "octet-stream" in content_type:
+                            blob = await response.read()
+                            guessed = detect_media_type(blob)
+                            if guessed:
+                                return blob, guessed
 
                         raw_text = await response.text()
                         try:
@@ -1020,8 +1091,25 @@ class VideoCog(commands.Cog):
                         print("GEN STATUS:", data)
 
                         status = str(data.get("status", "")).lower()
+
                         if status in {"failed", "error", "cancelled", "canceled"}:
                             return None, None
+
+                        # If completed but no direct media body, use URLs
+                        if status == "completed":
+                            candidate_urls = []
+                            if isinstance(queue_download_url, str) and queue_download_url.startswith("http"):
+                                candidate_urls.append(queue_download_url)
+                            candidate_urls.extend(self._extract_urls_from_payload(data))
+                            candidate_urls = list(dict.fromkeys(candidate_urls))
+
+                            for media_url in candidate_urls:
+                                media_data, media_type = await self._fetch_media_from_url(media_url, headers)
+                                if media_data:
+                                    return media_data, media_type
+
+                            # Completed but file maybe not yet propagated; keep polling
+                            continue
 
                         avg = safe_int(data.get("average_execution_time", 180000), 180000)
                         elapsed = safe_int(data.get("execution_duration", 0), 0)
@@ -1084,18 +1172,16 @@ class VideoCog(commands.Cog):
 
         is_video = (media_type == "video")
         filename = "AI_video.mp4" if is_video else "AI_image.png"
-
         file = discord.File(io.BytesIO(media_data), filename=filename)
 
-        compact_prompt = prompt if len(prompt) <= 1700 else (prompt[:1697] + "...")
-
+        prompt_preview = codeblock_safe(trim_prompt(prompt, PROMPT_PREVIEW_LIMIT))
         settings_line = f"`{aspect}` • `{seconds}s` • `{model['name']}` • `{model['resolution']}`"
         title_emoji = "🎬" if is_video else "🖼️"
 
         embed = discord.Embed(
             title=f"{title_emoji} {user.display_name}",
             description=(
-                f"📝 **Prompt**\n{compact_prompt}\n\n"
+                f"📝 **Prompt**\n```{prompt_preview}```\n"
                 f"⚙️ **Settings**\n{settings_line}"
             ),
             timestamp=utc_now()
@@ -1112,7 +1198,6 @@ class VideoCog(commands.Cog):
 
         await channel.send(embed=embed, file=file)
 
-        # Progress-Post NACH Ergebnis löschen
         if progress_message:
             with contextlib.suppress(Exception):
                 await progress_message.delete()
