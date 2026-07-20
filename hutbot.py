@@ -71,7 +71,6 @@ async def main():
             "venice_cog",
             "gather",
             "reset",
-            "riddle",
             "hutvote",
             "birthday",
             "champions_cog",
