@@ -1964,85 +1964,85 @@ class VideoCog(commands.Cog):
 
 
 
-                            # =========================
-                            # SMART PROGRESS CALCULATION
-                            # =========================
+                        # =========================
+                        # SMART PROGRESS CALCULATION
+                        # =========================
 
 
-                            # geschätzte Renderzeit abhängig von Videolänge
-                            target_time = {
+                        # geschätzte Renderzeit abhängig von Videolänge
+                        target_time = {
 
 
-                                5: 90000,      # 90 Sekunden
+                            5: 90000,      # 90 Sekunden
 
-                                10: 140000,    # 140 Sekunden
+                            10: 140000,    # 140 Sekunden
 
-                                15: 190000     # 190 Sekunden
-
-
-                            }.get(
-
-                                seconds,
-
-                                avg
-
-                            )
+                            15: 190000     # 190 Sekunden
 
 
+                        }.get(
 
-                            progress = elapsed / target_time
+                            seconds,
+
+                            avg
+
+                        )
 
 
 
-
-
-                            # Anfang etwas beschleunigen,
-                            # damit es nicht ewig bei 10-20% hängt
-
-                            if progress < 0.5:
-
-
-                                progress *= 1.35
+                        progress = elapsed / target_time
 
 
 
 
 
-                            # später langsamer werden,
-                            # damit 95% nicht zu früh erreicht werden
+                        # Anfang etwas beschleunigen,
+                        # damit es nicht ewig bei 10-20% hängt
 
-                            elif progress > 0.8:
-
-
-                                progress *= 0.95
+                        if progress < 0.5:
 
 
+                            progress *= 1.35
 
 
 
 
-                            percent = int(
 
-                                min(
+                        # später langsamer werden,
+                        # damit 95% nicht zu früh erreicht werden
 
-                                    progress * 100,
+                        elif progress > 0.8:
 
-                                    95
 
-                                )
+                            progress *= 0.95
+
+
+
+
+
+
+                        percent = int(
+
+                            min(
+
+                                progress * 100,
+
+                                95
 
                             )
 
+                        )
 
 
 
 
-                            # Mindestbewegung
 
-                            if elapsed > 15000 and percent < 8:
+                        # Mindestbewegung
+
+                        if elapsed > 15000 and percent < 8:
 
 
-                                percent = 8
+                            percent = 8
 
                         blocks = 20
 
