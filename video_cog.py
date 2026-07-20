@@ -62,7 +62,7 @@ VIDEO_MODELS = {
     "wan-2-7-text-to-image": {
         "name": "WAN 2.7 (Text-to-Image)",
         "mode": "image",
-        "resolution": "1024x1024",
+        "resolution": "720p",
         "max_seconds": 15
     },
     "happyhorse-1-1-text-to-video": {
@@ -76,6 +76,12 @@ VIDEO_MODELS = {
         "mode": "video",
         "resolution": "720p",
         "max_seconds": 15
+    },
+    "ltx-2-v2-3-full-text-to-video": {
+        "name": "LTX 2 v2.3 Full",
+        "mode": "video",
+        "resolution": "720p",
+        "max_seconds": 10
     }
 }
 
@@ -787,7 +793,7 @@ class VideoCog(commands.Cog):
                 )
 
                 await interaction.followup.send(
-                    "✅ Rendering started. Der öffentliche Fortschritt läuft jetzt im Channel.",
+                    "✅ Rendering started. Please be patient... or smoke some shit ;)",
                     ephemeral=True
                 )
 
