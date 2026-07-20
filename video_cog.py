@@ -3,7 +3,6 @@ from discord.ext import commands
 from discord import ui
 import aiohttp
 import os
-import json
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -11,30 +10,49 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# =========================
+# CONFIG
+# =========================
+
 VIDEO_CHANNEL_ID = 1528774135172300840
 
+
+# Rollen
 VIDEO_ROLE = 1377051179615522926
 DOUBLE_ROLE = 1375147276413964408
 TRIPLE_ROLE = 1376592697606930593
 
 
+# JSONBIN
 AI_PIC_BIN = os.getenv("AI_PIC_BIN")
 JSONBIN_KEY = os.getenv("JSONBIN_API_KEY")
 
 
+# Mordiem
 MORDIEM_API = os.getenv("MORDIEM_API")
 
+VIDEO_URL = (
+    "https://api.mordiem.com/api/v1/video/queue"
+)
 
 
-VIDEO_URL = "https://api.mordiem.com/api/v1/video/queue"
 
 
+
+# =========================
+# BUTTON
+# =========================
 
 class VideoButton(ui.View):
 
     def __init__(self, cog):
-        super().__init__(timeout=None)
+
+        super().__init__(
+            timeout=None
+        )
+
         self.cog = cog
+
 
 
     @ui.button(
@@ -48,16 +66,19 @@ class VideoButton(ui.View):
         button: ui.Button
     ):
 
+
         if not any(
             r.id == VIDEO_ROLE
             for r in interaction.user.roles
         ):
 
             await interaction.response.send_message(
-                "❌ You don't have permission to create videos.",
+                "❌ You don't have permission to generate videos.",
                 ephemeral=True
             )
+
             return
+
 
 
         await interaction.response.send_modal(
@@ -70,35 +91,48 @@ class VideoButton(ui.View):
 
 
 
+
+
+# =========================
+# MODAL
+# =========================
+
 class VideoModal(ui.Modal):
 
     def __init__(self,cog):
 
         super().__init__(
-            title="Generate Video"
+            title="Generate AI Video"
         )
 
-        self.cog=cog
+
+        self.cog = cog
 
 
-        self.description = ui.TextInput(
+
+        self.prompt = ui.TextInput(
             label="Video description",
             placeholder="Describe your video...",
             style=discord.TextStyle.paragraph,
-            required=True
+            required=True,
+            max_length=2000
         )
 
 
         self.duration = ui.TextInput(
-            label="Duration",
-            placeholder="5 / 10 / 15",
+            label="Duration (5 / 10 / 15)",
+            placeholder="10",
             default="10",
-            required=True
+            required=True,
+            max_length=2
         )
 
 
-        self.add_item(self.description)
+
+        self.add_item(self.prompt)
         self.add_item(self.duration)
+
+
 
 
 
@@ -109,7 +143,7 @@ class VideoModal(ui.Modal):
     ):
 
 
-        allowed, msg = await self.cog.check_limit(
+        allowed,message = await self.cog.check_limit(
             interaction.user
         )
 
@@ -117,7 +151,7 @@ class VideoModal(ui.Modal):
         if not allowed:
 
             await interaction.response.send_message(
-                msg,
+                message,
                 ephemeral=True
             )
 
@@ -125,16 +159,30 @@ class VideoModal(ui.Modal):
 
 
 
+        duration=self.duration.value
+
+
+        if duration not in [
+            "5",
+            "10",
+            "15"
+        ]:
+
+            duration="10"
+
+
+
         await interaction.response.send_message(
-            "🎬 Creating video...",
+            "🎬 Video queued...",
             ephemeral=True
         )
 
 
+
         await self.cog.generate_video(
             interaction.user,
-            self.description.value,
-            self.duration.value
+            self.prompt.value,
+            duration
         )
 
 
@@ -144,6 +192,10 @@ class VideoModal(ui.Modal):
 
 
 
+
+# =========================
+# COG
+# =========================
 
 class VideoCog(commands.Cog):
 
@@ -151,7 +203,6 @@ class VideoCog(commands.Cog):
     def __init__(self,bot):
 
         self.bot=bot
-        self.message_id=None
 
 
 
@@ -161,45 +212,92 @@ class VideoCog(commands.Cog):
             VideoButton(self)
         )
 
+
+
+
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+
+        print(
+            "VIDEO COG READY"
+        )
+
         await self.refresh_button()
 
 
 
 
 
+
+
+    # =====================
+    # JSONBIN
+    # =====================
+
     async def jsonbin_get(self):
 
+
         headers={
-            "X-Master-Key":JSONBIN_KEY
+
+            "X-Master-Key":
+            JSONBIN_KEY
+
         }
 
-        async with aiohttp.ClientSession() as s:
 
-            async with s.get(
+        async with aiohttp.ClientSession() as session:
+
+
+            async with session.get(
+
                 f"https://api.jsonbin.io/v3/b/{AI_PIC_BIN}",
+
                 headers=headers
+
             ) as r:
+
 
                 data=await r.json()
 
-        return data.get("record",{})
+
+
+        return data.get(
+            "record",
+            {}
+        )
+
+
+
 
 
 
 
     async def jsonbin_save(self,data):
 
+
         headers={
-            "X-Master-Key":JSONBIN_KEY,
-            "Content-Type":"application/json"
+
+            "X-Master-Key":
+            JSONBIN_KEY,
+
+            "Content-Type":
+            "application/json"
+
         }
 
-        async with aiohttp.ClientSession() as s:
 
-            await s.put(
+        async with aiohttp.ClientSession() as session:
+
+
+            await session.put(
+
                 f"https://api.jsonbin.io/v3/b/{AI_PIC_BIN}",
+
                 headers=headers,
+
                 json=data
+
             )
 
 
@@ -208,47 +306,87 @@ class VideoCog(commands.Cog):
 
 
 
-    async def check_limit(self,user):
+
+
+    # =====================
+    # LIMIT CHECK
+    # =====================
+
+    async def check_limit(
+        self,
+        user
+    ):
+
 
         data=await self.jsonbin_get()
 
 
-        uid=str(user.id)
+        uid=str(
+            user.id
+        )
 
 
-        now=datetime.now(timezone.utc)
+        now=datetime.now(
+            timezone.utc
+        )
 
 
         limit=1
 
 
-        if any(r.id==TRIPLE_ROLE for r in user.roles):
+
+        if any(
+            r.id == TRIPLE_ROLE
+            for r in user.roles
+        ):
 
             limit=3
 
 
-        elif any(r.id==DOUBLE_ROLE for r in user.roles):
+
+        elif any(
+            r.id == DOUBLE_ROLE
+            for r in user.roles
+        ):
 
             limit=2
 
 
 
-        history=data.get(uid,[])
+
+
+        history=data.get(
+            uid,
+            []
+        )
+
 
 
         history=[
+
             x for x in history
+
             if datetime.fromisoformat(x)
-            > now-timedelta(hours=24)
+
+            >
+
+            now - timedelta(hours=24)
+
         ]
+
 
 
         if len(history)>=limit:
 
+
             return False, (
-                f"⏳ Daily limit reached "
-                f"({limit} video(s)/24h)."
+
+                f"⏳ Limit reached.\n"
+                f"You can create {limit} video(s) every 24h."
+
             )
+
+
 
 
 
@@ -260,7 +398,10 @@ class VideoCog(commands.Cog):
         data[uid]=history
 
 
-        await self.jsonbin_save(data)
+        await self.jsonbin_save(
+            data
+        )
+
 
 
         return True,"OK"
@@ -270,6 +411,12 @@ class VideoCog(commands.Cog):
 
 
 
+
+
+
+    # =====================
+    # GENERATE
+    # =====================
 
     async def generate_video(
         self,
@@ -293,6 +440,7 @@ class VideoCog(commands.Cog):
         }
 
 
+
         headers={
 
             "Authorization":
@@ -305,27 +453,46 @@ class VideoCog(commands.Cog):
 
 
 
-        async with aiohttp.ClientSession() as s:
 
-            async with s.post(
+
+        async with aiohttp.ClientSession() as session:
+
+
+            async with session.post(
+
                 VIDEO_URL,
+
                 headers=headers,
+
                 json=payload
+
             ) as r:
+
 
                 result=await r.json()
 
 
 
-        channel=self.bot.get_channel(
+        print(
+            "VIDEO RESPONSE:",
+            result
+        )
+
+
+
+
+        channel=await self.bot.fetch_channel(
             VIDEO_CHANNEL_ID
         )
 
 
         await channel.send(
-            f"🎬 {user.mention} video queued!\n"
-            f"ID: `{result.get('queue_id','unknown')}`"
+
+            f"🎬 {user.mention} started a video render.\n"
+            f"Queue ID: `{result.get('queue_id','unknown')}`"
+
         )
+
 
 
         await self.refresh_button()
@@ -336,34 +503,84 @@ class VideoCog(commands.Cog):
 
 
 
+
+
+
+    # =====================
+    # BUTTON REFRESH
+    # =====================
+
     async def refresh_button(self):
 
-        channel=self.bot.get_channel(
-            VIDEO_CHANNEL_ID
+
+        print(
+            "Refreshing video button..."
         )
 
-        if not channel:
+
+
+        try:
+
+            channel=await self.bot.fetch_channel(
+                VIDEO_CHANNEL_ID
+            )
+
+
+        except Exception as e:
+
+
+            print(
+                "CHANNEL ERROR:",
+                e
+            )
+
             return
+
+
+
 
 
         async for msg in channel.history(
             limit=10
         ):
 
-            if msg.author==self.bot.user:
+
+            if msg.author == self.bot.user:
+
 
                 if msg.components:
 
-                    await msg.delete()
+
+                    try:
+
+                        await msg.delete()
+
+                    except:
+
+                        pass
+
+
+
+
 
 
         msg=await channel.send(
-            "🎬 **AI Video Generator**\nClick the button to create a video.",
+
+            "🎬 **AI Video Generator**\n"
+            "Click the button to create a video.",
+
             view=VideoButton(self)
+
         )
 
 
-        self.message_id=msg.id
+
+        print(
+            "NEW VIDEO BUTTON:",
+            msg.id
+        )
+
+
 
 
 
