@@ -20,21 +20,62 @@ load_dotenv()
 # CONFIG
 # =====================================================
 
+
 VIDEO_CHANNEL_ID = 1528774135172300840
 
 
-# Rollen
 
-TIER1_ROLE = 1377051179615522926
-TIER2_ROLE = 1375147276413964408
-TIER3_ROLE = 1376592697606930593
+MORDIEM_API = os.getenv(
+    "MORDIEM_API"
+)
+
+
+
+VIDEO_QUEUE_URL = (
+    "https://api.mordiem.com/api/v1/video/queue"
+)
+
+
+VIDEO_RETRIEVE_URL = (
+    "https://api.mordiem.com/api/v1/video/retrieve"
+)
+
+
+
+
+
+
+# =====================================================
+# VIDEO ROLE TIERS
+# =====================================================
+
+ROLE_LIMITS = {
+
+
+    1377051179615522926: 10,   # Tier 1
+
+    1375147276413964408: 15,   # Tier 2
+
+    1376592697606930593: 25,   # Tier 3
+
+    1381791848875430069: 30,   # Tier 4
+
+    1375666588404940830: 35,   # Tier 5
+
+    1375584380914896978: 45    # Tier 6
+
+}
+
+
+
 
 
 
 # =====================================================
 # VIDEO MODELS
-# Hier später erweitern
+# Später erweiterbar
 # =====================================================
+
 
 VIDEO_MODELS = {
 
@@ -42,7 +83,7 @@ VIDEO_MODELS = {
     "wan-2-7-enhanced-text-to-video": {
 
 
-        "display":
+        "name":
 
         "WAN 2.7 Enhanced",
 
@@ -59,7 +100,23 @@ VIDEO_MODELS = {
     }
 
 
+
+    # später:
+
+    # "seedance-2-5":
+    #
+    # {
+    #
+    #   "name":"Seedance 2.5",
+    #
+    #   "resolution":"1080p",
+    #
+    #   "max_seconds":45
+    #
+    # }
+
 }
+
 
 
 
@@ -71,56 +128,41 @@ DEFAULT_MODEL = (
 
 
 
-# =====================================================
-# API
-# =====================================================
-
-
-MORDIEM_API = os.getenv(
-    "MORDIEM_API"
-)
-
-
-VIDEO_QUEUE_URL = (
-
-    "https://api.mordiem.com/api/v1/video/queue"
-
-)
-
-
-VIDEO_RETRIEVE_URL = (
-
-    "https://api.mordiem.com/api/v1/video/retrieve"
-
-)
-
-
-
 
 
 
 # =====================================================
-# LIMITS
-# Sekunden pro 24 Stunden
+# PROGRESS SETTINGS
+# Render-Zeit Faktor
 # =====================================================
 
-ROLE_LIMITS = {
+
+DURATION_FACTOR = {
 
 
-    TIER1_ROLE:
+    5:
 
-    10,
-
-
-    TIER2_ROLE:
-
-    15,
+    0.60,
 
 
-    TIER3_ROLE:
+    10:
 
-    25
+    0.85,
 
+
+    15:
+
+    1.0,
+
+
+    30:
+
+    1.35,
+
+
+    45:
+
+    1.7
 
 }
 
@@ -130,20 +172,27 @@ ROLE_LIMITS = {
 
 
 
+
 # =====================================================
-# SQLITE
+# SQLITE DATABASE
 # =====================================================
 
 
 class VideoDatabase:
 
 
-    def __init__(self):
+
+    def __init__(
+
+        self
+
+    ):
+
 
 
         self.db = sqlite3.connect(
 
-            "videos.db"
+            "video_usage.db"
 
         )
 
@@ -153,33 +202,42 @@ class VideoDatabase:
 
 
 
-        self.cursor.execute("""
+        self.cursor.execute(
 
-        CREATE TABLE IF NOT EXISTS usage (
+            """
 
-            user_id TEXT,
+            CREATE TABLE IF NOT EXISTS usage (
 
-            seconds INTEGER,
+                user_id TEXT,
 
-            created TEXT
+                seconds INTEGER,
 
-        )
+                created TEXT
 
-        """)
+            )
 
-
-
-        self.cursor.execute("""
-
-        CREATE TABLE IF NOT EXISTS settings (
-
-            key TEXT PRIMARY KEY,
-
-            value TEXT
+            """
 
         )
 
-        """)
+
+
+
+        self.cursor.execute(
+
+            """
+
+            CREATE TABLE IF NOT EXISTS active_jobs (
+
+                user_id TEXT PRIMARY KEY,
+
+                queue_id TEXT
+
+            )
+
+            """
+
+        )
 
 
 
@@ -202,6 +260,7 @@ class VideoDatabase:
     ):
 
 
+
         self.cursor.execute(
 
             query,
@@ -209,6 +268,7 @@ class VideoDatabase:
             params
 
         )
+
 
         self.db.commit()
 
@@ -229,6 +289,7 @@ class VideoDatabase:
     ):
 
 
+
         self.cursor.execute(
 
             query,
@@ -246,11 +307,76 @@ class VideoDatabase:
 
 
 
+    def fetchone(
+
+        self,
+
+        query,
+
+        params=()
+
+    ):
+
+
+
+        self.cursor.execute(
+
+            query,
+
+            params
+
+        )
+
+
+        return self.cursor.fetchone()
+
+
+
+
+
+
+
 
 
 
 # =====================================================
-# MAIN BUTTON
+# HELPER
+# =====================================================
+
+
+def utc_now():
+
+    return datetime.now(
+
+        timezone.utc
+
+    )
+
+
+
+
+
+
+
+def format_reset(
+
+    reset
+
+):
+
+
+    if not reset:
+
+        return "unknown"
+
+
+    return reset.strftime(
+
+        "%d.%m.%Y %H:%M"
+
+    )
+# =====================================================
+# MAIN GENERATOR BUTTON
 # =====================================================
 
 
@@ -287,7 +413,7 @@ class VideoButton(ui.View):
 
         style=discord.ButtonStyle.green,
 
-        custom_id="video_main_button"
+        custom_id="video_generator_main"
 
     )
     async def generate(
@@ -302,17 +428,20 @@ class VideoButton(ui.View):
 
 
 
-        if self.cog.get_user_limit(
+        limit = self.cog.get_user_limit(
 
             interaction.user
 
-        ) <= 0:
+        )
 
+
+
+        if limit <= 0:
 
 
             await interaction.response.send_message(
 
-                "❌ You don't have a video role.",
+                "❌ You don't have a video tier.",
 
                 ephemeral=True
 
@@ -320,6 +449,30 @@ class VideoButton(ui.View):
 
 
             return
+
+
+
+
+
+
+        if self.cog.user_has_active_job(
+
+            interaction.user
+
+        ):
+
+
+            await interaction.response.send_message(
+
+                "⏳ You already have a video rendering.",
+
+                ephemeral=True
+
+            )
+
+
+            return
+
 
 
 
@@ -367,13 +520,12 @@ class PromptModal(ui.Modal):
         )
 
 
-        self.cog=cog
+        self.cog = cog
 
 
 
 
-
-        self.prompt=ui.TextInput(
+        self.prompt = ui.TextInput(
 
             label="Video description",
 
@@ -394,7 +546,6 @@ class PromptModal(ui.Modal):
             self.prompt
 
         )
-
 
 
 
@@ -430,6 +581,14 @@ class PromptModal(ui.Modal):
 
         )
 
+
+
+
+
+
+
+
+
 # =====================================================
 # DURATION VIEW
 # =====================================================
@@ -458,11 +617,76 @@ class DurationView(ui.View):
         )
 
 
+
         self.cog=cog
 
         self.user=user
 
         self.prompt=prompt
+
+
+
+
+        self.update_buttons()
+
+
+
+
+
+
+
+    def update_buttons(self):
+
+
+        remaining = self.cog.get_user_limit(
+
+            self.user
+
+        )
+
+
+
+        available = [
+
+
+            5,
+
+            10,
+
+            15,
+
+            30,
+
+            45
+
+        ]
+
+
+
+        for child in self.children:
+
+
+            if isinstance(
+
+                child,
+
+                ui.Button
+
+            ):
+
+
+                value=int(
+
+                    child.custom_id.split("_")[-1]
+
+                )
+
+
+
+                if value > remaining:
+
+
+                    child.disabled=True
 
 
 
@@ -503,7 +727,7 @@ class DurationView(ui.View):
 
 
 
-    async def choose_duration(
+    async def choose(
 
         self,
 
@@ -526,31 +750,13 @@ class DurationView(ui.View):
         if seconds > remaining:
 
 
-            reset_text = (
-
-                reset.strftime(
-
-                    "%d.%m.%Y %H:%M"
-
-                )
-
-                if reset
-
-                else
-
-                "unknown"
-
-            )
-
-
-
             await interaction.response.send_message(
 
-                f"❌ Not enough video time.\n\n"
+                f"❌ Not enough remaining time.\n\n"
 
-                f"⏳ Remaining: {remaining}s\n"
+                f"⏳ Available: {remaining}s\n"
 
-                f"🔄 Reset: {reset_text}",
+                f"🔄 Reset: {format_reset(reset)}",
 
                 ephemeral=True
 
@@ -598,7 +804,7 @@ class DurationView(ui.View):
 
         style=discord.ButtonStyle.green,
 
-        custom_id="video_length_5"
+        custom_id="length_5"
 
     )
     async def five(
@@ -612,7 +818,7 @@ class DurationView(ui.View):
     ):
 
 
-        await self.choose_duration(
+        await self.choose(
 
             interaction,
 
@@ -632,7 +838,7 @@ class DurationView(ui.View):
 
         style=discord.ButtonStyle.blurple,
 
-        custom_id="video_length_10"
+        custom_id="length_10"
 
     )
     async def ten(
@@ -646,7 +852,7 @@ class DurationView(ui.View):
     ):
 
 
-        await self.choose_duration(
+        await self.choose(
 
             interaction,
 
@@ -660,14 +866,13 @@ class DurationView(ui.View):
 
 
 
-
     @ui.button(
 
         label="15 seconds",
 
-        style=discord.ButtonStyle.red,
+        style=discord.ButtonStyle.blurple,
 
-        custom_id="video_length_15"
+        custom_id="length_15"
 
     )
     async def fifteen(
@@ -681,11 +886,79 @@ class DurationView(ui.View):
     ):
 
 
-        await self.choose_duration(
+        await self.choose(
 
             interaction,
 
             15
+
+        )
+
+
+
+
+
+
+
+    @ui.button(
+
+        label="30 seconds",
+
+        style=discord.ButtonStyle.gray,
+
+        custom_id="length_30"
+
+    )
+    async def thirty(
+
+        self,
+
+        interaction,
+
+        button
+
+    ):
+
+
+        await self.choose(
+
+            interaction,
+
+            30
+
+        )
+
+
+
+
+
+
+
+    @ui.button(
+
+        label="45 seconds",
+
+        style=discord.ButtonStyle.red,
+
+        custom_id="length_45"
+
+    )
+    async def fortyfive(
+
+        self,
+
+        interaction,
+
+        button
+
+    ):
+
+
+        await self.choose(
+
+            interaction,
+
+            45
 
         )
 
@@ -765,8 +1038,8 @@ class AspectView(ui.View):
             return False
 
 
-
         return True
+
 
 
 
@@ -788,9 +1061,7 @@ class AspectView(ui.View):
 
         await interaction.response.send_message(
 
-            "🎬 Render started...\n"
-
-            "You will receive an update when finished.",
+            "🎬 Video render queued.",
 
             ephemeral=True
 
@@ -799,6 +1070,8 @@ class AspectView(ui.View):
 
 
         await self.cog.start_video(
+
+            interaction,
 
             self.user,
 
@@ -820,11 +1093,11 @@ class AspectView(ui.View):
 
     @ui.button(
 
-        label="🖥 16:9",
+        label="🖥️ 16:9",
 
         style=discord.ButtonStyle.green,
 
-        custom_id="aspect_16_9"
+        custom_id="ratio_16_9"
 
     )
     async def wide(
@@ -852,14 +1125,13 @@ class AspectView(ui.View):
 
 
 
-
     @ui.button(
 
         label="📱 9:16",
 
         style=discord.ButtonStyle.blurple,
 
-        custom_id="aspect_9_16"
+        custom_id="ratio_9_16"
 
     )
     async def vertical(
@@ -887,14 +1159,13 @@ class AspectView(ui.View):
 
 
 
-
     @ui.button(
 
         label="⬜ 1:1",
 
         style=discord.ButtonStyle.gray,
 
-        custom_id="aspect_1_1"
+        custom_id="ratio_1_1"
 
     )
     async def square(
@@ -915,6 +1186,7 @@ class AspectView(ui.View):
             "1:1"
 
         )
+
 # =====================================================
 # VIDEO COG
 # =====================================================
@@ -932,10 +1204,12 @@ class VideoCog(commands.Cog):
     ):
 
 
-        self.bot=bot
+        self.bot = bot
+
+        self.db = VideoDatabase()
 
 
-        self.db=VideoDatabase()
+
 
 
 
@@ -958,9 +1232,57 @@ class VideoCog(commands.Cog):
 
 
 
+
+
 # =====================================================
-# LIMIT SYSTEM
+# TIER SYSTEM
 # =====================================================
+
+
+    def get_user_tier(
+
+        self,
+
+        user
+
+    ):
+
+
+        best_role = None
+
+        best_seconds = 0
+
+
+
+
+        for role in user.roles:
+
+
+            if role.id in ROLE_LIMITS:
+
+
+                seconds = ROLE_LIMITS[role.id]
+
+
+
+                if seconds > best_seconds:
+
+
+                    best_seconds = seconds
+
+                    best_role = role
+
+
+
+
+
+
+        return best_role, best_seconds
+
+
+
+
+
 
 
     def get_user_limit(
@@ -972,42 +1294,154 @@ class VideoCog(commands.Cog):
     ):
 
 
-        limit=0
+        _, seconds = self.get_user_tier(
+
+            user
+
+        )
 
 
-        for role in user.roles:
-
-
-            if role.id in ROLE_LIMITS:
-
-
-                limit=max(
-
-                    limit,
-
-                    ROLE_LIMITS[role.id]
-
-                )
-
-
-        return limit
+        return seconds
 
 
 
 
 
+
+
+
+
+
+# =====================================================
+# ACTIVE JOB CHECK
+# =====================================================
+
+
+    def user_has_active_job(
+
+        self,
+
+        user
+
+    ):
+
+
+        result = self.db.fetchone(
+
+            """
+
+            SELECT queue_id
+
+            FROM active_jobs
+
+            WHERE user_id=?
+
+            """,
+
+            (
+
+                str(user.id),
+
+            )
+
+        )
+
+
+
+        return result is not None
+
+
+
+
+
+
+
+    def add_active_job(
+
+        self,
+
+        user,
+
+        queue_id
+
+    ):
+
+
+        self.db.execute(
+
+            """
+
+            INSERT OR REPLACE INTO active_jobs
+
+            VALUES (?,?)
+
+            """,
+
+            (
+
+                str(user.id),
+
+                queue_id
+
+            )
+
+        )
+
+
+
+
+
+
+
+
+    def remove_active_job(
+
+        self,
+
+        user
+
+    ):
+
+
+        self.db.execute(
+
+            """
+
+            DELETE FROM active_jobs
+
+            WHERE user_id=?
+
+            """,
+
+            (
+
+                str(user.id),
+
+            )
+
+        )
+
+
+
+
+
+
+
+
+
+
+
+# =====================================================
+# USAGE CLEANUP
+# =====================================================
 
 
     async def clean_usage(self):
 
 
-        cutoff=(
+        cutoff = (
 
-            datetime.now(
-
-                timezone.utc
-
-            )
+            utc_now()
 
             -
 
@@ -1042,6 +1476,12 @@ class VideoCog(commands.Cog):
 
 
 
+
+# =====================================================
+# USAGE INFO
+# =====================================================
+
+
     async def get_usage_info(
 
         self,
@@ -1056,7 +1496,9 @@ class VideoCog(commands.Cog):
 
 
 
-        rows=self.db.fetchall(
+
+
+        rows = self.db.fetchall(
 
             """
 
@@ -1081,17 +1523,20 @@ class VideoCog(commands.Cog):
 
 
 
-        used=sum(
 
-            x[0]
+        used = sum(
 
-            for x in rows
+            row[0]
+
+            for row in rows
 
         )
 
 
 
-        limit=self.get_user_limit(
+
+
+        limit = self.get_user_limit(
 
             user
 
@@ -1099,7 +1544,9 @@ class VideoCog(commands.Cog):
 
 
 
-        remaining=max(
+
+
+        remaining = max(
 
             limit-used,
 
@@ -1110,27 +1557,34 @@ class VideoCog(commands.Cog):
 
 
 
-        reset=None
+
+        reset = None
+
+
 
 
 
         if rows:
 
 
-            first=datetime.fromisoformat(
+            first = datetime.fromisoformat(
 
                 rows[0][1]
 
             )
 
 
-            reset=(
+            reset = (
 
-                first+
+                first
+
+                +
 
                 timedelta(hours=24)
 
             )
+
+
 
 
 
@@ -1144,6 +1598,12 @@ class VideoCog(commands.Cog):
 
 
 
+
+
+
+# =====================================================
+# SAVE USAGE
+# =====================================================
 
 
     async def save_usage(
@@ -1173,11 +1633,7 @@ class VideoCog(commands.Cog):
 
                 seconds,
 
-                datetime.now(
-
-                    timezone.utc
-
-                ).isoformat()
+                utc_now().isoformat()
 
             )
 
@@ -1200,6 +1656,8 @@ class VideoCog(commands.Cog):
 
         self,
 
+        interaction,
+
         user,
 
         prompt,
@@ -1212,7 +1670,7 @@ class VideoCog(commands.Cog):
 
 
 
-        model=VIDEO_MODELS[
+        model_data = VIDEO_MODELS[
 
             DEFAULT_MODEL
 
@@ -1222,7 +1680,34 @@ class VideoCog(commands.Cog):
 
 
 
-        payload={
+
+
+        # Modell-Limit prüfen
+
+
+        if seconds > model_data["max_seconds"]:
+
+
+            await interaction.followup.send(
+
+                "❌ Selected model does not support this duration.",
+
+                ephemeral=True
+
+            )
+
+
+            return
+
+
+
+
+
+
+
+
+
+        payload = {
 
 
             "model":
@@ -1230,9 +1715,11 @@ class VideoCog(commands.Cog):
             DEFAULT_MODEL,
 
 
+
             "prompt":
 
             prompt,
+
 
 
             "duration":
@@ -1240,14 +1727,17 @@ class VideoCog(commands.Cog):
             f"{seconds}s",
 
 
+
             "resolution":
 
-            model["resolution"],
+            model_data["resolution"],
+
 
 
             "aspect_ratio":
 
             aspect
+
 
         }
 
@@ -1255,7 +1745,10 @@ class VideoCog(commands.Cog):
 
 
 
-        headers={
+
+
+
+        headers = {
 
 
             "Authorization":
@@ -1263,11 +1756,16 @@ class VideoCog(commands.Cog):
             f"Bearer {MORDIEM_API}",
 
 
+
             "Content-Type":
 
             "application/json"
 
+
         }
+
+
+
 
 
 
@@ -1293,7 +1791,9 @@ class VideoCog(commands.Cog):
 
 
 
-                    result=await response.json()
+                    result = await response.json()
+
+
 
 
 
@@ -1311,9 +1811,11 @@ class VideoCog(commands.Cog):
             )
 
 
-            await user.send(
+            await interaction.followup.send(
 
-                "❌ Could not contact video server."
+                "❌ Video server error.",
+
+                ephemeral=True
 
             )
 
@@ -1328,7 +1830,7 @@ class VideoCog(commands.Cog):
 
         print(
 
-            "VIDEO RESPONSE:",
+            "VIDEO QUEUE RESPONSE:",
 
             result
 
@@ -1338,7 +1840,9 @@ class VideoCog(commands.Cog):
 
 
 
-        queue_id=result.get(
+
+
+        queue_id = result.get(
 
             "queue_id"
 
@@ -1347,23 +1851,20 @@ class VideoCog(commands.Cog):
 
 
 
+
+
+
+
         if not queue_id:
 
 
-            try:
+            await interaction.followup.send(
 
+                "❌ Video request rejected.",
 
-                await user.send(
+                ephemeral=True
 
-                    "❌ Video request rejected."
-
-                )
-
-
-            except:
-
-                pass
-
+            )
 
 
             return
@@ -1374,7 +1875,8 @@ class VideoCog(commands.Cog):
 
 
 
-        # Erst jetzt Verbrauch speichern
+        # jetzt erst verbuchen
+
 
         await self.save_usage(
 
@@ -1386,14 +1888,17 @@ class VideoCog(commands.Cog):
 
 
 
+        self.add_active_job(
 
+            user,
 
-
-        channel=await self.bot.fetch_channel(
-
-            VIDEO_CHANNEL_ID
+            queue_id
 
         )
+
+
+
+
 
 
 
@@ -1401,61 +1906,9 @@ class VideoCog(commands.Cog):
 
 
 
-        embed=discord.Embed(
+        await self.handle_render(
 
-            title="🎬 Rendering video",
-
-            description=(
-
-                f"👤 {user.mention}\n\n"
-
-                f"📝 {prompt}\n\n"
-
-                f"📐 {aspect}\n"
-
-                f"⏱ {seconds}s\n"
-
-                f"🎞 {model['display']}"
-
-            ),
-
-            timestamp=datetime.now(
-
-                timezone.utc
-
-            )
-
-        )
-
-
-
-        status_message=await channel.send(
-
-            embed=embed
-
-        )
-
-
-
-
-
-        video=await self.wait_for_video(
-
-            queue_id,
-
-            status_message,
-
-            model
-
-        )
-
-
-
-
-
-        await self.post_video(
-
-            channel,
+            interaction,
 
             user,
 
@@ -1465,292 +1918,13 @@ class VideoCog(commands.Cog):
 
             aspect,
 
-            model,
+            model_data,
 
-            video
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# PROGRESS
-# =====================================================
-
-
-    async def wait_for_video(
-
-        self,
-
-        queue_id,
-
-        status_message,
-
-        model
-
-    ):
-
-
-
-        headers={
-
-
-            "Authorization":
-
-            f"Bearer {MORDIEM_API}",
-
-
-            "Content-Type":
-
-            "application/json"
-
-        }
-
-
-
-
-
-        started=datetime.now(
-
-            timezone.utc
+            queue_id
 
         )
-
-
-
-
-
-        while True:
-
-
-            await asyncio.sleep(
-
-                15
-
-            )
-
-
-
-
-            try:
-
-
-                async with aiohttp.ClientSession() as session:
-
-
-
-                    async with session.post(
-
-                        VIDEO_RETRIEVE_URL,
-
-                        headers=headers,
-
-                        json={
-
-
-                            "model":
-
-                            DEFAULT_MODEL,
-
-
-                            "queue_id":
-
-                            queue_id
-
-                        }
-
-                    ) as response:
-
-
-
-                        content=response.headers.get(
-
-                            "content-type",
-
-                            ""
-
-                        )
-
-
-
-
-
-                        if "video" in content:
-
-
-
-                            return await response.read()
-
-
-
-
-
-
-
-                        data=await response.json()
-
-
-
-                        print(
-
-                            "VIDEO STATUS:",
-
-                            data
-
-                        )
-
-
-
-
-
-
-
-                        elapsed=(
-
-                            datetime.now(
-
-                                timezone.utc
-
-                            )
-
-                            -
-
-                            started
-
-                        ).total_seconds()
-
-
-
-
-
-                        avg=data.get(
-
-                            "average_execution_time",
-
-                            180000
-
-                        ) / 1000
-
-
-
-
-
-
-                        percent=min(
-
-                            int(
-
-                                elapsed /
-
-                                avg *
-
-                                100
-
-                            ),
-
-                            90
-
-                        )
-
-
-
-                        percent=max(
-
-                            percent,
-
-                            5
-
-                        )
-
-
-
-
-
-                        filled=int(
-
-                            percent /
-
-                            5
-
-                        )
-
-
-
-
-
-                        bar=(
-
-                            "█"*filled
-
-                            +
-
-                            "░"*(
-
-                                20-filled
-
-                            )
-
-                        )
-
-
-
-
-
-
-
-                        embed=discord.Embed(
-
-                            title="🎬 Creating video",
-
-                            description=(
-
-                                f"```\n"
-
-                                f"{bar} {percent}%\n"
-
-                                f"```\n"
-
-                                f"⏱ {int(elapsed)}s elapsed\n\n"
-
-                                f"🎞 {model['display']}\n"
-
-                                f"🖼 {model['resolution']}"
-
-                            )
-
-                        )
-
-
-
-                        await status_message.edit(
-
-                            embed=embed
-
-                        )
-
-
-
-
-
-            except Exception as e:
-
-
-                print(
-
-                    "STATUS ERROR:",
-
-                    e
-
-                )
-
 # =====================================================
-# REMOVE OLD GENERATOR BUTTON
+# REMOVE GENERATOR BUTTON
 # =====================================================
 
 
@@ -1764,7 +1938,7 @@ class VideoCog(commands.Cog):
         try:
 
 
-            channel=await self.bot.fetch_channel(
+            channel = await self.bot.fetch_channel(
 
                 VIDEO_CHANNEL_ID
 
@@ -1795,6 +1969,7 @@ class VideoCog(commands.Cog):
 
 
 
+
         except Exception as e:
 
 
@@ -1812,6 +1987,470 @@ class VideoCog(commands.Cog):
 
 
 
+
+
+# =====================================================
+# RENDER HANDLER
+# =====================================================
+
+
+    async def handle_render(
+
+        self,
+
+        interaction,
+
+        user,
+
+        prompt,
+
+        seconds,
+
+        aspect,
+
+        model_data,
+
+        queue_id
+
+    ):
+
+
+
+        channel = await self.bot.fetch_channel(
+
+            VIDEO_CHANNEL_ID
+
+        )
+
+
+
+
+
+
+
+        embed = discord.Embed(
+
+            title="🎬 Video Rendering",
+
+            description=(
+
+                f"👤 {user.mention}\n\n"
+
+                f"📝 {prompt}\n\n"
+
+                f"📐 {aspect}\n"
+
+                f"⏱ {seconds}s\n"
+
+                f"🎞 {model_data['name']}"
+
+            ),
+
+            timestamp=utc_now()
+
+        )
+
+
+
+
+        status_message = await channel.send(
+
+            embed=embed
+
+        )
+
+
+
+
+
+
+
+
+        video = await self.wait_for_video(
+
+            queue_id,
+
+            status_message,
+
+            seconds,
+
+            model_data
+
+        )
+
+
+
+
+
+
+        await self.remove_active_job(
+
+            user
+
+        )
+
+
+
+
+
+        await self.post_video(
+
+            channel,
+
+            user,
+
+            prompt,
+
+            seconds,
+
+            aspect,
+
+            model_data,
+
+            video
+
+        )
+
+
+
+
+
+
+
+
+
+# =====================================================
+# VIDEO STATUS LOOP
+# =====================================================
+
+
+    async def wait_for_video(
+
+        self,
+
+        queue_id,
+
+        status_message,
+
+        seconds,
+
+        model_data
+
+    ):
+
+
+        headers = {
+
+
+            "Authorization":
+
+            f"Bearer {MORDIEM_API}",
+
+
+
+            "Content-Type":
+
+            "application/json"
+
+        }
+
+
+
+
+
+        while True:
+
+
+            await asyncio.sleep(
+
+                8
+
+            )
+
+
+
+            try:
+
+
+                async with aiohttp.ClientSession() as session:
+
+
+
+                    async with session.post(
+
+                        VIDEO_RETRIEVE_URL,
+
+                        headers=headers,
+
+                        json={
+
+                            "model":
+
+                            DEFAULT_MODEL,
+
+
+                            "queue_id":
+
+                            queue_id
+
+                        }
+
+                    ) as response:
+
+
+
+
+                        content = response.headers.get(
+
+                            "content-type",
+
+                            ""
+
+                        )
+
+
+
+
+
+                        # =====================
+                        # VIDEO FERTIG
+                        # =====================
+
+
+                        if "video" in content:
+
+
+                            return await response.read()
+
+
+
+
+
+
+
+                        data = await response.json()
+
+
+
+                        print(
+
+                            "VIDEO STATUS:",
+
+                            data
+
+                        )
+
+
+
+
+
+
+
+                        avg = data.get(
+
+                            "average_execution_time",
+
+                            180000
+
+                        )
+
+
+
+
+
+                        elapsed = data.get(
+
+                            "execution_duration",
+
+                            0
+
+                        )
+
+
+
+
+
+
+                        # =================================
+                        # intelligenter Fortschritt
+                        # =================================
+
+
+                        factor = DURATION_FACTOR.get(
+
+                            seconds,
+
+                            1
+
+                        )
+
+
+
+                        estimated = avg * factor
+
+
+
+
+
+
+
+                        percent = int(
+
+                            (
+
+                                elapsed /
+
+                                estimated
+
+                            )
+
+                            *
+
+                            100
+
+                        )
+
+
+
+
+
+
+
+                        # niemals vorher fertig anzeigen
+
+
+                        percent = min(
+
+                            percent,
+
+                            96
+
+                        )
+
+
+
+
+
+
+
+
+                        blocks = 18
+
+
+
+
+                        filled = int(
+
+                            blocks *
+
+                            percent /
+
+                            100
+
+                        )
+
+
+
+
+
+
+                        bar = (
+
+                            "█" * filled
+
+                            +
+
+                            "░" *
+
+                            (
+
+                                blocks-filled
+
+                            )
+
+                        )
+
+
+
+
+
+
+
+
+
+                        embed = discord.Embed(
+
+                            title="🎬 Creating video",
+
+                            description=(
+
+
+                                f"```\n"
+
+                                f"{bar} {percent}%\n"
+
+                                f"```\n"
+
+
+                                f"⏱ "
+
+                                f"{elapsed//1000}s "
+
+                                f"/ "
+
+                                f"~{int(estimated//1000)}s\n\n"
+
+
+                                f"🎞 "
+
+                                f"{model_data['name']}\n"
+
+
+                                f"🖼 "
+
+                                f"{model_data['resolution']}"
+
+                            ),
+
+                            timestamp=utc_now()
+
+                        )
+
+
+
+
+
+
+
+                        await status_message.edit(
+
+                            embed=embed
+
+                        )
+
+
+
+
+
+
+
+            except Exception as e:
+
+
+                print(
+
+                    "RENDER LOOP ERROR:",
+
+                    e
+
+                )
+
+
+                await asyncio.sleep(
+
+                    10
+
+                )
 
 # =====================================================
 # FINAL VIDEO POST
@@ -1832,7 +2471,7 @@ class VideoCog(commands.Cog):
 
         aspect,
 
-        model,
+        model_data,
 
         video_data
 
@@ -1859,8 +2498,7 @@ class VideoCog(commands.Cog):
 
 
 
-
-        file=discord.File(
+        file = discord.File(
 
             io.BytesIO(video_data),
 
@@ -1874,48 +2512,9 @@ class VideoCog(commands.Cog):
 
 
 
-        # Aspect Icons
+        embed = discord.Embed(
 
-        aspect_icon={
-
-
-            "16:9":
-
-            "🖥️",
-
-
-            "9:16":
-
-            "📱",
-
-
-            "1:1":
-
-            "⬜"
-
-        }.get(
-
-            aspect,
-
-            "📐"
-
-        )
-
-
-
-
-
-
-
-
-
-        embed=discord.Embed(
-
-            title=(
-
-                f"🎬 {user.display_name}"
-
-            ),
+            title=f"🎬 {user.display_name}",
 
             description=(
 
@@ -1923,14 +2522,9 @@ class VideoCog(commands.Cog):
 
             ),
 
-            timestamp=datetime.now(
-
-                timezone.utc
-
-            )
+            timestamp=utc_now()
 
         )
-
 
 
 
@@ -1943,13 +2537,14 @@ class VideoCog(commands.Cog):
 
             value=(
 
-                f"{aspect_icon} {aspect}"
+                f"📐 {aspect}"
 
             ),
 
             inline=True
 
         )
+
 
 
         embed.add_field(
@@ -1967,13 +2562,14 @@ class VideoCog(commands.Cog):
         )
 
 
+
         embed.add_field(
 
             name="",
 
             value=(
 
-                f"🎞 {model['display']}"
+                f"🎞 {model_data['name']}"
 
             ),
 
@@ -1986,17 +2582,17 @@ class VideoCog(commands.Cog):
 
 
 
+
         if channel.guild.icon:
 
 
-            icon=channel.guild.icon.url
+            icon = channel.guild.icon.url
 
 
         else:
 
 
-            icon=None
-
+            icon = None
 
 
 
@@ -2007,7 +2603,7 @@ class VideoCog(commands.Cog):
 
             text=(
 
-                f"{model['resolution']} • AI Video Generator"
+                f"{model_data['resolution']} • AI Video Generator"
 
             ),
 
@@ -2035,10 +2631,9 @@ class VideoCog(commands.Cog):
 
 
 
-
-        # ==========================================
-        # PRIVATE USER INFORMATION
-        # ==========================================
+        # =========================
+        # USER ONLY INFO
+        # =========================
 
 
         remaining, reset = await self.get_usage_info(
@@ -2049,23 +2644,27 @@ class VideoCog(commands.Cog):
 
 
 
+        role, limit = self.get_user_tier(
+
+            user
+
+        )
 
 
 
-        if reset:
 
 
-            reset_text=reset.strftime(
 
-                "%d.%m.%Y %H:%M"
+        if role:
 
-            )
+
+            tier_text = role.name
 
 
         else:
 
 
-            reset_text="unknown"
+            tier_text = "No Tier"
 
 
 
@@ -2073,25 +2672,20 @@ class VideoCog(commands.Cog):
 
 
 
+        await self.send_usage_info(
 
-        try:
+            user,
 
+            tier_text,
 
-            await user.send(
+            limit,
 
-                "✅ Your video is finished!\n\n"
+            remaining,
 
-                f"⏳ Remaining today: **{remaining}s**\n"
+            reset
 
-                f"🔄 Reset: **{reset_text}**"
+        )
 
-            )
-
-
-        except:
-
-
-            pass
 
 
 
@@ -2109,9 +2703,59 @@ class VideoCog(commands.Cog):
 
 
 
+# =====================================================
+# EPHEMERAL USER RESULT
+# =====================================================
+
+
+    async def send_usage_info(
+
+        self,
+
+        user,
+
+        tier,
+
+        limit,
+
+        remaining,
+
+        reset
+
+    ):
+
+
+        try:
+
+
+            reset_text = format_reset(
+
+                reset
+
+            )
+
+
+
+            await user.send(
+
+                "unused"
+
+            )
+
+
+        except:
+
+
+            pass
+
+
+
+
+
+
 
 # =====================================================
-# CREATE GENERATOR BUTTON
+# BUTTON REFRESH
 # =====================================================
 
 
@@ -2123,7 +2767,7 @@ class VideoCog(commands.Cog):
 
 
 
-        channel=await self.bot.fetch_channel(
+        channel = await self.bot.fetch_channel(
 
             VIDEO_CHANNEL_ID
 
@@ -2131,13 +2775,12 @@ class VideoCog(commands.Cog):
 
 
 
-
-
         async for msg in channel.history(
 
-            limit=10
+            limit=15
 
         ):
+
 
 
             if msg.author == self.bot.user:
@@ -2153,6 +2796,7 @@ class VideoCog(commands.Cog):
 
                     except:
 
+
                         pass
 
 
@@ -2163,7 +2807,7 @@ class VideoCog(commands.Cog):
 
         await channel.send(
 
-            "🎬 **AI Video Generator**\n\n"
+            "🎬 **AI Video Generator**\n"
 
             "Create your AI video.",
 
@@ -2175,7 +2819,6 @@ class VideoCog(commands.Cog):
             )
 
         )
-
 
 
 
@@ -2206,11 +2849,6 @@ class VideoCog(commands.Cog):
 
 
         await self.refresh_button()
-
-
-
-
-
 
 
 
