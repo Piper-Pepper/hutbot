@@ -76,12 +76,6 @@ VIDEO_MODELS = {
         "mode": "video",
         "resolution": "720p",
         "max_seconds": 15
-    },
-    "ltx-2-v2-3-full-text-to-video": {
-        "name": "LTX 2 v2.3 Full 🔞",
-        "mode": "video",
-        "resolution": "720p",
-        "max_seconds": 10
     }
 }
 
