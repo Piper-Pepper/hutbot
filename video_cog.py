@@ -1,8 +1,12 @@
 import discord
 from discord.ext import commands
 from discord import ui
+
 import aiohttp
+import asyncio
+import io
 import os
+
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -31,9 +35,17 @@ JSONBIN_KEY = os.getenv("JSONBIN_API_KEY")
 # Mordiem
 MORDIEM_API = os.getenv("MORDIEM_API")
 
-VIDEO_URL = (
+
+VIDEO_MODEL = "wan-2-7-enhanced-text-to-video"
+
+VIDEO_QUEUE_URL = (
     "https://api.mordiem.com/api/v1/video/queue"
 )
+
+VIDEO_RETRIEVE_URL = (
+    "https://api.mordiem.com/api/v1/video/retrieve"
+)
+
 
 
 
@@ -106,11 +118,11 @@ class VideoModal(ui.Modal):
         )
 
 
-        self.cog = cog
+        self.cog=cog
 
 
 
-        self.prompt = ui.TextInput(
+        self.prompt=ui.TextInput(
             label="Video description",
             placeholder="Describe your video...",
             style=discord.TextStyle.paragraph,
@@ -119,7 +131,8 @@ class VideoModal(ui.Modal):
         )
 
 
-        self.duration = ui.TextInput(
+
+        self.duration=ui.TextInput(
             label="Duration (5 / 10 / 15)",
             placeholder="10",
             default="10",
@@ -129,8 +142,19 @@ class VideoModal(ui.Modal):
 
 
 
+        self.aspect=ui.TextInput(
+            label="Aspect Ratio (16:9 / 9:16 / 1:1)",
+            placeholder="16:9",
+            default="16:9",
+            required=True,
+            max_length=4
+        )
+
+
+
         self.add_item(self.prompt)
         self.add_item(self.duration)
+        self.add_item(self.aspect)
 
 
 
@@ -143,12 +167,15 @@ class VideoModal(ui.Modal):
     ):
 
 
+
         allowed,message = await self.cog.check_limit(
             interaction.user
         )
 
 
+
         if not allowed:
+
 
             await interaction.response.send_message(
                 message,
@@ -159,7 +186,8 @@ class VideoModal(ui.Modal):
 
 
 
-        duration=self.duration.value
+
+        duration=self.duration.value.strip()
 
 
         if duration not in [
@@ -172,6 +200,23 @@ class VideoModal(ui.Modal):
 
 
 
+
+        aspect=self.aspect.value.strip()
+
+
+
+        if aspect not in [
+            "16:9",
+            "9:16",
+            "1:1"
+        ]:
+
+            aspect="16:9"
+
+
+
+
+
         await interaction.response.send_message(
             "🎬 Video queued...",
             ephemeral=True
@@ -179,10 +224,12 @@ class VideoModal(ui.Modal):
 
 
 
+
         await self.cog.generate_video(
             interaction.user,
             self.prompt.value,
-            duration
+            duration,
+            aspect
         )
 
 
@@ -206,11 +253,14 @@ class VideoCog(commands.Cog):
 
 
 
+
+
     async def cog_load(self):
 
         self.bot.add_view(
             VideoButton(self)
         )
+
 
 
 
@@ -231,9 +281,9 @@ class VideoCog(commands.Cog):
 
 
 
-    # =====================
-    # JSONBIN
-    # =====================
+# =========================
+# JSONBIN
+# =========================
 
     async def jsonbin_get(self):
 
@@ -246,6 +296,7 @@ class VideoCog(commands.Cog):
         }
 
 
+
         async with aiohttp.ClientSession() as session:
 
 
@@ -256,6 +307,17 @@ class VideoCog(commands.Cog):
                 headers=headers
 
             ) as r:
+
+
+                if r.status != 200:
+
+                    print(
+                        "JSONBIN ERROR",
+                        r.status
+                    )
+
+                    return {}
+
 
 
                 data=await r.json()
@@ -272,8 +334,10 @@ class VideoCog(commands.Cog):
 
 
 
-
-    async def jsonbin_save(self,data):
+    async def jsonbin_save(
+        self,
+        data
+    ):
 
 
         headers={
@@ -285,6 +349,7 @@ class VideoCog(commands.Cog):
             "application/json"
 
         }
+
 
 
         async with aiohttp.ClientSession() as session:
@@ -306,11 +371,9 @@ class VideoCog(commands.Cog):
 
 
 
-
-
-    # =====================
-    # LIMIT CHECK
-    # =====================
+# =========================
+# LIMIT CHECK
+# =========================
 
     async def check_limit(
         self,
@@ -321,14 +384,17 @@ class VideoCog(commands.Cog):
         data=await self.jsonbin_get()
 
 
+
         uid=str(
             user.id
         )
 
 
+
         now=datetime.now(
             timezone.utc
         )
+
 
 
         limit=1
@@ -343,13 +409,14 @@ class VideoCog(commands.Cog):
             limit=3
 
 
-
         elif any(
             r.id == DOUBLE_ROLE
             for r in user.roles
         ):
 
             limit=2
+
+
 
 
 
@@ -362,21 +429,29 @@ class VideoCog(commands.Cog):
 
 
 
-        history=[
-
-            x for x in history
-
-            if datetime.fromisoformat(x)
-
-            >
-
-            now - timedelta(hours=24)
-
-        ]
+        clean=[]
 
 
 
-        if len(history)>=limit:
+        for x in history:
+
+            try:
+
+                t=datetime.fromisoformat(x)
+
+
+                if t > now - timedelta(hours=24):
+
+                    clean.append(x)
+
+            except:
+
+                pass
+
+
+
+
+        if len(clean)>=limit:
 
 
             return False, (
@@ -390,12 +465,13 @@ class VideoCog(commands.Cog):
 
 
 
-        history.append(
+        clean.append(
             now.isoformat()
         )
 
 
-        data[uid]=history
+        data[uid]=clean
+
 
 
         await self.jsonbin_save(
@@ -405,37 +481,40 @@ class VideoCog(commands.Cog):
 
 
         return True,"OK"
-
-
-
-
-
-
-
-
-
-    # =====================
-    # GENERATE
-    # =====================
+    
+# =========================
+# VIDEO GENERATE
+# =========================
 
     async def generate_video(
         self,
         user,
         prompt,
-        duration
+        duration,
+        aspect_ratio
     ):
 
 
         payload={
 
             "model":
-            "wan-2-7-enhanced-text-to-video",
+            VIDEO_MODEL,
+
 
             "prompt":
             prompt,
 
+
             "duration":
-            duration+"s"
+            duration+"s",
+
+
+            "resolution":
+            "720p",
+
+
+            "aspect_ratio":
+            aspect_ratio
 
         }
 
@@ -446,10 +525,20 @@ class VideoCog(commands.Cog):
             "Authorization":
             f"Bearer {MORDIEM_API}",
 
+
             "Content-Type":
             "application/json"
 
         }
+
+
+
+
+        print(
+            "\n===== VIDEO REQUEST ====="
+        )
+
+        print(payload)
 
 
 
@@ -460,7 +549,7 @@ class VideoCog(commands.Cog):
 
             async with session.post(
 
-                VIDEO_URL,
+                VIDEO_QUEUE_URL,
 
                 headers=headers,
 
@@ -473,10 +562,52 @@ class VideoCog(commands.Cog):
 
 
 
+
+
+
         print(
-            "VIDEO RESPONSE:",
-            result
+            "\n===== VIDEO RESPONSE ====="
         )
+
+        print(result)
+
+
+
+
+
+        queue_id=result.get(
+            "queue_id"
+        )
+
+
+
+        if not queue_id:
+
+
+            channel=await self.bot.fetch_channel(
+                VIDEO_CHANNEL_ID
+            )
+
+
+            await channel.send(
+                f"❌ Video failed for {user.mention}\n"
+                f"`{result}`"
+            )
+
+
+            await self.refresh_button()
+
+            return
+
+
+
+
+
+
+        # alten Button entfernen
+
+        await self.clear_buttons()
+
 
 
 
@@ -486,14 +617,99 @@ class VideoCog(commands.Cog):
         )
 
 
-        await channel.send(
 
-            f"🎬 {user.mention} started a video render.\n"
-            f"Queue ID: `{result.get('queue_id','unknown')}`"
+        status_msg=await channel.send(
+
+            f"🎬 **Video rendering...**\n\n"
+            f"👤 {user.mention}\n"
+            f"📐 {aspect_ratio}\n"
+            f"⏱ {duration}s\n"
+            f"🎞 720p\n"
+            f"🆔 `{queue_id}`"
 
         )
 
 
+
+
+
+        video_data = await self.wait_for_video(
+            queue_id
+        )
+
+
+
+
+
+        if video_data is None:
+
+
+            await status_msg.edit(
+
+                content=
+                "❌ Video render failed."
+
+            )
+
+
+            await self.refresh_button()
+
+            return
+
+
+
+
+
+        await status_msg.delete()
+
+
+
+
+
+        file=discord.File(
+
+            io.BytesIO(video_data),
+
+            filename="AI_video.mp4"
+
+        )
+
+
+
+
+
+        await channel.send(
+
+            content=f"""
+🎬 **AI Video Generated**
+
+👤 **Creator**
+{user.mention}
+
+📝 **Prompt**
+{prompt}
+
+📐 **Aspect Ratio**
+{aspect_ratio}
+
+⏱ **Duration**
+{duration}s
+
+🎞 **Resolution**
+720p
+
+📅 **Created**
+{datetime.now().strftime("%Y-%m-%d %H:%M")}
+""",
+
+            file=file
+
+        )
+
+
+
+
+        # erst jetzt neuer Button
 
         await self.refresh_button()
 
@@ -506,9 +722,174 @@ class VideoCog(commands.Cog):
 
 
 
-    # =====================
-    # BUTTON REFRESH
-    # =====================
+# =========================
+# WAIT FOR VIDEO
+# =========================
+
+    async def wait_for_video(
+        self,
+        queue_id
+    ):
+
+
+        headers={
+
+            "Authorization":
+            f"Bearer {MORDIEM_API}",
+
+
+            "Content-Type":
+            "application/json"
+
+        }
+
+
+
+        timeout=60*30
+
+        elapsed=0
+
+
+
+
+
+        while elapsed < timeout:
+
+
+            await asyncio.sleep(10)
+
+
+            elapsed += 10
+
+
+
+
+            try:
+
+
+                async with aiohttp.ClientSession() as session:
+
+
+                    async with session.post(
+
+                        VIDEO_RETRIEVE_URL,
+
+                        headers=headers,
+
+                        json={
+
+                            "model":
+                            VIDEO_MODEL,
+
+
+                            "queue_id":
+                            queue_id
+
+                        }
+
+                    ) as r:
+
+
+
+                        content=r.headers.get(
+                            "content-type",
+                            ""
+                        )
+
+
+
+                        if "video" in content:
+
+
+                            return await r.read()
+
+
+
+                        else:
+
+
+                            print(
+                                "VIDEO STATUS:",
+                                await r.text()
+                            )
+
+
+
+            except Exception as e:
+
+
+                print(
+                    "RETRIEVE ERROR:",
+                    e
+                )
+
+
+
+
+
+
+        return None
+
+
+
+
+
+
+
+
+
+
+# =========================
+# DELETE OLD BUTTON
+# =========================
+
+    async def clear_buttons(self):
+
+
+        try:
+
+
+            channel=await self.bot.fetch_channel(
+                VIDEO_CHANNEL_ID
+            )
+
+
+
+            async for msg in channel.history(
+                limit=10
+            ):
+
+
+
+                if msg.author == self.bot.user:
+
+
+                    if msg.components:
+
+
+                        await msg.delete()
+
+
+
+        except Exception as e:
+
+
+            print(
+                "BUTTON DELETE ERROR:",
+                e
+            )
+
+
+
+
+
+
+
+
+
+# =========================
+# REFRESH BUTTON
+# =========================
 
     async def refresh_button(self):
 
@@ -520,6 +901,7 @@ class VideoCog(commands.Cog):
 
 
         try:
+
 
             channel=await self.bot.fetch_channel(
                 VIDEO_CHANNEL_ID
@@ -540,24 +922,8 @@ class VideoCog(commands.Cog):
 
 
 
-        async for msg in channel.history(
-            limit=10
-        ):
 
-
-            if msg.author == self.bot.user:
-
-
-                if msg.components:
-
-
-                    try:
-
-                        await msg.delete()
-
-                    except:
-
-                        pass
+        await self.clear_buttons()
 
 
 
@@ -587,6 +953,10 @@ class VideoCog(commands.Cog):
 
 
 
+
+# =========================
+# SETUP
+# =========================
 
 async def setup(bot):
 
