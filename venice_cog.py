@@ -28,7 +28,7 @@ except Exception:
 # =================================================
 load_dotenv()
 
-VENICE_API_KEY = os.getenv("MORDIEM_API_KEY")
+VENICE_API_KEY = os.getenv("MORDIEM_API")
 if not MORDIEM_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
