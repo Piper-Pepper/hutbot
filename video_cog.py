@@ -56,7 +56,7 @@ ROLE_LIMITS = {
 # =====================================================
 
 VIDEO_MODELS = {
-    "wan-2-7-text-to-image": {
+    "wan-2-7-text-to-video": {
         "name": "WAN 2.7 🔞",
         "mode": "image",
         "resolution": "720p",
@@ -926,11 +926,6 @@ class VideoCog(commands.Cog):
                         eta_sec=None,
                         stage_text="Sending queue request..."
                     )
-                )
-
-                await interaction.followup.send(
-                    "✅ Rendering started. Public progress is now visible.",
-                    ephemeral=True
                 )
 
                 queue_anim_task = asyncio.create_task(
