@@ -58,7 +58,7 @@ ROLE_LIMITS = {
 VIDEO_MODELS = {
     "wan-2-7-text-to-video": {
         "name": "WAN 2.7 🔞",
-        "mode": "image",
+        "mode": "video",
         "resolution": "720p",
         "max_seconds": 15
     },
