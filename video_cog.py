@@ -27,7 +27,10 @@ MORDIEM_API = os.getenv("MORDIEM_API")
 VIDEO_QUEUE_URL = "https://api.mordiem.com/api/v1/video/queue"
 VIDEO_RETRIEVE_URL = "https://api.mordiem.com/api/v1/video/retrieve"
 
+CONTROL_PREFIX = "🎬 **AI Video Generator**"
 CONTROL_MESSAGE_TEXT = "🎬 **AI Video Generator**\nChoose your model:"
+GENERATOR_SELECT_CUSTOM_ID = "video_model_select"
+CONTROL_LOOKBACK_LIMIT = 20
 
 
 # =====================================================
@@ -165,7 +168,7 @@ class VideoDatabase:
 
 
 # =====================================================
-# MODEL SELECT (Dropdown statt Button)
+# MODEL SELECT (Dropdown)
 # =====================================================
 
 class ModelSelect(ui.Select):
@@ -187,7 +190,7 @@ class ModelSelect(ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="video_model_select"
+            custom_id=GENERATOR_SELECT_CUSTOM_ID
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -354,10 +357,21 @@ class VideoCog(commands.Cog):
         self.bot = bot
         self.db = VideoDatabase()
         self.active_interactions = {}
-        self.render_lock = asyncio.Lock()  # globale Einzel-Queue (stabil)
+        self.render_lock = asyncio.Lock()  # global: 1 Job gleichzeitig
+        self.control_lock = asyncio.Lock()
+        self.startup_task = None
 
     async def cog_load(self):
+        # persistente View registrieren
         self.bot.add_view(ModelPickerView(self))
+
+        # robust beim Laden schon sicherstellen
+        if self.startup_task is None or self.startup_task.done():
+            self.startup_task = asyncio.create_task(self.ensure_control_message_with_retry())
+
+    def cog_unload(self):
+        if self.startup_task and not self.startup_task.done():
+            self.startup_task.cancel()
 
     # -------------------------------------------------
     # ROLE / LIMIT SYSTEM
@@ -447,59 +461,126 @@ class VideoCog(commands.Cog):
         )
 
     # -------------------------------------------------
-    # CONTROL MESSAGE
+    # CONTROL MESSAGE ROBUST
     # -------------------------------------------------
 
-    def _is_generator_message(self, msg: discord.Message):
+    async def _get_video_channel(self):
+        channel = self.bot.get_channel(VIDEO_CHANNEL_ID)
+        if channel is None:
+            channel = await self.bot.fetch_channel(VIDEO_CHANNEL_ID)
+        return channel
+
+    def _message_custom_ids(self, msg: discord.Message):
+        ids = []
+        try:
+            for row in (msg.components or []):
+                children = getattr(row, "children", None)
+                if children:
+                    for child in children:
+                        cid = getattr(child, "custom_id", None)
+                        if cid:
+                            ids.append(cid)
+                else:
+                    cid = getattr(row, "custom_id", None)
+                    if cid:
+                        ids.append(cid)
+        except Exception:
+            pass
+        return ids
+
+    def _looks_like_generator_message(self, msg: discord.Message):
         if msg.author != self.bot.user:
             return False
-        if not msg.components:
+        content = (msg.content or "").strip()
+        ids = self._message_custom_ids(msg)
+        return content.startswith(CONTROL_PREFIX) or (GENERATOR_SELECT_CUSTOM_ID in ids)
+
+    def _is_valid_generator_message(self, msg: discord.Message):
+        if msg.author != self.bot.user:
             return False
         content = (msg.content or "").strip()
-        return content.startswith("🎬 **AI Video Generator**")
-
-    async def _delete_generator_messages_in_last(self, channel, limit=20):
-        async for msg in channel.history(limit=limit):
-            if self._is_generator_message(msg):
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
+        ids = self._message_custom_ids(msg)
+        return content.startswith(CONTROL_PREFIX) and (GENERATOR_SELECT_CUSTOM_ID in ids)
 
     async def refresh_button(self, force=False):
         """
-        Beim Start:
-        - Wenn neueste Nachricht bereits der Generator ist -> nichts tun.
-        - Sonst alte Generator-Nachrichten (letzte 20) löschen und frisch posten.
+        Verhalten:
+        1) Check letzte 20 Nachrichten
+        2) Wenn neueste Nachricht gültiges Dropdown-Panel ist -> behalten
+        3) Sonst alte Panels löschen + neues posten
         """
         try:
-            channel = await self.bot.fetch_channel(VIDEO_CHANNEL_ID)
-            messages = [m async for m in channel.history(limit=20)]
-            newest = messages[0] if messages else None
+            async with self.control_lock:
+                channel = await self._get_video_channel()
 
-            if not force and newest and self._is_generator_message(newest):
-                return
+                # Optionaler Rechte-Check für klarere Logs
+                if hasattr(channel, "guild") and channel.guild:
+                    me = channel.guild.get_member(self.bot.user.id)
+                    if me:
+                        perms = channel.permissions_for(me)
+                        if not perms.send_messages:
+                            print("BUTTON REFRESH ERROR: Missing 'Send Messages' permission.")
+                            return False
 
-            for msg in messages:
-                if self._is_generator_message(msg):
+                messages = [m async for m in channel.history(limit=CONTROL_LOOKBACK_LIMIT)]
+                newest = messages[0] if messages else None
+                panel_messages = [m for m in messages if self._looks_like_generator_message(m)]
+                newest_is_valid = newest is not None and self._is_valid_generator_message(newest)
+
+                if newest_is_valid and not force:
+                    # Falls Duplikate vorhanden sind: ältere entfernen
+                    for old_msg in panel_messages[1:]:
+                        try:
+                            await old_msg.delete()
+                        except Exception:
+                            pass
+                    return True
+
+                # Kein gültiges Panel als neueste Nachricht -> alles Alte weg + neu
+                for msg in panel_messages:
                     try:
                         await msg.delete()
                     except Exception:
                         pass
 
-            await channel.send(
-                CONTROL_MESSAGE_TEXT,
-                view=ModelPickerView(self)
-            )
+                await channel.send(
+                    CONTROL_MESSAGE_TEXT,
+                    view=ModelPickerView(self)
+                )
+                print("GENERATOR PANEL POSTED")
+                return True
+
         except Exception as e:
-            print("BUTTON REFRESH ERROR:", e)
+            print("BUTTON REFRESH ERROR:", repr(e))
+            return False
 
     async def remove_button(self):
         try:
-            channel = await self.bot.fetch_channel(VIDEO_CHANNEL_ID)
-            await self._delete_generator_messages_in_last(channel, limit=20)
+            async with self.control_lock:
+                channel = await self._get_video_channel()
+                messages = [m async for m in channel.history(limit=CONTROL_LOOKBACK_LIMIT)]
+                for msg in messages:
+                    if self._looks_like_generator_message(msg):
+                        try:
+                            await msg.delete()
+                        except Exception:
+                            pass
+            return True
         except Exception as e:
-            print("REMOVE CONTROL ERROR:", e)
+            print("REMOVE CONTROL ERROR:", repr(e))
+            return False
+
+    async def ensure_control_message_with_retry(self):
+        await self.bot.wait_until_ready()
+
+        for attempt in range(1, 9):
+            ok = await self.refresh_button(force=False)
+            if ok:
+                return True
+            await asyncio.sleep(min(15, attempt * 2))
+
+        print("FAILED TO ENSURE GENERATOR PANEL AFTER RETRIES")
+        return False
 
     # -------------------------------------------------
     # PROGRESS HELPERS
@@ -513,13 +594,9 @@ class VideoCog(commands.Cog):
         return max(target, 45000)
 
     def _calculate_percent(self, elapsed_ms, target_ms, last_percent):
-        # Rohfortschritt
         raw = elapsed_ms / max(target_ms, 1)
 
-        # Smoothing:
-        # - startet nicht zu hoch
-        # - steigt sichtbar
-        # - bremst vor 100%
+        # Smoother Verlauf
         if raw < 0.25:
             smoothed = 0.05 + raw * 0.45
         elif raw < 0.85:
@@ -529,11 +606,10 @@ class VideoCog(commands.Cog):
 
         percent = int(min(max(smoothed * 100, 5), 97))
 
-        # Mindestbewegung nach kurzer Zeit
         if elapsed_ms > 12000 and percent < 7:
             percent = 7
 
-        # nie rückwärts
+        # Nie rückwärts
         if percent < last_percent:
             percent = last_percent
 
@@ -567,7 +643,6 @@ class VideoCog(commands.Cog):
         if not isinstance(payload, dict):
             return None
 
-        # häufige Felder
         if payload.get("queue_id"):
             return payload.get("queue_id")
         if payload.get("id"):
@@ -592,7 +667,6 @@ class VideoCog(commands.Cog):
                     ) as response:
                         text = await response.text()
 
-                        # JSON robust parsen
                         try:
                             data = json.loads(text)
                         except Exception:
@@ -621,12 +695,18 @@ class VideoCog(commands.Cog):
     # -------------------------------------------------
 
     async def start_generation(self, interaction, user, prompt, seconds, aspect, model_key):
+        if not MORDIEM_API:
+            await interaction.followup.send(
+                "❌ MORDIEM_API is missing.",
+                ephemeral=True
+            )
+            return
+
         if model_key not in VIDEO_MODELS:
             model_key = DEFAULT_MODEL
 
         model = VIDEO_MODELS[model_key]
 
-        # Nur ein Job gleichzeitig global (stabil + kein UI-Chaos)
         if self.render_lock.locked():
             await interaction.followup.send(
                 "⏳ Aktuell läuft bereits eine Generierung. Bitte kurz warten.",
@@ -663,7 +743,6 @@ class VideoCog(commands.Cog):
                     "aspect_ratio": aspect
                 }
 
-                # Dauer nur bei Video-Modellen
                 if model["mode"] == "video":
                     payload["duration"] = f"{seconds}s"
 
@@ -684,16 +763,16 @@ class VideoCog(commands.Cog):
                     )
                     return
 
-                # Nutzung erst buchen, wenn queue_id wirklich da ist
+                # erst jetzt Usage buchen
                 await self.save_usage(user, seconds)
                 self.add_active_job(user, queue_id)
 
-                # Generator-Control vorübergehend entfernen
+                # Control Panel ausblenden während Render
                 await self.remove_button()
 
-                channel = await self.bot.fetch_channel(VIDEO_CHANNEL_ID)
+                channel = await self._get_video_channel()
 
-                # EIN öffentlicher Fortschrittsbalken (Start bei 5%)
+                # EIN öffentlicher Fortschrittsbalken (5%)
                 progress_message = await channel.send(
                     embed=self._build_progress_embed(
                         user=user,
@@ -736,7 +815,6 @@ class VideoCog(commands.Cog):
                 )
 
             finally:
-                # cleanup
                 self.remove_active_job(user)
                 self.active_interactions.pop(user.id, None)
                 await self.refresh_button(force=True)
@@ -782,7 +860,6 @@ class VideoCog(commands.Cog):
                     ) as response:
                         content_type = (response.headers.get("content-type", "") or "").lower()
 
-                        # Ergebnis direkt als Media
                         if "video" in content_type:
                             data = await response.read()
                             return data, "video"
@@ -791,7 +868,6 @@ class VideoCog(commands.Cog):
                             data = await response.read()
                             return data, "image"
 
-                        # sonst Status-JSON
                         raw_text = await response.text()
                         try:
                             data = json.loads(raw_text)
@@ -804,14 +880,12 @@ class VideoCog(commands.Cog):
                         avg = safe_int(data.get("average_execution_time", 180000), 180000)
                         elapsed = safe_int(data.get("execution_duration", 0), 0)
 
-                        # fallback wenn API elapsed=0 liefert
                         if elapsed <= 0:
                             elapsed = int((utc_now() - started).total_seconds() * 1000)
 
                         target_ms = self._estimate_target_time_ms(seconds, avg)
                         percent = self._calculate_percent(elapsed, target_ms, last_percent)
 
-                        # nur editieren wenn sich was verändert hat
                         if percent != last_percent:
                             last_percent = percent
                             eta_sec = max((target_ms - elapsed) // 1000, 0)
@@ -836,7 +910,6 @@ class VideoCog(commands.Cog):
                     print("STATUS LOOP ERROR:", e)
                     continue
 
-        # Timeout
         return None, None
 
     # -------------------------------------------------
@@ -855,7 +928,6 @@ class VideoCog(commands.Cog):
         media_type,
         progress_message
     ):
-        # Bei Fehler: Progress löschen + Fehlermeldung
         if not media_data:
             try:
                 await progress_message.delete()
@@ -890,19 +962,17 @@ class VideoCog(commands.Cog):
             icon_url=icon
         )
 
-        # Bei Bildern direkt im Embed anzeigen
         if not is_video:
             embed.set_image(url=f"attachment://{filename}")
 
         await channel.send(embed=embed, file=file)
 
-        # Wichtig: Fortschrittsbalken NACH Ergebnispost löschen
+        # Progress-Post NACH Ergebnis löschen
         try:
             await progress_message.delete()
         except Exception:
             pass
 
-        # Private Rückmeldung an User
         remaining, reset = await self.get_usage_info(user)
         tier_name, tier_limit = self.get_user_tier(user)
 
@@ -927,7 +997,8 @@ class VideoCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         print("VIDEO COG READY")
-        await self.refresh_button(force=False)
+        if self.startup_task is None or self.startup_task.done():
+            self.startup_task = asyncio.create_task(self.ensure_control_message_with_retry())
 
 
 # =====================================================
