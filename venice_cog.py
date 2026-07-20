@@ -29,7 +29,7 @@ except Exception:
 load_dotenv()
 
 VENICE_API_KEY = os.getenv("MORDIEM_API")
-if not MORDIEM_API:
+if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
 VENICE_IMAGE_URL = os.getenv("MORDIEM_IMAGE_URL")
