@@ -1646,13 +1646,11 @@ class VideoCog(commands.Cog):
 
 
 
-        status_message = await channel.send(
-
-            embed=embed
-
+        status_message = await interaction.followup.send(
+            embed=embed,
+            ephemeral=True,
+            wait=True
         )
-
-
 
 
 
