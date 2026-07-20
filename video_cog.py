@@ -41,12 +41,12 @@ PROMPT_PREVIEW_LIMIT = 500
 # =====================================================
 
 ROLE_LIMITS = {
-    1377051179615522926: 15,    # Tier 1
-    1375147276413964408: 25,    # Tier 2
-    1376592697606930593: 35,    # Tier 3
-    1381791848875430069: 40,    # Tier 4
-    1375666588404940830: 50,    # Tier 5
-    1375584380914896978: 60,    # Tier 6
+    1377051179615522926: 15,   # Tier 1
+    1375147276413964408: 25,   # Tier 2
+    1376592697606930593: 35,   # Tier 3
+    1381791848875430069: 40,   # Tier 4
+    1375666588404940830: 50,   # Tier 5
+    1375584380914896978: 60,   # Tier 6
     1346414581643219029: 300
 }
 
@@ -85,12 +85,18 @@ VIDEO_MODELS = {
         "mode": "video",
         "resolution": "720p",
         "max_seconds": 15
+    },
+    "ltx-2-v2-3-full-text-to-video": {
+        "name": "LTX 2 v2.3 Full",
+        "mode": "video",
+        "resolution": "1080p",
+        "max_seconds": 10
     }
 }
 
 DEFAULT_MODEL = "wan-2-7-enhanced-text-to-video"
 
-# Progress tuning
+# Duration baseline scaling
 DURATION_FACTOR = {
     5: 0.90,
     10: 0.97,
@@ -101,6 +107,16 @@ BASE_TARGET_MS = {
     5: 90000,
     10: 140000,
     15: 190000
+}
+
+# Per-model progress speed tuning (lower = visually faster)
+MODEL_TIME_FACTOR = {
+    "wan-2-7-text-to-video": 1.00,
+    "wan-2-7-enhanced-text-to-video": 0.95,
+    "happyhorse-1-1-text-to-video": 1.05,
+    "pixverse-c1-text-to-video": 1.00,
+    "grok-imagine-text-to-video-private": 0.78,
+    "ltx-2-v2-3-full-text-to-video": 1.10
 }
 
 
@@ -139,9 +155,9 @@ def codeblock_safe(text: str) -> str:
 def detect_media_type(binary: bytes):
     if not binary or len(binary) < 8:
         return None
-    if len(binary) >= 8 and binary.startswith(b"\x89PNG\r\n\x1a\n"):
+    if binary.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image"
-    if len(binary) >= 3 and binary.startswith(b"\xff\xd8\xff"):
+    if binary.startswith(b"\xff\xd8\xff"):
         return "image"
     if len(binary) >= 12 and binary[4:8] == b"ftyp":
         return "video"
@@ -200,7 +216,7 @@ class VideoDatabase:
 
 
 # =====================================================
-# MODEL SELECT (Dropdown)
+# MODEL SELECT
 # =====================================================
 
 class ModelSelect(ui.Select):
@@ -277,7 +293,7 @@ class PromptModal(ui.Modal):
 
 
 # =====================================================
-# LENGTH SELECTION (dynamic per model)
+# DURATION SELECTION
 # =====================================================
 
 class DurationButton(ui.Button):
@@ -421,7 +437,7 @@ class VideoCog(commands.Cog):
         self.bot = bot
         self.db = VideoDatabase()
         self.active_interactions = {}
-        self.render_lock = asyncio.Lock()      # one generation globally
+        self.render_lock = asyncio.Lock()  # one global generation
         self.control_lock = asyncio.Lock()
         self.startup_task = None
 
@@ -449,13 +465,12 @@ class VideoCog(commands.Cog):
             self.starting_users.discard(user_id)
 
     # -------------------------------------------------
-    # ROLE / LIMIT SYSTEM
+    # ROLE / LIMIT
     # -------------------------------------------------
 
     def get_user_limit(self, user):
         highest = 0
-        roles = getattr(user, "roles", [])
-        for role in roles:
+        for role in getattr(user, "roles", []):
             if role.id in ROLE_LIMITS:
                 highest = max(highest, ROLE_LIMITS[role.id])
         return highest
@@ -463,15 +478,14 @@ class VideoCog(commands.Cog):
     def get_user_tier(self, user):
         highest = 0
         name = "No Tier"
-        roles = getattr(user, "roles", [])
-        for role in roles:
+        for role in getattr(user, "roles", []):
             if role.id in ROLE_LIMITS and ROLE_LIMITS[role.id] > highest:
                 highest = ROLE_LIMITS[role.id]
                 name = role.name
         return name, highest
 
     # -------------------------------------------------
-    # DB / USAGE
+    # USAGE DB
     # -------------------------------------------------
 
     async def clean_usage(self):
@@ -492,7 +506,7 @@ class VideoCog(commands.Cog):
             (uid,)
         )
 
-        used = sum(row[0] for row in rows)
+        used = sum(r[0] for r in rows)
         limit = self.get_user_limit(user)
         remaining = max(limit - used, 0)
 
@@ -521,7 +535,7 @@ class VideoCog(commands.Cog):
         )
 
     # -------------------------------------------------
-    # CONTROL PANEL (robust)
+    # CONTROL PANEL
     # -------------------------------------------------
 
     async def _get_video_channel(self):
@@ -581,11 +595,13 @@ class VideoCog(commands.Cog):
                 newest_is_valid = newest is not None and self._is_valid_generator_message(newest)
 
                 if newest_is_valid and not force:
+                    # remove duplicate old panels if any
                     for old_msg in panel_messages[1:]:
                         with contextlib.suppress(Exception):
                             await old_msg.delete()
                     return True
 
+                # remove old panels and post new one
                 for msg in panel_messages:
                     with contextlib.suppress(Exception):
                         await msg.delete()
@@ -614,26 +630,30 @@ class VideoCog(commands.Cog):
 
     async def ensure_control_message_with_retry(self):
         await self.bot.wait_until_ready()
-
         for attempt in range(1, 9):
             ok = await self.refresh_button(force=False)
             if ok:
                 return True
             await asyncio.sleep(min(15, attempt * 2))
-
         print("FAILED TO ENSURE GENERATOR PANEL AFTER RETRIES")
         return False
 
     # -------------------------------------------------
-    # PROGRESS HELPERS
+    # PROGRESS
     # -------------------------------------------------
 
-    def _estimate_target_time_ms(self, seconds, avg_ms):
+    def _estimate_target_time_ms(self, model_key, seconds, avg_ms):
         base = BASE_TARGET_MS.get(seconds, 160000)
         avg = safe_int(avg_ms, base)
-        target = max(base, avg)
-        target = int(target * DURATION_FACTOR.get(seconds, 1.0))
-        return max(target, 45000)
+
+        blended = int(base * 0.35 + avg * 0.65)
+        blended = max(base, blended)
+
+        duration_factor = DURATION_FACTOR.get(seconds, 1.0)
+        model_factor = MODEL_TIME_FACTOR.get(model_key, 1.0)
+
+        target = int(blended * duration_factor * model_factor)
+        return max(target, 35000)
 
     def _calculate_percent(self, elapsed_ms, target_ms, last_percent):
         raw = elapsed_ms / max(target_ms, 1)
@@ -671,7 +691,7 @@ class VideoCog(commands.Cog):
         filled = int(blocks * percent / 100)
         bar = "█" * filled + "░" * (blocks - filled)
 
-        prompt_preview = codeblock_safe(trim_prompt(prompt, 300))
+        prompt_preview = codeblock_safe(trim_prompt(prompt, PROMPT_PREVIEW_LIMIT))
         eta_text = f"~{eta_sec}s" if eta_sec is not None else "calculating..."
 
         return discord.Embed(
@@ -718,16 +738,13 @@ class VideoCog(commands.Cog):
     def _extract_queue_id(self, payload):
         if not isinstance(payload, dict):
             return None
-
         if payload.get("queue_id"):
             return payload.get("queue_id")
         if payload.get("id"):
             return payload.get("id")
-
         nested = payload.get("data")
         if isinstance(nested, dict) and nested.get("queue_id"):
             return nested.get("queue_id")
-
         return None
 
     def _extract_urls_from_payload(self, payload):
@@ -764,12 +781,11 @@ class VideoCog(commands.Cog):
             return None, None
         visited.add(url)
 
-        timeout = aiohttp.ClientTimeout(total=35, connect=10, sock_read=30)
+        timeout = aiohttp.ClientTimeout(total=45, connect=12, sock_read=35)
 
         for use_auth in (True, False):
             try:
                 req_headers = dict(headers) if use_auth else {}
-
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(url, headers=req_headers) as resp:
                         body = await resp.read()
@@ -789,12 +805,12 @@ class VideoCog(commands.Cog):
 
                         if "json" in ctype:
                             try:
-                                payload = json.loads(body.decode("utf-8", errors="ignore"))
+                                nested_payload = json.loads(body.decode("utf-8", errors="ignore"))
                             except Exception:
-                                payload = None
+                                nested_payload = None
 
-                            if payload:
-                                nested_urls = self._extract_urls_from_payload(payload)
+                            if nested_payload:
+                                nested_urls = self._extract_urls_from_payload(nested_payload)
                                 for nested_url in nested_urls:
                                     nested_data, nested_type = await self._fetch_media_from_url(
                                         nested_url, headers, visited=visited
@@ -819,7 +835,6 @@ class VideoCog(commands.Cog):
                         json=payload
                     ) as response:
                         text = await response.text()
-
                         try:
                             data = json.loads(text)
                         except Exception:
@@ -838,7 +853,7 @@ class VideoCog(commands.Cog):
                         await asyncio.sleep(1.2 * (attempt + 1))
 
             except Exception as e:
-                print("QUEUE REQUEST ERROR:", e)
+                print("QUEUE REQUEST ERROR:", repr(e))
                 await asyncio.sleep(1.2 * (attempt + 1))
 
         return None, None
@@ -903,7 +918,10 @@ class VideoCog(commands.Cog):
                     "aspect_ratio": aspect
                 }
 
-                if model["mode"] == "video":
+                # Ensure duration is present for video models
+                mode = str(model.get("mode", "")).lower()
+                is_video_model = (mode == "video") or ("text-to-video" in model_key)
+                if is_video_model:
                     payload["duration"] = f"{seconds}s"
 
                 headers = {
@@ -1038,14 +1056,17 @@ class VideoCog(commands.Cog):
         }
 
         started = utc_now()
-        timeout_at = started + timedelta(minutes=12)
-        last_percent = 8
+        hard_deadline = started + timedelta(minutes=30)
+        adaptive_deadline = started + timedelta(minutes=12)
 
-        timeout = aiohttp.ClientTimeout(total=25, connect=10, sock_read=20)
+        last_percent = 8
+        finalize_attempts = 0
+
+        timeout = aiohttp.ClientTimeout(total=90, connect=15, sock_read=70)
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            while utc_now() < timeout_at:
-                await asyncio.sleep(7)
+            while utc_now() < hard_deadline and utc_now() < adaptive_deadline:
+                await asyncio.sleep(6)
 
                 try:
                     async with session.post(
@@ -1055,7 +1076,12 @@ class VideoCog(commands.Cog):
                     ) as response:
                         content_type = (response.headers.get("content-type", "") or "").lower()
 
-                        # Direct media response
+                        if response.status >= 400:
+                            body_preview = (await response.text())[:300]
+                            print("RETRIEVE HTTP ERROR:", response.status, body_preview)
+                            continue
+
+                        # Direct media body
                         if "video" in content_type:
                             data = await response.read()
                             return data, "video"
@@ -1080,15 +1106,25 @@ class VideoCog(commands.Cog):
                         print("GEN STATUS:", data)
 
                         status = str(data.get("status", "")).lower()
+                        avg = safe_int(data.get("average_execution_time", 180000), 180000)
+                        elapsed = safe_int(data.get("execution_duration", 0), 0)
+                        if elapsed <= 0:
+                            elapsed = int((utc_now() - started).total_seconds() * 1000)
+
+                        # Extend runtime window for slower jobs
+                        expected_total_sec = int((max(avg, 60000) / 1000) * 2.5) + 120
+                        candidate_deadline = started + timedelta(seconds=expected_total_sec)
+                        if candidate_deadline > adaptive_deadline:
+                            adaptive_deadline = min(candidate_deadline, hard_deadline)
 
                         if status in {"failed", "error", "cancelled", "canceled"}:
                             return None, None
 
-                        # If completed but no direct media body, use URLs
                         if status == "completed":
                             candidate_urls = []
                             if isinstance(queue_download_url, str) and queue_download_url.startswith("http"):
                                 candidate_urls.append(queue_download_url)
+
                             candidate_urls.extend(self._extract_urls_from_payload(data))
                             candidate_urls = list(dict.fromkeys(candidate_urls))
 
@@ -1097,16 +1133,29 @@ class VideoCog(commands.Cog):
                                 if media_data:
                                     return media_data, media_type
 
-                            # Completed but file maybe not yet propagated; keep polling
+                            finalize_attempts += 1
+                            if progress_message:
+                                with contextlib.suppress(Exception):
+                                    await progress_message.edit(
+                                        embed=self._build_progress_embed(
+                                            user=user,
+                                            prompt=prompt,
+                                            seconds=seconds,
+                                            aspect=aspect,
+                                            model=model,
+                                            percent=max(last_percent, 98),
+                                            elapsed_sec=max(elapsed // 1000, 0),
+                                            eta_sec=None,
+                                            stage_text="Finalizing file delivery..."
+                                        )
+                                    )
+
+                            if finalize_attempts >= 40:
+                                return None, None
                             continue
 
-                        avg = safe_int(data.get("average_execution_time", 180000), 180000)
-                        elapsed = safe_int(data.get("execution_duration", 0), 0)
-
-                        if elapsed <= 0:
-                            elapsed = int((utc_now() - started).total_seconds() * 1000)
-
-                        target_ms = self._estimate_target_time_ms(seconds, avg)
+                        # Normal processing progress update
+                        target_ms = self._estimate_target_time_ms(model_key, seconds, avg)
                         percent = self._calculate_percent(elapsed, target_ms, last_percent)
 
                         if percent != last_percent:
@@ -1129,8 +1178,11 @@ class VideoCog(commands.Cog):
                                         )
                                     )
 
+                except asyncio.TimeoutError as e:
+                    print("STATUS LOOP TIMEOUT:", repr(e))
+                    continue
                 except Exception as e:
-                    print("STATUS LOOP ERROR:", e)
+                    print("STATUS LOOP ERROR:", repr(e))
                     continue
 
         return None, None
@@ -1155,7 +1207,6 @@ class VideoCog(commands.Cog):
             if progress_message:
                 with contextlib.suppress(Exception):
                     await progress_message.delete()
-
             await channel.send("❌ Generation failed or timed out.")
             return
 
@@ -1207,7 +1258,7 @@ class VideoCog(commands.Cog):
                 )
 
     # -------------------------------------------------
-    # READY EVENT
+    # READY
     # -------------------------------------------------
 
     @commands.Cog.listener()
