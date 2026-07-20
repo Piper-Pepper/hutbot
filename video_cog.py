@@ -1675,7 +1675,34 @@ class VideoCog(commands.Cog):
 
         )
 
+        # =========================
+        # PUBLIC RENDER STATUS
+        # =========================
 
+        public_embed = discord.Embed(
+
+            title="🎬 Video rendering",
+
+            description=(
+
+                f"👤 {user.mention}\n\n"
+
+                "⏳ A video is currently being generated.\n"
+
+                "The generator will return when it is finished."
+
+            ),
+
+            timestamp=utc_now()
+
+        )
+
+
+        public_status = await channel.send(
+
+            embed=public_embed
+
+        )
 
         video_data = await self.wait_for_video(
 
@@ -1685,12 +1712,11 @@ class VideoCog(commands.Cog):
 
             status_message,
 
-            model
+            model,
+
+            public_status
 
         )
-
-
-
 
 
 
@@ -1811,11 +1837,11 @@ class VideoCog(commands.Cog):
 
         status_message,
 
-        model
+        model,
+
+        public_status
 
     ):
-
-
 
         headers = {
 
@@ -1924,16 +1950,16 @@ class VideoCog(commands.Cog):
                         if "video" in content:
 
 
+                            try:
+
+                                await public_status.delete()
+
+                            except:
+
+                                pass
+
+
                             return await response.read()
-
-
-
-
-
-
-
-
-
 
                         data = await response.json()
 
