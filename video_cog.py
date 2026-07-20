@@ -54,13 +54,13 @@ ROLE_LIMITS = {
 
 VIDEO_MODELS = {
     "wan-2-7-enhanced-text-to-video": {
-        "name": "WAN 2.7 Enhanced",
+        "name": "WAN 2.7 Enhanced 🔞",
         "mode": "video",
         "resolution": "720p",
         "max_seconds": 15
     },
     "wan-2-7-text-to-image": {
-        "name": "WAN 2.7 (Text-to-Image)",
+        "name": "WAN 2.7 🔞",
         "mode": "image",
         "resolution": "720p",
         "max_seconds": 15
@@ -78,7 +78,7 @@ VIDEO_MODELS = {
         "max_seconds": 15
     },
     "ltx-2-v2-3-full-text-to-video": {
-        "name": "LTX 2 v2.3 Full",
+        "name": "LTX 2 v2.3 Full 🔞",
         "mode": "video",
         "resolution": "720p",
         "max_seconds": 10
