@@ -746,8 +746,8 @@ class RiddleSystemSQL(commands.Cog):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_riddles_posted_message
         ON riddles(posted_message_id) WHERE posted_message_id IS NOT NULL;
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_riddles_guild_no
-        ON riddles(guild_id, riddle_no) WHERE riddle_no IS NOT NULL;
+        -- WICHTIG: idx_riddles_guild_no hier NICHT erstellen.
+        -- Sonst crashen alte DBs ohne riddle_no beim Startup.
 
         CREATE TABLE IF NOT EXISTS submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
