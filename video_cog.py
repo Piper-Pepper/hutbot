@@ -56,7 +56,6 @@ ROLE_LIMITS = {
 # =====================================================
 
 VIDEO_MODELS = {
-
     "wan-2-7-enhanced-text-to-video": {
         "name": "WAN 2.7 Enhanced 🔞",
         "mode": "video",
@@ -590,13 +589,11 @@ class VideoCog(commands.Cog):
                 newest_is_valid = newest is not None and self._is_valid_generator_message(newest)
 
                 if newest_is_valid and not force:
-                    # remove duplicate old panels if any
                     for old_msg in panel_messages[1:]:
                         with contextlib.suppress(Exception):
                             await old_msg.delete()
                     return True
 
-                # remove old panels and post new one
                 for msg in panel_messages:
                     with contextlib.suppress(Exception):
                         await msg.delete()
@@ -765,6 +762,45 @@ class VideoCog(commands.Cog):
 
         walk(payload)
         return list(dict.fromkeys(urls))
+
+    def _parse_api_error(self, status_code: int, raw_text: str):
+        msg = None
+        err_type = None
+        credits_refunded = False
+
+        try:
+            data = json.loads(raw_text) if raw_text else {}
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or data.get("message")
+                err_type = err.get("type")
+                credits_refunded = bool(err.get("credits_refunded"))
+            elif isinstance(err, str):
+                msg = err
+            elif isinstance(data.get("message"), str):
+                msg = data.get("message")
+        except Exception:
+            msg = (raw_text or "").strip()[:300] or None
+
+        if status_code == 422 and err_type == "provider_content_policy":
+            text = "❌ Rendering abgebrochen: Vom Modellanbieter wegen Content-Policy abgelehnt."
+            if credits_refunded:
+                text += " Credits wurden erstattet."
+            return text, True
+
+        if status_code in (401, 403):
+            return "❌ API-Fehler: Authentifizierung fehlgeschlagen (401/403).", True
+
+        if status_code == 429:
+            return "⏳ API Rate Limit (429), versuche weiter...", False
+
+        if 500 <= status_code <= 599:
+            return "⏳ Provider-Fehler, versuche weiter...", False
+
+        if 400 <= status_code <= 499:
+            return f"❌ Rendering abgebrochen ({status_code}): {msg or 'Ungültige Anfrage.'}", True
+
+        return None, False
 
     async def _fetch_media_from_url(self, url, headers, visited=None):
         if not isinstance(url, str) or not url.startswith("http"):
@@ -992,7 +1028,7 @@ class VideoCog(commands.Cog):
                 if isinstance(queue_response, dict):
                     queue_download_url = queue_response.get("download_url")
 
-                media_data, media_type = await self.wait_for_result(
+                media_data, media_type, error_message = await self.wait_for_result(
                     queue_id=queue_id,
                     model_key=model_key,
                     seconds=seconds,
@@ -1013,7 +1049,8 @@ class VideoCog(commands.Cog):
                     model=model,
                     media_data=media_data,
                     media_type=media_type,
-                    progress_message=progress_message
+                    progress_message=progress_message,
+                    error_message=error_message
                 )
 
             finally:
@@ -1021,6 +1058,10 @@ class VideoCog(commands.Cog):
                     queue_anim_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await queue_anim_task
+
+                if progress_message:
+                    with contextlib.suppress(Exception):
+                        await progress_message.delete()
 
                 if queue_id:
                     self.remove_active_job(user)
@@ -1072,24 +1113,28 @@ class VideoCog(commands.Cog):
                         content_type = (response.headers.get("content-type", "") or "").lower()
 
                         if response.status >= 400:
-                            body_preview = (await response.text())[:300]
-                            print("RETRIEVE HTTP ERROR:", response.status, body_preview)
+                            body_text = await response.text()
+                            user_error, hard_fail = self._parse_api_error(response.status, body_text)
+                            print("RETRIEVE HTTP ERROR:", response.status, body_text[:300])
+
+                            if hard_fail:
+                                return None, None, (user_error or "❌ Rendering fehlgeschlagen.")
                             continue
 
                         # Direct media body
                         if "video" in content_type:
                             data = await response.read()
-                            return data, "video"
+                            return data, "video", None
 
                         if "image" in content_type:
                             data = await response.read()
-                            return data, "image"
+                            return data, "image", None
 
                         if "octet-stream" in content_type:
                             blob = await response.read()
                             guessed = detect_media_type(blob)
                             if guessed:
-                                return blob, guessed
+                                return blob, guessed, None
 
                         raw_text = await response.text()
                         try:
@@ -1113,7 +1158,24 @@ class VideoCog(commands.Cog):
                             adaptive_deadline = min(candidate_deadline, hard_deadline)
 
                         if status in {"failed", "error", "cancelled", "canceled"}:
-                            return None, None
+                            err_msg = None
+                            err = data.get("error")
+                            if isinstance(err, dict):
+                                err_msg = err.get("message")
+                            elif isinstance(err, str):
+                                err_msg = err
+                            elif isinstance(data.get("message"), str):
+                                err_msg = data.get("message")
+
+                            if isinstance(err, dict) and err.get("type") == "provider_content_policy":
+                                txt = "❌ Rendering abgebrochen: Vom Modellanbieter wegen Content-Policy abgelehnt."
+                                if bool(err.get("credits_refunded")):
+                                    txt += " Credits wurden erstattet."
+                                return None, None, txt
+
+                            if err_msg:
+                                return None, None, f"❌ Rendering abgebrochen: {err_msg}"
+                            return None, None, "❌ Rendering abgebrochen."
 
                         if status == "completed":
                             candidate_urls = []
@@ -1126,7 +1188,7 @@ class VideoCog(commands.Cog):
                             for media_url in candidate_urls:
                                 media_data, media_type = await self._fetch_media_from_url(media_url, headers)
                                 if media_data:
-                                    return media_data, media_type
+                                    return media_data, media_type, None
 
                             finalize_attempts += 1
                             if progress_message:
@@ -1146,7 +1208,7 @@ class VideoCog(commands.Cog):
                                     )
 
                             if finalize_attempts >= 40:
-                                return None, None
+                                return None, None, "❌ Rendering war fertig, aber Datei konnte nicht geliefert werden."
                             continue
 
                         # Normal processing progress update
@@ -1180,7 +1242,7 @@ class VideoCog(commands.Cog):
                     print("STATUS LOOP ERROR:", repr(e))
                     continue
 
-        return None, None
+        return None, None, "❌ Generation fehlgeschlagen oder Timeout."
 
     # -------------------------------------------------
     # FINAL POST
@@ -1196,13 +1258,21 @@ class VideoCog(commands.Cog):
         model,
         media_data,
         media_type,
-        progress_message
+        progress_message,
+        error_message=None
     ):
         if not media_data:
             if progress_message:
                 with contextlib.suppress(Exception):
                     await progress_message.delete()
-            await channel.send("❌ Generation failed or timed out.")
+
+            msg = error_message or "❌ Generation failed or timed out."
+            await channel.send(f"{user.mention} {msg}")
+
+            interaction = self.active_interactions.get(user.id)
+            if interaction:
+                with contextlib.suppress(Exception):
+                    await interaction.followup.send(msg, ephemeral=True)
             return
 
         is_video = (media_type == "video")
