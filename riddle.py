@@ -141,15 +141,15 @@ def riddle_manager_required():
 
 async def send_riddle_access_denied(interaction: Interaction):
     embed = discord.Embed(
-        title="🔒 Zugriff eingeschränkt",
+        title="🔒 Access Restricted",
         description=(
-            f"Dieser Command ist nur für <@&{RIDDLE_MANAGER_ROLE_ID}>.\n"
-            "Wenn du Zugriff willst, bewirb dich für diese Rolle."
+            f"This command is restricted to <@&{RIDDLE_MANAGER_ROLE_ID}>.\n"
+            "If you want access, please apply for this role."
         ),
         color=discord.Color.orange()
     )
     embed.set_image(url=ACCESS_DENIED_IMAGE_URL)
-    embed.set_footer(text="Rollenbewerbung erforderlich")
+    embed.set_footer(text="Role application required")
 
     if interaction.response.is_done():
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -168,8 +168,12 @@ class RiddleUpsertModal(Modal):
         current_data: Optional[dict],
         mention_override_id: Optional[int]
     ):
-        has_data = bool(current_data and clean_value(current_data.get("text")) and clean_value(current_data.get("solution")))
-        super().__init__(title="Rätsel bearbeiten" if has_data else "Rätsel erstellen")
+        has_data = bool(
+            current_data
+            and clean_value(current_data.get("text"))
+            and clean_value(current_data.get("solution"))
+        )
+        super().__init__(title="Edit Riddle" if has_data else "Create Riddle")
 
         self.cog = cog
         self.current_data = current_data or {}
@@ -183,7 +187,7 @@ class RiddleUpsertModal(Modal):
             max_length=4000
         )
         self.solution = TextInput(
-            label="Lösung",
+            label="Solution",
             style=discord.TextStyle.paragraph,
             default=self.current_data.get("solution") or "",
             required=True,
@@ -196,7 +200,7 @@ class RiddleUpsertModal(Modal):
             max_length=200
         )
         self.image_url = TextInput(
-            label="Bild URL",
+            label="Image URL",
             default=self.current_data.get("image_url") or "",
             required=False,
             max_length=1000
@@ -216,15 +220,16 @@ class RiddleUpsertModal(Modal):
 
     async def on_submit(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
+
         if interaction.guild is None:
-            await interaction.followup.send("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.followup.send("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         text = clean_value(self.text.value)
         solution = clean_value(self.solution.value)
 
         if not text or not solution:
-            await interaction.followup.send("❌ Text und Lösung dürfen nicht leer sein.", ephemeral=True)
+            await interaction.followup.send("❌ Text and solution cannot be empty.", ephemeral=True)
             return
 
         payload = {
@@ -244,23 +249,23 @@ class RiddleUpsertModal(Modal):
             )
         except Exception as e:
             logger.exception("Riddle upsert failed: %s", e)
-            await interaction.followup.send("❌ Speichern fehlgeschlagen.", ephemeral=True)
+            await interaction.followup.send("❌ Saving failed.", ephemeral=True)
             return
 
         if rid is None:
-            await interaction.followup.send("❌ Speichern fehlgeschlagen.", ephemeral=True)
+            await interaction.followup.send("❌ Saving failed.", ephemeral=True)
             return
 
-        await interaction.followup.send("✅ Rätsel gespeichert.", ephemeral=True)
+        await interaction.followup.send("✅ Riddle saved.", ephemeral=True)
 
 
 class SubmitSolutionModal(Modal):
     def __init__(self, cog: "RiddleSystemSQL", riddle_id: int):
-        super().__init__(title="💡 Lösung einreichen")
+        super().__init__(title="💡 Submit Your Solution")
         self.cog = cog
         self.riddle_id = riddle_id
         self.solution = TextInput(
-            label="Deine Antwort",
+            label="Your Answer",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=4000
@@ -271,22 +276,22 @@ class SubmitSolutionModal(Modal):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None:
-            await interaction.followup.send("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.followup.send("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         riddle = await self.cog._get_open_riddle_by_id(interaction.guild.id, self.riddle_id)
         if not riddle:
-            await interaction.followup.send("❌ Kein aktives Rätsel gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
             return
 
         vote_channel = await self.cog._resolve_channel(VOTE_CHANNEL_ID)
         if vote_channel is None or not hasattr(vote_channel, "send"):
-            await interaction.followup.send("❌ Vote-Channel nicht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ Vote channel not found.", ephemeral=True)
             return
 
         answer = clean_value(self.solution.value)
         if not answer:
-            await interaction.followup.send("❌ Antwort darf nicht leer sein.", ephemeral=True)
+            await interaction.followup.send("❌ Answer cannot be empty.", ephemeral=True)
             return
 
         submission_id = await self.cog._create_submission_pending(
@@ -296,17 +301,17 @@ class SubmitSolutionModal(Modal):
             answer=answer
         )
         if not submission_id:
-            await interaction.followup.send("❌ Konnte deine Lösung nicht speichern.", ephemeral=True)
+            await interaction.followup.send("❌ Could not save your submission.", ephemeral=True)
             return
 
         embed = discord.Embed(
-            title="📜 Neue Lösung eingereicht",
-            description=riddle.get("text") or "*Kein Rätseltext*",
+            title="📜 New Solution Submitted",
+            description=riddle.get("text") or "*No riddle text*",
             color=discord.Color.gold()
         )
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="🧠 Antwort", value=answer, inline=False)
-        embed.add_field(name="✅ Korrekte Lösung", value=riddle.get("solution") or "*Nicht gesetzt*", inline=False)
+        embed.add_field(name="🧠 User's Answer", value=answer, inline=False)
+        embed.add_field(name="✅ Correct Solution", value=riddle.get("solution") or "*Not set*", inline=False)
         embed.add_field(name="🏆 Award", value=riddle.get("award") or "*None*", inline=False)
         embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)
         if riddle.get("button_role_id"):
@@ -317,7 +322,7 @@ class SubmitSolutionModal(Modal):
             vote_msg = await vote_channel.send(embed=embed, view=VoteButtons(self.cog))
         except Exception:
             await self.cog._delete_submission(submission_id)
-            await interaction.followup.send("❌ Konnte die Vote-Nachricht nicht senden.", ephemeral=True)
+            await interaction.followup.send("❌ Could not send vote message.", ephemeral=True)
             return
 
         ok = await self.cog._set_submission_vote_message(submission_id, vote_msg.id)
@@ -327,10 +332,10 @@ class SubmitSolutionModal(Modal):
             except Exception:
                 pass
             await self.cog._delete_submission(submission_id)
-            await interaction.followup.send("❌ Interner Fehler beim Zuordnen der Vote-Nachricht.", ephemeral=True)
+            await interaction.followup.send("❌ Internal error while linking vote message.", ephemeral=True)
             return
 
-        await interaction.followup.send("✅ Deine Lösung wurde eingereicht!", ephemeral=True)
+        await interaction.followup.send("✅ Your solution has been submitted!", ephemeral=True)
 
 
 class SubmitButton(discord.ui.Button):
@@ -344,12 +349,12 @@ class SubmitButton(discord.ui.Button):
 
     async def callback(self, interaction: Interaction):
         if interaction.guild is None or interaction.message is None:
-            await interaction.response.send_message("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.response.send_message("❌ This can only be used in a server.", ephemeral=True)
             return
 
         riddle = await self.cog._get_open_riddle_by_message(interaction.guild.id, interaction.message.id)
         if not riddle:
-            await interaction.response.send_message("❌ Dieses Rätsel ist nicht mehr aktiv.", ephemeral=True)
+            await interaction.response.send_message("❌ This riddle is no longer active.", ephemeral=True)
             return
 
         await interaction.response.send_modal(SubmitSolutionModal(self.cog, riddle_id=riddle["id"]))
@@ -373,29 +378,29 @@ class VoteSuccessButton(discord.ui.Button):
     async def callback(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
         if interaction.message is None:
-            await interaction.followup.send("❌ Vote-Nachricht nicht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ Vote message not found.", ephemeral=True)
             return
 
         status, ctx = await self.cog._approve_submission(interaction.message.id, interaction.user.id)
         if status == "not_found":
-            await interaction.followup.send("❌ Keine Submission zu dieser Vote-Nachricht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ No submission found for this vote message.", ephemeral=True)
             return
         if status == "already_done":
             try:
                 await interaction.message.edit(view=None)
             except Exception:
                 pass
-            await interaction.followup.send("⏳ Diese Submission wurde bereits verarbeitet.", ephemeral=True)
+            await interaction.followup.send("⏳ This submission was already processed.", ephemeral=True)
             return
         if status == "riddle_closed":
             try:
                 await interaction.message.edit(view=None)
             except Exception:
                 pass
-            await interaction.followup.send("⚠️ Das Rätsel ist nicht mehr offen.", ephemeral=True)
+            await interaction.followup.send("⚠️ This riddle is no longer open.", ephemeral=True)
             return
         if status != "ok" or not ctx:
-            await interaction.followup.send("❌ Interner Fehler.", ephemeral=True)
+            await interaction.followup.send("❌ Internal error.", ephemeral=True)
             return
 
         submitter_id = ctx["submitter_id"]
@@ -439,7 +444,7 @@ class VoteSuccessButton(discord.ui.Button):
             mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, ctx.get("button_role_id"))
             mentions.append(submitter_mention)
             content = " ".join(dict.fromkeys([m for m in mentions if m]))
-            content = (content + "\n🎉 Cock-gratulations💋!").strip()
+            content = (content + "\n🎉 Congratulations!").strip()
 
             await riddle_channel.send(
                 content=content,
@@ -455,7 +460,7 @@ class VoteSuccessButton(discord.ui.Button):
             except Exception:
                 pass
 
-        await interaction.followup.send("✅ Als richtig markiert.", ephemeral=True)
+        await interaction.followup.send("✅ Marked as correct.", ephemeral=True)
 
 
 class VoteFailButton(discord.ui.Button):
@@ -470,29 +475,29 @@ class VoteFailButton(discord.ui.Button):
     async def callback(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
         if interaction.message is None:
-            await interaction.followup.send("❌ Vote-Nachricht nicht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ Vote message not found.", ephemeral=True)
             return
 
         status, ctx = await self.cog._reject_submission(interaction.message.id, interaction.user.id)
         if status == "not_found":
-            await interaction.followup.send("❌ Keine Submission zu dieser Vote-Nachricht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ No submission found for this vote message.", ephemeral=True)
             return
         if status == "already_done":
             try:
                 await interaction.message.edit(view=None)
             except Exception:
                 pass
-            await interaction.followup.send("⏳ Diese Submission wurde bereits verarbeitet.", ephemeral=True)
+            await interaction.followup.send("⏳ This submission was already processed.", ephemeral=True)
             return
         if status == "riddle_closed":
             try:
                 await interaction.message.edit(view=None)
             except Exception:
                 pass
-            await interaction.followup.send("⚠️ Das Rätsel ist nicht mehr offen.", ephemeral=True)
+            await interaction.followup.send("⚠️ This riddle is no longer open.", ephemeral=True)
             return
         if status != "ok" or not ctx:
-            await interaction.followup.send("❌ Interner Fehler.", ephemeral=True)
+            await interaction.followup.send("❌ Internal error.", ephemeral=True)
             return
 
         submitter_id = ctx["submitter_id"]
@@ -531,7 +536,7 @@ class VoteFailButton(discord.ui.Button):
             except Exception:
                 pass
 
-        await interaction.followup.send("✅ Als falsch markiert.", ephemeral=True)
+        await interaction.followup.send("✅ Marked as incorrect.", ephemeral=True)
 
 
 class VoteButtons(View):
@@ -615,7 +620,7 @@ class ChampionsView(View):
 
     async def interaction_check(self, interaction: Interaction) -> bool:
         if self.owner_id is not None and interaction.user.id != self.owner_id:
-            await interaction.response.send_message("🚫 Dieses Menü ist nicht deins.", ephemeral=True)
+            await interaction.response.send_message("🚫 This menu is not yours.", ephemeral=True)
             return False
         return True
 
@@ -665,11 +670,11 @@ class RiddleSystemSQL(commands.Cog):
 
         await self._init_db()
 
-        # persistent views (wichtig für Neustarts)
+        # persistent views (important for restarts)
         self.bot.add_view(SubmitButtonView(self))
         self.bot.add_view(VoteButtons(self))
 
-        logger.info("RiddleSystemSQL geladen. DB + persistente Buttons aktiv.")
+        logger.info("RiddleSystemSQL loaded. DB + persistent views active.")
 
     def cog_unload(self):
         if self.db is not None:
@@ -683,6 +688,7 @@ class RiddleSystemSQL(commands.Cog):
         CREATE TABLE IF NOT EXISTS riddles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER NOT NULL,
+            riddle_no INTEGER,
             text TEXT,
             solution TEXT,
             award TEXT,
@@ -706,6 +712,9 @@ class RiddleSystemSQL(commands.Cog):
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_riddles_posted_message
         ON riddles(posted_message_id) WHERE posted_message_id IS NOT NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_riddles_guild_no
+        ON riddles(guild_id, riddle_no) WHERE riddle_no IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -734,6 +743,34 @@ class RiddleSystemSQL(commands.Cog):
         """
         async with self.db_lock:
             await self.db.executescript(schema)
+
+            # Migration: add riddle_no if missing (older DBs)
+            cur = await self.db.execute("PRAGMA table_info(riddles)")
+            cols = [row["name"] for row in await cur.fetchall()]
+            await cur.close()
+
+            if "riddle_no" not in cols:
+                await self.db.execute("ALTER TABLE riddles ADD COLUMN riddle_no INTEGER")
+
+            # Fill missing riddle_no per guild in chronological order
+            await self.db.execute(
+                """
+                UPDATE riddles AS r
+                SET riddle_no = (
+                    SELECT COUNT(*)
+                    FROM riddles r2
+                    WHERE r2.guild_id = r.guild_id
+                      AND r2.id <= r.id
+                )
+                WHERE r.riddle_no IS NULL
+                """
+            )
+
+            await self.db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_riddles_guild_no "
+                "ON riddles(guild_id, riddle_no) WHERE riddle_no IS NOT NULL"
+            )
+
             await self.db.commit()
 
     # ---------- DB low-level ----------
@@ -785,6 +822,13 @@ class RiddleSystemSQL(commands.Cog):
             (guild_id, message_id)
         )
 
+    async def _get_next_riddle_number(self, guild_id: int) -> int:
+        row = await self._fetchone(
+            "SELECT COALESCE(MAX(riddle_no), 0) AS m FROM riddles WHERE guild_id=?",
+            (guild_id,)
+        )
+        return (to_int(row["m"], 0) + 1) if row else 1
+
     async def _upsert_open_riddle(
         self,
         *,
@@ -801,7 +845,6 @@ class RiddleSystemSQL(commands.Cog):
         award = clean_value(payload.get("award"))
         image_url = clean_value(payload.get("image_url"))
         solution_url = clean_value(payload.get("solution_url"))
-
         now = now_iso_utc()
 
         async with self.db_lock:
@@ -828,16 +871,25 @@ class RiddleSystemSQL(commands.Cog):
                     )
                     rid = old["id"]
                 else:
+                    # New riddle: assign next SQL number
+                    cur = await self.db.execute(
+                        "SELECT COALESCE(MAX(riddle_no), 0) + 1 AS n FROM riddles WHERE guild_id=?",
+                        (guild_id,)
+                    )
+                    row_n = await cur.fetchone()
+                    await cur.close()
+                    next_no = to_int(row_n["n"] if row_n else 1, 1)
+
                     button_role_id = mention_override_id
                     cur = await self.db.execute(
                         """
                         INSERT INTO riddles (
-                            guild_id, text, solution, award, image_url, solution_url, button_role_id, status,
+                            guild_id, riddle_no, text, solution, award, image_url, solution_url, button_role_id, status,
                             created_by, created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
                         """,
-                        (guild_id, text, solution, award, image_url, solution_url, button_role_id, user_id, now, now)
+                        (guild_id, next_no, text, solution, award, image_url, solution_url, button_role_id, user_id, now, now)
                     )
                     rid = int(cur.lastrowid)
                     await cur.close()
@@ -1082,16 +1134,6 @@ class RiddleSystemSQL(commands.Cog):
                 await self.db.rollback()
                 raise
 
-    async def _count_solved(self, guild_id: int) -> int:
-        row = await self._fetchone(
-            "SELECT COUNT(*) AS c FROM riddles WHERE guild_id=? AND status='solved'",
-            (guild_id,)
-        )
-        return to_int(row["c"], 0) if row else 0
-
-    async def _get_next_riddle_number(self, guild_id: int) -> int:
-        return (await self._count_solved(guild_id)) + 1
-
     async def _stats_entries(self, guild_id: int) -> list[tuple[int, int, int]]:
         rows = await self._fetchall(
             "SELECT user_id, solved_riddles, xp FROM user_stats WHERE guild_id=? ORDER BY solved_riddles DESC, xp DESC",
@@ -1170,8 +1212,7 @@ class RiddleSystemSQL(commands.Cog):
 
         async def worker(uid: int):
             async with sem:
-                mention, name, avatar = await self._resolve_user_label(guild, uid)
-                _ = mention
+                _, name, avatar = await self._resolve_user_label(guild, uid)
                 name_cache[uid] = name
                 if avatar:
                     avatar_cache[uid] = avatar
@@ -1214,13 +1255,13 @@ class RiddleSystemSQL(commands.Cog):
         await self._update_original_post(ctx, "✅ Solved", solved_note)
 
     # ---------- commands ----------
-    @app_commands.command(name="riddle", description="Neues Rätsel erstellen oder aktives Rätsel bearbeiten.")
-    @app_commands.describe(mention="Optionale Rolle als Riddle-Button/Ping-Rolle")
+    @app_commands.command(name="riddle", description="Create a new riddle or edit the active one.")
+    @app_commands.describe(mention="Optional role to store as mention/button role")
     @app_commands.guild_only()
     @riddle_manager_required()
     async def riddle(self, interaction: Interaction, mention: Optional[Role] = None):
         if interaction.guild is None:
-            await interaction.response.send_message("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         current = await self._get_open_riddle(interaction.guild.id)
@@ -1233,41 +1274,44 @@ class RiddleSystemSQL(commands.Cog):
             await interaction.response.send_modal(modal)
         except Exception:
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ Interaction abgelaufen. Bitte nochmal.", ephemeral=True)
+                await interaction.response.send_message("❌ Interaction expired. Please try again.", ephemeral=True)
 
-    @app_commands.command(name="riddle_post", description="Aktives Rätsel im Riddle-Channel posten/aktualisieren.")
-    @app_commands.describe(ping_role="Optionale extra Rolle zum Pingen")
+    @app_commands.command(name="riddle_post", description="Post or update the active riddle in the riddle channel.")
+    @app_commands.describe(ping_role="Optional extra role to ping")
     @app_commands.guild_only()
     @riddle_manager_required()
     async def riddle_post(self, interaction: Interaction, ping_role: Optional[Role] = None):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None:
-            await interaction.followup.send("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.followup.send("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         riddle = await self._get_open_riddle(interaction.guild.id)
         if not riddle:
-            await interaction.followup.send("❌ Kein aktives Rätsel vorhanden.", ephemeral=True)
+            await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
             return
 
         text = clean_value(riddle.get("text"))
         solution = clean_value(riddle.get("solution"))
         if not text or not solution:
-            await interaction.followup.send("❌ Rätsel ist unvollständig (Text/Lösung fehlt).", ephemeral=True)
+            await interaction.followup.send("❌ Riddle is incomplete (missing text/solution).", ephemeral=True)
             return
 
         riddle_channel = await self._resolve_channel(RIDDLE_CHANNEL_ID)
         if riddle_channel is None or not hasattr(riddle_channel, "send"):
-            await interaction.followup.send("❌ Riddle-Channel nicht gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ Riddle channel not found.", ephemeral=True)
             return
 
         image_url = riddle.get("image_url")
         if not is_http_url(image_url):
             image_url = DEFAULT_IMAGE_URL
 
-        next_num = await self._get_next_riddle_number(interaction.guild.id)
-        title = f"🧩Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n#️{next_num} ({now_date_str()})"
+        riddle_no = to_int(riddle.get("riddle_no"), 0)
+        if riddle_no <= 0:
+            riddle_no = await self._get_next_riddle_number(interaction.guild.id)
+
+        title = f"🧩 Ms Pepper's Goon Hut Riddle\n#{riddle_no} ({now_date_str()})"
 
         embed = discord.Embed(
             title=title,
@@ -1293,7 +1337,7 @@ class RiddleSystemSQL(commands.Cog):
                     view=SubmitButtonView(self),
                     allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False)
                 )
-                await interaction.followup.send("✅ Rätsel-Post aktualisiert.", ephemeral=True)
+                await interaction.followup.send("✅ Riddle post updated.", ephemeral=True)
             else:
                 msg = await riddle_channel.send(
                     content=content or None,
@@ -1302,28 +1346,31 @@ class RiddleSystemSQL(commands.Cog):
                     allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False)
                 )
                 await self._set_riddle_posted_message(riddle["id"], msg.channel.id, msg.id)
-                await interaction.followup.send(f"✅ Rätsel gepostet in {msg.channel.mention}.", ephemeral=True)
+                await interaction.followup.send(f"✅ Riddle posted in {msg.channel.mention}.", ephemeral=True)
         except Exception as e:
             logger.exception("riddle_post failed: %s", e)
-            await interaction.followup.send("❌ Posten fehlgeschlagen.", ephemeral=True)
+            await interaction.followup.send("❌ Posting failed.", ephemeral=True)
 
-    @app_commands.command(name="riddle_view", description="Private Vorschau auf aktives Rätsel + solved Preview.")
+    @app_commands.command(name="riddle_view", description="Private preview of active riddle + solved preview.")
     @app_commands.guild_only()
     @riddle_manager_required()
     async def riddle_view(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None:
-            await interaction.followup.send("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.followup.send("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         riddle = await self._get_open_riddle(interaction.guild.id)
         if not riddle:
-            await interaction.followup.send("❌ Kein aktives Rätsel gefunden.", ephemeral=True)
+            await interaction.followup.send("❌ No active riddle found.", ephemeral=True)
             return
 
-        next_num = await self._get_next_riddle_number(interaction.guild.id)
-        title = f"🧩Ms Pepper's 𝕲𝖔𝖔𝖓 𝕳𝖚𝖙 𝕽𝖎𝖉𝖉𝖑𝖊\n#️{next_num} ({now_date_str()})"
+        riddle_no = to_int(riddle.get("riddle_no"), 0)
+        if riddle_no <= 0:
+            riddle_no = await self._get_next_riddle_number(interaction.guild.id)
+
+        title = f"🧩 Ms Pepper's Goon Hut Riddle\n#{riddle_no} ({now_date_str()})"
 
         image_url = riddle.get("image_url")
         if not is_http_url(image_url):
@@ -1374,19 +1421,19 @@ class RiddleSystemSQL(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="riddle_close", description="Aktives Rätsel als ungelöst schließen.")
+    @app_commands.command(name="riddle_close", description="Close active riddle as unsolved.")
     @app_commands.guild_only()
     @riddle_manager_required()
     async def riddle_close(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild is None:
-            await interaction.followup.send("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.followup.send("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         riddle = await self._close_open_riddle(interaction.guild.id, interaction.user.id)
         if not riddle:
-            await interaction.followup.send("❌ Kein aktives Rätsel zum Schließen.", ephemeral=True)
+            await interaction.followup.send("❌ No active riddle to close.", ephemeral=True)
             return
 
         clean_solution, link = extract_link(riddle.get("solution") or "")
@@ -1400,7 +1447,7 @@ class RiddleSystemSQL(commands.Cog):
 
         embed = discord.Embed(
             title="🔒 Riddle Closed",
-            description="Sadly, nobody could solve the Riddle in time...",
+            description="Sadly, nobody could solve the riddle in time.",
             color=discord.Color.red()
         )
         embed.add_field(name="🧩 Riddle", value=riddle.get("text") or "*Unknown*", inline=False)
@@ -1418,7 +1465,6 @@ class RiddleSystemSQL(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False)
             )
 
-        # Original-Post markieren + Submit Button deaktivieren
         await self._update_original_post(
             {
                 "posted_channel_id": riddle.get("posted_channel_id"),
@@ -1429,13 +1475,13 @@ class RiddleSystemSQL(commands.Cog):
             f"Nobody solved it.\n{(clean_solution or '*None*').splitlines()[0]}"
         )
 
-        await interaction.followup.send("✅ Rätsel geschlossen.", ephemeral=True)
+        await interaction.followup.send("✅ Riddle closed.", ephemeral=True)
 
-    @app_commands.command(name="riddle_champ", description="Riddle Champions Leaderboard anzeigen.")
+    @app_commands.command(name="riddle_champ", description="Show the riddle champions leaderboard.")
     @app_commands.describe(
-        visible="true = öffentlich, false = nur für dich",
-        image="Optionales Bild für Seite 1",
-        mention="Optionale Rollen-Erwähnung (nur bei visible=true)"
+        visible="If true, post publicly. If false, only visible to you.",
+        image="Optional custom image URL for page 1.",
+        mention="Optional role mention (used only when visible=true)."
     )
     @app_commands.guild_only()
     async def riddle_champ(
@@ -1446,7 +1492,7 @@ class RiddleSystemSQL(commands.Cog):
         mention: Optional[Role] = None
     ):
         if interaction.guild is None:
-            await interaction.response.send_message("❌ Nur im Server nutzbar.", ephemeral=True)
+            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=not visible, thinking=True)
