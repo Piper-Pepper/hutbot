@@ -37,6 +37,9 @@ PROMPT_PREVIEW_PROGRESS = 420
 PROMPT_PREVIEW_RESULT = 900
 REASON_PREVIEW_LIMIT = 450
 
+# Global concurrency (set to >1 only if provider + bot flow are tested for it)
+MAX_CONCURRENT_RENDERS = 1
+
 
 # =====================================================
 # ROLES / DAILY LIMITS
@@ -122,18 +125,18 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
-def format_reset(dt):
-    if not dt:
-        return "unknown"
-    ts = int(dt.timestamp())
-    return f"<t:{ts}:f> • <t:{ts}:R>"
-
-
 def safe_int(value, default=0):
     try:
         return int(value)
     except Exception:
         return default
+
+
+def format_reset(dt):
+    if not dt:
+        return "unknown"
+    ts = int(dt.timestamp())
+    return f"<t:{ts}:f> • <t:{ts}:R>"
 
 
 def trim_text(text: str, limit: int) -> str:
@@ -159,7 +162,7 @@ def detect_media_type(binary: bytes):
     return None
 
 
-def build_bar(percent: int, blocks: int = 14) -> str:
+def progress_bar(percent: int, blocks: int = 14):
     p = max(0, min(100, percent))
     filled = int(blocks * p / 100)
     return "█" * filled + "░" * (blocks - filled)
@@ -173,12 +176,12 @@ class VideoDatabase:
     def __init__(self):
         self.lock = threading.Lock()
         self.db = sqlite3.connect("videos.sqlite", check_same_thread=False)
-        self.cursor = self.db.cursor()
 
         with self.lock:
-            self.cursor.execute("PRAGMA journal_mode=WAL")
-            self.cursor.execute("PRAGMA synchronous=NORMAL")
-            self.cursor.execute(
+            cur = self.db.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS usage (
                     user_id TEXT,
@@ -187,7 +190,7 @@ class VideoDatabase:
                 )
                 """
             )
-            self.cursor.execute(
+            cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS active_jobs (
                     user_id TEXT PRIMARY KEY,
@@ -195,25 +198,34 @@ class VideoDatabase:
                 )
                 """
             )
-            self.cursor.execute(
+            cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage (user_id, created)"
             )
             self.db.commit()
+            cur.close()
 
     def execute(self, query, params=()):
         with self.lock:
-            self.cursor.execute(query, params)
+            cur = self.db.cursor()
+            cur.execute(query, params)
             self.db.commit()
+            cur.close()
 
     def fetchall(self, query, params=()):
         with self.lock:
-            self.cursor.execute(query, params)
-            return self.cursor.fetchall()
+            cur = self.db.cursor()
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            cur.close()
+            return rows
 
     def fetchone(self, query, params=()):
         with self.lock:
-            self.cursor.execute(query, params)
-            return self.cursor.fetchone()
+            cur = self.db.cursor()
+            cur.execute(query, params)
+            row = cur.fetchone()
+            cur.close()
+            return row
 
 
 # =====================================================
@@ -437,22 +449,48 @@ class VideoCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = VideoDatabase()
-        self.active_interactions = {}
-        self.render_lock = asyncio.Lock()
+
+        self.active_interactions = {}  # user_id -> interaction
+        self.render_lock = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
         self.control_lock = asyncio.Lock()
+        self.starting_lock = asyncio.Lock()
+        self.starting_users = set()
+
+        self.http_session = None
+        self.http_lock = asyncio.Lock()
+
         self.startup_task = None
 
-        self.starting_users = set()
-        self.starting_lock = asyncio.Lock()
+    # -------------------------------------------------
+    # LIFECYCLE
+    # -------------------------------------------------
 
     async def cog_load(self):
         self.bot.add_view(ModelPickerView(self))
+        await self._ensure_http()
         if self.startup_task is None or self.startup_task.done():
             self.startup_task = asyncio.create_task(self.ensure_control_message_with_retry())
 
     def cog_unload(self):
         if self.startup_task and not self.startup_task.done():
             self.startup_task.cancel()
+
+        if self.http_session and not self.http_session.closed:
+            self.bot.loop.create_task(self.http_session.close())
+
+    async def _ensure_http(self):
+        async with self.http_lock:
+            if self.http_session is None or self.http_session.closed:
+                self.http_session = aiohttp.ClientSession()
+
+    async def _http(self):
+        if self.http_session is None or self.http_session.closed:
+            await self._ensure_http()
+        return self.http_session
+
+    # -------------------------------------------------
+    # USER STATE
+    # -------------------------------------------------
 
     async def _mark_user_starting(self, user_id: int) -> bool:
         async with self.starting_lock:
@@ -464,6 +502,18 @@ class VideoCog(commands.Cog):
     async def _unmark_user_starting(self, user_id: int):
         async with self.starting_lock:
             self.starting_users.discard(user_id)
+
+    async def _safe_followup_for_user(self, user, content: str):
+        interaction = self.active_interactions.get(user.id)
+        if interaction:
+            try:
+                await interaction.followup.send(content, ephemeral=True)
+                return
+            except Exception as e:
+                print("FOLLOWUP ERROR:", repr(e))
+
+        with contextlib.suppress(Exception):
+            await user.send(content)
 
     # -------------------------------------------------
     # ROLE / LIMIT
@@ -647,26 +697,51 @@ class VideoCog(commands.Cog):
         print("FAILED TO ENSURE GENERATOR PANEL AFTER RETRIES")
         return False
 
-    async def _safe_delete_progress_message(self, progress_message):
+    # -------------------------------------------------
+    # PROGRESS MESSAGE SAFETY
+    # -------------------------------------------------
+
+    async def _safe_edit_progress(self, progress_message, embed):
         if not progress_message:
             return
+        with contextlib.suppress(Exception):
+            await progress_message.edit(embed=embed)
+
+    async def _safe_delete_progress_message(self, progress_message):
+        if not progress_message:
+            return False
 
         for attempt in range(3):
             try:
-                msg = await progress_message.channel.fetch_message(progress_message.id)
-                await msg.delete()
-                return
+                await progress_message.delete()
+                return True
             except discord.NotFound:
-                return
+                return True
             except discord.Forbidden as e:
-                print("PROGRESS DELETE FORBIDDEN:", repr(e))
-                return
+                print("PROGRESS DELETE FORBIDDEN (direct):", repr(e))
+                return False
             except discord.HTTPException as e:
-                print("PROGRESS DELETE HTTP ERROR:", repr(e))
-                await asyncio.sleep(0.6 * (attempt + 1))
+                print("PROGRESS DELETE HTTP ERROR (direct):", repr(e))
+                try:
+                    msg = await progress_message.channel.fetch_message(progress_message.id)
+                    await msg.delete()
+                    return True
+                except discord.NotFound:
+                    return True
+                except discord.Forbidden as e2:
+                    print("PROGRESS DELETE FORBIDDEN (fetch):", repr(e2))
+                    return False
+                except discord.HTTPException as e2:
+                    print("PROGRESS DELETE HTTP ERROR (fetch):", repr(e2))
+                    await asyncio.sleep(0.6 * (attempt + 1))
+                except Exception as e2:
+                    print("PROGRESS DELETE ERROR (fetch):", repr(e2))
+                    await asyncio.sleep(0.6 * (attempt + 1))
             except Exception as e:
-                print("PROGRESS DELETE ERROR:", repr(e))
+                print("PROGRESS DELETE ERROR (direct):", repr(e))
                 await asyncio.sleep(0.6 * (attempt + 1))
+
+        return False
 
     # -------------------------------------------------
     # EMBEDS
@@ -685,42 +760,25 @@ class VideoCog(commands.Cog):
         stage_text="Rendering..."
     ):
         prompt_preview = codeblock_safe(trim_text(prompt, PROMPT_PREVIEW_PROGRESS))
-        bar = build_bar(percent, blocks=14)
+        bar = progress_bar(percent, blocks=14)
         eta_text = f"{eta_sec}s" if eta_sec is not None else "calculating..."
 
         embed = discord.Embed(
             title="🎬 AI Video Render",
+            description=f"{user.mention} • `{model['name']}`",
             color=discord.Color.blurple(),
             timestamp=utc_now()
         )
-        embed.description = f"{user.mention} • `{model['name']}`"
-
-        embed.add_field(
-            name="Prompt (copyable)",
-            value=f"```{prompt_preview}```",
-            inline=False
-        )
-        embed.add_field(
-            name="Progress",
-            value=f"`{bar} {percent}%`",
-            inline=False
-        )
+        embed.add_field(name="Prompt (copyable)", value=f"```{prompt_preview}```", inline=False)
+        embed.add_field(name="Progress", value=f"`{bar} {percent}%`", inline=False)
         embed.add_field(
             name="Settings",
-            value=(
-                f"• Aspect: `{aspect}`\n"
-                f"• Duration: `{seconds}s`\n"
-                f"• Resolution: `{model['resolution']}`"
-            ),
+            value=f"• Aspect: `{aspect}`\n• Duration: `{seconds}s`\n• Resolution: `{model['resolution']}`",
             inline=False
         )
         embed.add_field(
             name="Timing",
-            value=(
-                f"• Elapsed: `{elapsed_sec}s`\n"
-                f"• ETA: `{eta_text}`\n"
-                f"• Status: {stage_text}"
-            ),
+            value=f"• Elapsed: `{elapsed_sec}s`\n• ETA: `{eta_text}`\n• Status: {stage_text}",
             inline=False
         )
         embed.set_footer(text="AI Video Generator")
@@ -736,16 +794,8 @@ class VideoCog(commands.Cog):
             color=discord.Color.red(),
             timestamp=utc_now()
         )
-        embed.add_field(
-            name="Reason",
-            value=reason_text,
-            inline=False
-        )
-        embed.add_field(
-            name="Prompt (copyable)",
-            value=f"```{prompt_preview}```",
-            inline=False
-        )
+        embed.add_field(name="Reason", value=reason_text, inline=False)
+        embed.add_field(name="Prompt (copyable)", value=f"```{prompt_preview}```", inline=False)
         embed.add_field(
             name="Settings",
             value=(
@@ -770,11 +820,7 @@ class VideoCog(commands.Cog):
             color=color,
             timestamp=utc_now()
         )
-        embed.add_field(
-            name="Prompt (copyable)",
-            value=f"```{prompt_preview}```",
-            inline=False
-        )
+        embed.add_field(name="Prompt (copyable)", value=f"```{prompt_preview}```", inline=False)
         embed.add_field(
             name="Settings",
             value=(
@@ -789,7 +835,7 @@ class VideoCog(commands.Cog):
         return embed
 
     # -------------------------------------------------
-    # PROGRESS / TIME
+    # PROGRESS / ETA LOGIC
     # -------------------------------------------------
 
     def _estimate_target_time_ms(self, model_key, seconds, avg_ms):
@@ -833,8 +879,9 @@ class VideoCog(commands.Cog):
         ]
         i = 0
         while True:
-            await progress_message.edit(
-                embed=self._build_progress_embed(
+            await self._safe_edit_progress(
+                progress_message,
+                self._build_progress_embed(
                     user=user,
                     prompt=prompt,
                     seconds=seconds,
@@ -928,7 +975,7 @@ class VideoCog(commands.Cog):
 
         return None, False
 
-    async def _fetch_media_from_url(self, url, headers, visited=None):
+    async def _fetch_media_from_url(self, session, url, headers, visited=None):
         if not isinstance(url, str) or not url.startswith("http"):
             return None, None
 
@@ -943,37 +990,39 @@ class VideoCog(commands.Cog):
         for use_auth in (True, False):
             try:
                 req_headers = dict(headers) if use_auth else {}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url, headers=req_headers) as resp:
-                        body = await resp.read()
-                        ctype = (resp.headers.get("content-type", "") or "").lower()
+                async with session.get(url, headers=req_headers, timeout=timeout) as resp:
+                    body = await resp.read()
+                    ctype = (resp.headers.get("content-type", "") or "").lower()
 
-                        if not body or resp.status >= 400:
-                            continue
+                    if not body or resp.status >= 400:
+                        continue
 
-                        if "video" in ctype:
-                            return body, "video"
-                        if "image" in ctype:
-                            return body, "image"
+                    if "video" in ctype:
+                        return body, "video"
+                    if "image" in ctype:
+                        return body, "image"
 
-                        guessed = detect_media_type(body)
-                        if guessed:
-                            return body, guessed
+                    guessed = detect_media_type(body)
+                    if guessed:
+                        return body, guessed
 
-                        if "json" in ctype:
-                            try:
-                                nested_payload = json.loads(body.decode("utf-8", errors="ignore"))
-                            except Exception:
-                                nested_payload = None
+                    if "json" in ctype:
+                        try:
+                            nested_payload = json.loads(body.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            nested_payload = None
 
-                            if nested_payload:
-                                nested_urls = self._extract_urls_from_payload(nested_payload)
-                                for nested_url in nested_urls:
-                                    nested_data, nested_type = await self._fetch_media_from_url(
-                                        nested_url, headers, visited=visited
-                                    )
-                                    if nested_data:
-                                        return nested_data, nested_type
+                        if nested_payload:
+                            nested_urls = self._extract_urls_from_payload(nested_payload)
+                            for nested_url in nested_urls:
+                                nested_data, nested_type = await self._fetch_media_from_url(
+                                    session=session,
+                                    url=nested_url,
+                                    headers=headers,
+                                    visited=visited
+                                )
+                                if nested_data:
+                                    return nested_data, nested_type
 
             except Exception as e:
                 print("DOWNLOAD URL FETCH ERROR:", repr(e))
@@ -983,39 +1032,35 @@ class VideoCog(commands.Cog):
     async def _queue_generation(self, payload, headers):
         timeout = aiohttp.ClientTimeout(total=35, connect=10, sock_read=30)
         last_error = None
+        session = await self._http()
 
         for attempt in range(3):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(
-                        VIDEO_QUEUE_URL,
-                        headers=headers,
-                        json=payload
-                    ) as response:
-                        text = await response.text()
-                        try:
-                            data = json.loads(text)
-                        except Exception:
-                            data = {"raw": text}
+                async with session.post(VIDEO_QUEUE_URL, headers=headers, json=payload, timeout=timeout) as response:
+                    text = await response.text()
+                    try:
+                        data = json.loads(text)
+                    except Exception:
+                        data = {"raw": text}
 
-                        if response.status >= 400:
-                            user_error, hard_fail = self._parse_api_error(response.status, text)
-                            last_error = user_error or f"Queue error ({response.status})."
-                            print("QUEUE ERROR:", response.status, text[:300])
+                    if response.status >= 400:
+                        user_error, hard_fail = self._parse_api_error(response.status, text)
+                        last_error = user_error or f"Queue error ({response.status})."
+                        print("QUEUE ERROR:", response.status, text[:300])
 
-                            if hard_fail:
-                                return None, data, last_error
+                        if hard_fail:
+                            return None, data, last_error
 
-                            await asyncio.sleep(1.4 * (attempt + 1))
-                            continue
+                        await asyncio.sleep(1.4 * (attempt + 1))
+                        continue
 
-                        queue_id = self._extract_queue_id(data)
-                        if queue_id:
-                            return queue_id, data, None
+                    queue_id = self._extract_queue_id(data)
+                    if queue_id:
+                        return queue_id, data, None
 
-                        last_error = "Queue response did not include queue_id."
-                        print("QUEUE NO ID:", data)
-                        await asyncio.sleep(1.2 * (attempt + 1))
+                    last_error = "Queue response did not include queue_id."
+                    print("QUEUE NO ID:", data)
+                    await asyncio.sleep(1.2 * (attempt + 1))
 
             except Exception as e:
                 last_error = f"Queue request failed: {repr(e)}"
@@ -1035,7 +1080,6 @@ class VideoCog(commands.Cog):
 
         if model_key not in VIDEO_MODELS:
             model_key = DEFAULT_MODEL
-
         model = VIDEO_MODELS[model_key]
 
         if not await self._mark_user_starting(user.id):
@@ -1094,22 +1138,29 @@ class VideoCog(commands.Cog):
                     "Content-Type": "application/json"
                 }
 
-                await self.remove_button()
                 channel = await self._get_video_channel()
 
-                progress_message = await channel.send(
-                    embed=self._build_progress_embed(
-                        user=user,
-                        prompt=prompt,
-                        seconds=seconds,
-                        aspect=aspect,
-                        model=model,
-                        percent=5,
-                        elapsed_sec=0,
-                        eta_sec=None,
-                        stage_text="Sending queue request..."
+                # Hide control panel while rendering
+                await self.remove_button()
+
+                try:
+                    progress_message = await channel.send(
+                        embed=self._build_progress_embed(
+                            user=user,
+                            prompt=prompt,
+                            seconds=seconds,
+                            aspect=aspect,
+                            model=model,
+                            percent=5,
+                            elapsed_sec=0,
+                            eta_sec=None,
+                            stage_text="Sending queue request..."
+                        )
                     )
-                )
+                except Exception as e:
+                    print("PROGRESS SEND ERROR:", repr(e))
+                    await interaction.followup.send("❌ Could not create progress message.", ephemeral=True)
+                    return
 
                 queue_anim_task = asyncio.create_task(
                     self._animate_queue_wait(
@@ -1149,20 +1200,20 @@ class VideoCog(commands.Cog):
 
                 self.add_active_job(user, queue_id)
 
-                with contextlib.suppress(Exception):
-                    await progress_message.edit(
-                        embed=self._build_progress_embed(
-                            user=user,
-                            prompt=prompt,
-                            seconds=seconds,
-                            aspect=aspect,
-                            model=model,
-                            percent=8,
-                            elapsed_sec=1,
-                            eta_sec=None,
-                            stage_text="Queue accepted. Rendering started."
-                        )
+                await self._safe_edit_progress(
+                    progress_message,
+                    self._build_progress_embed(
+                        user=user,
+                        prompt=prompt,
+                        seconds=seconds,
+                        aspect=aspect,
+                        model=model,
+                        percent=8,
+                        elapsed_sec=1,
+                        eta_sec=None,
+                        stage_text="Queue accepted. Rendering started."
                     )
+                )
 
                 queue_download_url = None
                 if isinstance(queue_response, dict):
@@ -1237,151 +1288,165 @@ class VideoCog(commands.Cog):
         finalize_attempts = 0
 
         timeout = aiohttp.ClientTimeout(total=90, connect=15, sock_read=70)
+        session = await self._http()
 
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            while utc_now() < hard_deadline and utc_now() < adaptive_deadline:
-                await asyncio.sleep(6)
+        while True:
+            now = utc_now()
+            if now >= hard_deadline or now >= adaptive_deadline:
+                break
 
-                try:
-                    async with session.post(
-                        VIDEO_RETRIEVE_URL,
-                        headers=headers,
-                        json={"model": model_key, "queue_id": queue_id}
-                    ) as response:
-                        content_type = (response.headers.get("content-type", "") or "").lower()
+            await asyncio.sleep(6)
 
-                        if response.status >= 400:
-                            body_text = await response.text()
-                            user_error, hard_fail = self._parse_api_error(response.status, body_text)
-                            print("RETRIEVE HTTP ERROR:", response.status, body_text[:300])
+            try:
+                async with session.post(
+                    VIDEO_RETRIEVE_URL,
+                    headers=headers,
+                    json={"model": model_key, "queue_id": queue_id},
+                    timeout=timeout
+                ) as response:
+                    content_type = (response.headers.get("content-type", "") or "").lower()
 
-                            if hard_fail:
-                                return None, None, (user_error or "Rendering failed.")
-                            continue
+                    if response.status >= 400:
+                        body_text = await response.text()
+                        user_error, hard_fail = self._parse_api_error(response.status, body_text)
+                        print("RETRIEVE HTTP ERROR:", response.status, body_text[:300])
 
-                        if "video" in content_type:
-                            data = await response.read()
-                            return data, "video", None
+                        if hard_fail:
+                            return None, None, (user_error or "Rendering failed.")
+                        continue
 
-                        if "image" in content_type:
-                            data = await response.read()
-                            return data, "image", None
+                    # direct media body
+                    if "video" in content_type:
+                        data = await response.read()
+                        return data, "video", None
 
-                        if "octet-stream" in content_type:
-                            blob = await response.read()
-                            guessed = detect_media_type(blob)
-                            if guessed:
-                                return blob, guessed, None
+                    if "image" in content_type:
+                        data = await response.read()
+                        return data, "image", None
 
-                        raw_text = await response.text()
-                        try:
-                            data = json.loads(raw_text)
-                        except Exception:
-                            print("STATUS NON-JSON:", raw_text[:300])
-                            continue
+                    if "octet-stream" in content_type:
+                        blob = await response.read()
+                        guessed = detect_media_type(blob)
+                        if guessed:
+                            return blob, guessed, None
 
-                        print("GEN STATUS:", data)
+                    # json status
+                    raw_text = await response.text()
+                    try:
+                        data = json.loads(raw_text)
+                    except Exception:
+                        print("STATUS NON-JSON:", raw_text[:300])
+                        continue
 
-                        if isinstance(data.get("error"), dict):
-                            err = data["error"]
-                            if err.get("type") == "provider_content_policy":
-                                txt = "Rendering aborted: Rejected by the model provider due to content policy."
-                                if bool(err.get("credits_refunded")):
-                                    txt += " Credits were refunded by the provider."
-                                return None, None, txt
+                    print("GEN STATUS:", data)
 
-                        status = str(data.get("status", "")).lower()
-                        avg = safe_int(data.get("average_execution_time", 180000), 180000)
-                        elapsed = safe_int(data.get("execution_duration", 0), 0)
-                        if elapsed <= 0:
-                            elapsed = int((utc_now() - started).total_seconds() * 1000)
+                    # Some providers return error object with HTTP 200
+                    if isinstance(data.get("error"), dict):
+                        err = data["error"]
+                        if err.get("type") == "provider_content_policy":
+                            txt = "Rendering aborted: Rejected by the model provider due to content policy."
+                            if bool(err.get("credits_refunded")):
+                                txt += " Credits were refunded by the provider."
+                            return None, None, txt
 
-                        expected_total_sec = int((max(avg, 60000) / 1000) * 2.5) + 120
-                        candidate_deadline = started + timedelta(seconds=expected_total_sec)
-                        if candidate_deadline > adaptive_deadline:
-                            adaptive_deadline = min(candidate_deadline, hard_deadline)
+                    status = str(data.get("status", "")).lower()
+                    avg = safe_int(data.get("average_execution_time", 180000), 180000)
+                    elapsed = safe_int(data.get("execution_duration", 0), 0)
+                    if elapsed <= 0:
+                        elapsed = int((utc_now() - started).total_seconds() * 1000)
 
-                        if status in {"failed", "error", "cancelled", "canceled"}:
-                            err_msg = None
-                            err = data.get("error")
-                            if isinstance(err, dict):
-                                err_msg = err.get("message")
-                            elif isinstance(err, str):
-                                err_msg = err
-                            elif isinstance(data.get("message"), str):
-                                err_msg = data.get("message")
+                    # adaptive deadline extension for slower jobs
+                    expected_total_sec = int((max(avg, 60000) / 1000) * 2.5) + 120
+                    candidate_deadline = started + timedelta(seconds=expected_total_sec)
+                    if candidate_deadline > adaptive_deadline:
+                        adaptive_deadline = min(candidate_deadline, hard_deadline)
 
-                            if isinstance(err, dict) and err.get("type") == "provider_content_policy":
-                                txt = "Rendering aborted: Rejected by the model provider due to content policy."
-                                if bool(err.get("credits_refunded")):
-                                    txt += " Credits were refunded by the provider."
-                                return None, None, txt
+                    if status in {"failed", "error", "cancelled", "canceled"}:
+                        err_msg = None
+                        err = data.get("error")
+                        if isinstance(err, dict):
+                            err_msg = err.get("message")
+                        elif isinstance(err, str):
+                            err_msg = err
+                        elif isinstance(data.get("message"), str):
+                            err_msg = data.get("message")
 
-                            if err_msg:
-                                return None, None, f"Rendering aborted: {err_msg}"
-                            return None, None, "Rendering aborted."
+                        if isinstance(err, dict) and err.get("type") == "provider_content_policy":
+                            txt = "Rendering aborted: Rejected by the model provider due to content policy."
+                            if bool(err.get("credits_refunded")):
+                                txt += " Credits were refunded by the provider."
+                            return None, None, txt
 
-                        if status == "completed":
-                            candidate_urls = []
-                            if isinstance(queue_download_url, str) and queue_download_url.startswith("http"):
-                                candidate_urls.append(queue_download_url)
+                        if err_msg:
+                            return None, None, f"Rendering aborted: {err_msg}"
+                        return None, None, "Rendering aborted."
 
-                            candidate_urls.extend(self._extract_urls_from_payload(data))
-                            candidate_urls = list(dict.fromkeys(candidate_urls))
+                    if status == "completed":
+                        candidate_urls = []
+                        if isinstance(queue_download_url, str) and queue_download_url.startswith("http"):
+                            candidate_urls.append(queue_download_url)
 
-                            for media_url in candidate_urls:
-                                media_data, media_type = await self._fetch_media_from_url(media_url, headers)
-                                if media_data:
-                                    return media_data, media_type, None
+                        candidate_urls.extend(self._extract_urls_from_payload(data))
+                        candidate_urls = list(dict.fromkeys(candidate_urls))
 
-                            finalize_attempts += 1
-                            with contextlib.suppress(Exception):
-                                await progress_message.edit(
-                                    embed=self._build_progress_embed(
-                                        user=user,
-                                        prompt=prompt,
-                                        seconds=seconds,
-                                        aspect=aspect,
-                                        model=model,
-                                        percent=max(last_percent, 98),
-                                        elapsed_sec=max(elapsed // 1000, 0),
-                                        eta_sec=None,
-                                        stage_text="Finalizing file delivery..."
-                                    )
-                                )
+                        for media_url in candidate_urls:
+                            media_data, media_type = await self._fetch_media_from_url(
+                                session=session,
+                                url=media_url,
+                                headers=headers
+                            )
+                            if media_data:
+                                return media_data, media_type, None
 
-                            if finalize_attempts >= 40:
-                                return None, None, "Rendering finished, but the file could not be delivered."
-                            continue
+                        finalize_attempts += 1
+                        await self._safe_edit_progress(
+                            progress_message,
+                            self._build_progress_embed(
+                                user=user,
+                                prompt=prompt,
+                                seconds=seconds,
+                                aspect=aspect,
+                                model=model,
+                                percent=max(last_percent, 98),
+                                elapsed_sec=max(elapsed // 1000, 0),
+                                eta_sec=None,
+                                stage_text="Finalizing file delivery..."
+                            )
+                        )
 
-                        target_ms = self._estimate_target_time_ms(model_key, seconds, avg)
-                        percent = self._calculate_percent(elapsed, target_ms, last_percent)
+                        if finalize_attempts >= 40:
+                            return None, None, "Rendering finished, but the file could not be delivered."
+                        continue
 
-                        if percent != last_percent:
-                            last_percent = percent
-                            eta_sec = max((target_ms - elapsed) // 1000, 0)
+                    # processing progress
+                    target_ms = self._estimate_target_time_ms(model_key, seconds, avg)
+                    percent = self._calculate_percent(elapsed, target_ms, last_percent)
 
-                            with contextlib.suppress(Exception):
-                                await progress_message.edit(
-                                    embed=self._build_progress_embed(
-                                        user=user,
-                                        prompt=prompt,
-                                        seconds=seconds,
-                                        aspect=aspect,
-                                        model=model,
-                                        percent=percent,
-                                        elapsed_sec=max(elapsed // 1000, 0),
-                                        eta_sec=eta_sec,
-                                        stage_text="Rendering..."
-                                    )
-                                )
+                    if percent != last_percent:
+                        last_percent = percent
+                        eta_sec = max((target_ms - elapsed) // 1000, 0)
 
-                except asyncio.TimeoutError as e:
-                    print("STATUS LOOP TIMEOUT:", repr(e))
-                    continue
-                except Exception as e:
-                    print("STATUS LOOP ERROR:", repr(e))
-                    continue
+                        await self._safe_edit_progress(
+                            progress_message,
+                            self._build_progress_embed(
+                                user=user,
+                                prompt=prompt,
+                                seconds=seconds,
+                                aspect=aspect,
+                                model=model,
+                                percent=percent,
+                                elapsed_sec=max(elapsed // 1000, 0),
+                                eta_sec=eta_sec,
+                                stage_text="Rendering..."
+                            )
+                        )
+
+            except asyncio.TimeoutError as e:
+                print("STATUS LOOP TIMEOUT:", repr(e))
+                continue
+            except Exception as e:
+                print("STATUS LOOP ERROR:", repr(e))
+                continue
 
         return None, None, "Generation failed or timed out."
 
@@ -1404,6 +1469,7 @@ class VideoCog(commands.Cog):
     ):
         interaction = self.active_interactions.get(user.id)
 
+        # Failure flow (no media)
         if not media_data:
             await self._safe_delete_progress_message(progress_message)
 
@@ -1417,7 +1483,8 @@ class VideoCog(commands.Cog):
                 reason=reason
             )
 
-            await channel.send(embed=error_embed)
+            with contextlib.suppress(Exception):
+                await channel.send(embed=error_embed)
 
             if interaction:
                 quota = await self._quota_summary(user)
@@ -1426,8 +1493,47 @@ class VideoCog(commands.Cog):
                         f"❌ {reason}\n\n{quota}",
                         ephemeral=True
                     )
+            else:
+                quota = await self._quota_summary(user)
+                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
             return
 
+        # Pre-check Discord upload limit (avoid 413 where possible)
+        guild_limit = None
+        if getattr(channel, "guild", None):
+            guild_limit = getattr(channel.guild, "filesize_limit", None)
+
+        if guild_limit and len(media_data) > guild_limit:
+            await self._safe_delete_progress_message(progress_message)
+
+            size_mb = len(media_data) / (1024 * 1024)
+            limit_mb = guild_limit / (1024 * 1024)
+            reason = (
+                "Render completed, but the output file is too large for this server's Discord upload limit. "
+                f"File: {size_mb:.2f} MB • Limit: {limit_mb:.2f} MB"
+            )
+
+            fail_embed = self._build_error_embed(
+                user=user,
+                prompt=prompt,
+                seconds=seconds,
+                aspect=aspect,
+                model=model,
+                reason=reason
+            )
+
+            with contextlib.suppress(Exception):
+                await channel.send(embed=fail_embed)
+
+            quota = await self._quota_summary(user)
+            if interaction:
+                with contextlib.suppress(Exception):
+                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
+            else:
+                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
+            return
+
+        # Success candidate
         is_video = (media_type == "video")
         filename = "AI_video.mp4" if is_video else "AI_image.png"
         file = discord.File(io.BytesIO(media_data), filename=filename)
@@ -1446,7 +1552,13 @@ class VideoCog(commands.Cog):
 
         try:
             await channel.send(embed=result_embed, file=file)
-            await self.save_usage(user, seconds)  # deduct ONLY on successful Discord post
+
+            # Deduct only AFTER successful Discord post
+            try:
+                await self.save_usage(user, seconds)
+            except Exception as db_err:
+                print("USAGE SAVE ERROR:", repr(db_err))
+
         except discord.HTTPException as e:
             print("RESULT SEND ERROR:", repr(e))
             await self._safe_delete_progress_message(progress_message)
@@ -1464,22 +1576,23 @@ class VideoCog(commands.Cog):
                 model=model,
                 reason=reason
             )
+
             with contextlib.suppress(Exception):
                 await channel.send(embed=fail_embed)
 
+            quota = await self._quota_summary(user)
             if interaction:
-                quota = await self._quota_summary(user)
                 with contextlib.suppress(Exception):
-                    await interaction.followup.send(
-                        f"❌ {reason}\n\n{quota}",
-                        ephemeral=True
-                    )
+                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
+            else:
+                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
             return
+
         except Exception as e:
             print("RESULT SEND ERROR:", repr(e))
             await self._safe_delete_progress_message(progress_message)
-            reason = "Render output could not be posted to Discord."
 
+            reason = "Render output could not be posted to Discord."
             fail_embed = self._build_error_embed(
                 user=user,
                 prompt=prompt,
@@ -1488,27 +1601,26 @@ class VideoCog(commands.Cog):
                 model=model,
                 reason=reason
             )
+
             with contextlib.suppress(Exception):
                 await channel.send(embed=fail_embed)
 
+            quota = await self._quota_summary(user)
             if interaction:
-                quota = await self._quota_summary(user)
                 with contextlib.suppress(Exception):
-                    await interaction.followup.send(
-                        f"❌ {reason}\n\n{quota}",
-                        ephemeral=True
-                    )
+                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
+            else:
+                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
             return
 
         await self._safe_delete_progress_message(progress_message)
 
+        quota = await self._quota_summary(user)
         if interaction:
-            quota = await self._quota_summary(user)
             with contextlib.suppress(Exception):
-                await interaction.followup.send(
-                    f"✅ Completed!\n\n{quota}",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"✅ Completed!\n\n{quota}", ephemeral=True)
+        else:
+            await self._safe_followup_for_user(user, f"✅ Completed!\n\n{quota}")
 
     # -------------------------------------------------
     # READY
