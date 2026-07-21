@@ -33,7 +33,9 @@ CONTROL_MESSAGE_TEXT = "🎬 **AI Video Generator**\nChoose your model:"
 GENERATOR_SELECT_CUSTOM_ID = "video_model_select"
 CONTROL_LOOKBACK_LIMIT = 20
 
-PROMPT_PREVIEW_LIMIT = 500
+PROMPT_PREVIEW_PROGRESS = 420
+PROMPT_PREVIEW_RESULT = 900
+REASON_PREVIEW_LIMIT = 450
 
 
 # =====================================================
@@ -125,7 +127,8 @@ def utc_now():
 def format_reset(dt):
     if not dt:
         return "unknown"
-    return dt.strftime("%d.%m.%Y %H:%M UTC")
+    ts = int(dt.timestamp())
+    return f"<t:{ts}:f> • <t:{ts}:R>"
 
 
 def safe_int(value, default=0):
@@ -135,11 +138,11 @@ def safe_int(value, default=0):
         return default
 
 
-def trim_prompt(text: str, limit: int = PROMPT_PREVIEW_LIMIT) -> str:
+def trim_text(text: str, limit: int) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
         return text
-    return text[:limit] + "[...]"
+    return text[:limit] + " [...]"
 
 
 def codeblock_safe(text: str) -> str:
@@ -156,6 +159,12 @@ def detect_media_type(binary: bytes):
     if len(binary) >= 12 and binary[4:8] == b"ftyp":
         return "video"
     return None
+
+
+def build_bar(percent: int, blocks: int = 14) -> str:
+    p = max(0, min(100, percent))
+    filled = int(blocks * p / 100)
+    return "█" * filled + "░" * (blocks - filled)
 
 
 # =====================================================
@@ -350,8 +359,8 @@ class DurationView(ui.View):
         if remaining < seconds:
             await interaction.response.send_message(
                 f"❌ Not enough render time.\n\n"
-                f"⏳ Remaining: **{remaining}s**\n"
-                f"🔄 Reset: **{format_reset(reset)}**",
+                f"Remaining: **{remaining}s**\n"
+                f"Reset: **{format_reset(reset)}**",
                 ephemeral=True
             )
             return
@@ -396,7 +405,7 @@ class AspectView(ui.View):
             child.disabled = True
 
         await interaction.response.edit_message(
-            content=f"⏳ Starting with aspect `{aspect}`...",
+            content=f"⏳ Starting render with aspect `{aspect}`...",
             view=self
         )
 
@@ -477,6 +486,16 @@ class VideoCog(commands.Cog):
                 highest = ROLE_LIMITS[role.id]
                 name = role.name
         return name, highest
+
+    async def _quota_summary(self, user):
+        remaining, reset = await self.get_usage_info(user)
+        tier_name, tier_limit = self.get_user_tier(user)
+        return (
+            f"Tier: **{tier_name}**\n"
+            f"Daily limit: **{tier_limit}s**\n"
+            f"Remaining: **{remaining}s**\n"
+            f"Reset: **{format_reset(reset)}**"
+        )
 
     # -------------------------------------------------
     # USAGE DB
@@ -631,41 +650,8 @@ class VideoCog(commands.Cog):
         return False
 
     # -------------------------------------------------
-    # PROGRESS
+    # EMBEDS
     # -------------------------------------------------
-
-    def _estimate_target_time_ms(self, model_key, seconds, avg_ms):
-        base = BASE_TARGET_MS.get(seconds, 160000)
-        avg = safe_int(avg_ms, base)
-
-        blended = int(base * 0.35 + avg * 0.65)
-        blended = max(base, blended)
-
-        duration_factor = DURATION_FACTOR.get(seconds, 1.0)
-        model_factor = MODEL_TIME_FACTOR.get(model_key, 1.0)
-
-        target = int(blended * duration_factor * model_factor)
-        return max(target, 35000)
-
-    def _calculate_percent(self, elapsed_ms, target_ms, last_percent):
-        raw = elapsed_ms / max(target_ms, 1)
-
-        if raw < 0.25:
-            smoothed = 0.05 + raw * 0.45
-        elif raw < 0.85:
-            smoothed = 0.16 + (raw - 0.25) * 1.20
-        else:
-            smoothed = 0.88 + (raw - 0.85) * 0.50
-
-        percent = int(min(max(smoothed * 100, 5), 97))
-
-        if elapsed_ms > 12000 and percent < 7:
-            percent = 7
-
-        if percent < last_percent:
-            percent = last_percent
-
-        return percent
 
     def _build_progress_embed(
         self,
@@ -679,49 +665,109 @@ class VideoCog(commands.Cog):
         eta_sec,
         stage_text="Rendering..."
     ):
-        blocks = 20
-        filled = int(blocks * percent / 100)
-        bar = "█" * filled + "░" * (blocks - filled)
+        prompt_preview = codeblock_safe(trim_text(prompt, PROMPT_PREVIEW_PROGRESS))
+        bar = build_bar(percent, blocks=14)
+        eta_text = f"{eta_sec}s" if eta_sec is not None else "calculating..."
 
-        prompt_preview = codeblock_safe(trim_prompt(prompt, PROMPT_PREVIEW_LIMIT))
-        eta_text = f"~{eta_sec}s" if eta_sec is not None else "calculating..."
-
-        return discord.Embed(
-            title="🎬 Rendering",
-            description=(
-                f"👤 {user.mention}\n"
-                f"📝 **Prompt**\n```{prompt_preview}```\n"
-                f"```{bar} {percent}%```\n"
-                f"⏱ Elapsed: {elapsed_sec}s • ETA: {eta_text}\n"
-                f"📡 {stage_text}\n"
-                f"⚙️ `{aspect}` • `{seconds}s` • `{model['name']}` • `{model['resolution']}`"
-            ),
+        embed = discord.Embed(
+            title="🎬 AI Video Render",
+            color=discord.Color.blurple(),
             timestamp=utc_now()
         )
+        embed.description = f"{user.mention} • `{model['name']}`"
 
-    async def _animate_queue_wait(self, progress_message, user, prompt, seconds, aspect, model):
-        frames = [
-            "Sending queue request.",
-            "Sending queue request..",
-            "Sending queue request..."
-        ]
-        i = 0
-        while True:
-            await progress_message.edit(
-                embed=self._build_progress_embed(
-                    user=user,
-                    prompt=prompt,
-                    seconds=seconds,
-                    aspect=aspect,
-                    model=model,
-                    percent=5,
-                    elapsed_sec=0,
-                    eta_sec=None,
-                    stage_text=frames[i % len(frames)]
-                )
-            )
-            i += 1
-            await asyncio.sleep(1.2)
+        embed.add_field(
+            name="Prompt (copyable)",
+            value=f"```{prompt_preview}```",
+            inline=False
+        )
+        embed.add_field(
+            name="Progress",
+            value=f"`{bar} {percent}%`",
+            inline=False
+        )
+        embed.add_field(
+            name="Settings",
+            value=(
+                f"• Aspect: `{aspect}`\n"
+                f"• Duration: `{seconds}s`\n"
+                f"• Resolution: `{model['resolution']}`"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Timing",
+            value=(
+                f"• Elapsed: `{elapsed_sec}s`\n"
+                f"• ETA: `{eta_text}`\n"
+                f"• Status: {stage_text}"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="AI Video Generator")
+        return embed
+
+    def _build_error_embed(self, user, prompt, seconds, aspect, model, reason):
+        prompt_preview = codeblock_safe(trim_text(prompt, PROMPT_PREVIEW_PROGRESS))
+        reason_text = trim_text(reason or "Generation failed.", REASON_PREVIEW_LIMIT)
+
+        embed = discord.Embed(
+            title="❌ Render Failed",
+            description=f"{user.mention} your request could not be completed.",
+            color=discord.Color.red(),
+            timestamp=utc_now()
+        )
+        embed.add_field(
+            name="Reason",
+            value=reason_text,
+            inline=False
+        )
+        embed.add_field(
+            name="Prompt (copyable)",
+            value=f"```{prompt_preview}```",
+            inline=False
+        )
+        embed.add_field(
+            name="Settings",
+            value=(
+                f"• Model: `{model['name']}`\n"
+                f"• Aspect: `{aspect}`\n"
+                f"• Duration: `{seconds}s`\n"
+                f"• Resolution: `{model['resolution']}`"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="No time was deducted for failed renders.")
+        return embed
+
+    def _build_result_embed(self, user, prompt, seconds, aspect, model, is_video):
+        prompt_preview = codeblock_safe(trim_text(prompt, PROMPT_PREVIEW_RESULT))
+        title = "✅ Video Ready" if is_video else "✅ Image Ready"
+        color = discord.Color.green() if is_video else discord.Color.teal()
+
+        embed = discord.Embed(
+            title=title,
+            description=f"{user.mention} your render is complete.",
+            color=color,
+            timestamp=utc_now()
+        )
+        embed.add_field(
+            name="Prompt (copyable)",
+            value=f"```{prompt_preview}```",
+            inline=False
+        )
+        embed.add_field(
+            name="Settings",
+            value=(
+                f"• Model: `{model['name']}`\n"
+                f"• Aspect: `{aspect}`\n"
+                f"• Duration: `{seconds}s`\n"
+                f"• Resolution: `{model['resolution']}`"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="AI Video Generator")
+        return embed
 
     # -------------------------------------------------
     # API HELPERS
@@ -783,22 +829,22 @@ class VideoCog(commands.Cog):
             msg = (raw_text or "").strip()[:300] or None
 
         if status_code == 422 and err_type == "provider_content_policy":
-            text = "❌ Rendering abgebrochen: Vom Modellanbieter wegen Content-Policy abgelehnt."
+            text = "Rendering aborted: Rejected by the model provider due to content policy."
             if credits_refunded:
-                text += " Credits wurden erstattet."
+                text += " Credits were refunded by the provider."
             return text, True
 
         if status_code in (401, 403):
-            return "❌ API-Fehler: Authentifizierung fehlgeschlagen (401/403).", True
+            return "API authentication failed (401/403).", True
 
         if status_code == 429:
-            return "⏳ API Rate Limit (429), versuche weiter...", False
+            return "Rate limited by provider (429). Retrying...", False
 
         if 500 <= status_code <= 599:
-            return "⏳ Provider-Fehler, versuche weiter...", False
+            return "Provider server error. Retrying...", False
 
         if 400 <= status_code <= 499:
-            return f"❌ Rendering abgebrochen ({status_code}): {msg or 'Ungültige Anfrage.'}", True
+            return f"Rendering aborted ({status_code}): {msg or 'Invalid request.'}", True
 
         return None, False
 
@@ -856,6 +902,7 @@ class VideoCog(commands.Cog):
 
     async def _queue_generation(self, payload, headers):
         timeout = aiohttp.ClientTimeout(total=35, connect=10, sock_read=30)
+        last_error = None
 
         for attempt in range(3):
             try:
@@ -872,22 +919,30 @@ class VideoCog(commands.Cog):
                             data = {"raw": text}
 
                         if response.status >= 400:
-                            print("QUEUE ERROR:", response.status, data)
-                            await asyncio.sleep(1.5 * (attempt + 1))
+                            user_error, hard_fail = self._parse_api_error(response.status, text)
+                            last_error = user_error or f"Queue error ({response.status})."
+                            print("QUEUE ERROR:", response.status, text[:300])
+
+                            if hard_fail:
+                                return None, data, last_error
+
+                            await asyncio.sleep(1.4 * (attempt + 1))
                             continue
 
                         queue_id = self._extract_queue_id(data)
                         if queue_id:
-                            return queue_id, data
+                            return queue_id, data, None
 
+                        last_error = "Queue response did not include queue_id."
                         print("QUEUE NO ID:", data)
                         await asyncio.sleep(1.2 * (attempt + 1))
 
             except Exception as e:
+                last_error = f"Queue request failed: {repr(e)}"
                 print("QUEUE REQUEST ERROR:", repr(e))
                 await asyncio.sleep(1.2 * (attempt + 1))
 
-        return None, None
+        return None, None, (last_error or "Queue creation failed. Please try again.")
 
     # -------------------------------------------------
     # MAIN FLOW
@@ -936,8 +991,8 @@ class VideoCog(commands.Cog):
                 if remaining < seconds:
                     await interaction.followup.send(
                         f"❌ Not enough render time.\n\n"
-                        f"⏳ Remaining: **{remaining}s**\n"
-                        f"🔄 Reset: **{format_reset(reset)}**",
+                        f"Remaining: **{remaining}s**\n"
+                        f"Reset: **{format_reset(reset)}**",
                         ephemeral=True
                     )
                     return
@@ -989,7 +1044,7 @@ class VideoCog(commands.Cog):
                 )
 
                 print("GEN REQUEST:", payload)
-                queue_id, queue_response = await self._queue_generation(payload, headers)
+                queue_id, queue_response, queue_error = await self._queue_generation(payload, headers)
                 print("GEN QUEUE RESPONSE:", queue_response)
 
                 if queue_anim_task:
@@ -999,13 +1054,20 @@ class VideoCog(commands.Cog):
                     queue_anim_task = None
 
                 if not queue_id:
-                    if progress_message:
-                        with contextlib.suppress(Exception):
-                            await progress_message.delete()
-                    await interaction.followup.send("❌ Queue creation failed. Try again.", ephemeral=True)
+                    await self.post_result(
+                        channel=channel,
+                        user=user,
+                        prompt=prompt,
+                        seconds=seconds,
+                        aspect=aspect,
+                        model=model,
+                        media_data=None,
+                        media_type=None,
+                        progress_message=progress_message,
+                        error_message=queue_error or "Queue creation failed. Please try again."
+                    )
                     return
 
-                await self.save_usage(user, seconds)
                 self.add_active_job(user, queue_id)
 
                 if progress_message:
@@ -1070,9 +1132,66 @@ class VideoCog(commands.Cog):
                 await self.refresh_button(force=True)
                 await self._unmark_user_starting(user.id)
 
+    async def _animate_queue_wait(self, progress_message, user, prompt, seconds, aspect, model):
+        frames = [
+            "Sending queue request.",
+            "Sending queue request..",
+            "Sending queue request..."
+        ]
+        i = 0
+        while True:
+            await progress_message.edit(
+                embed=self._build_progress_embed(
+                    user=user,
+                    prompt=prompt,
+                    seconds=seconds,
+                    aspect=aspect,
+                    model=model,
+                    percent=5,
+                    elapsed_sec=0,
+                    eta_sec=None,
+                    stage_text=frames[i % len(frames)]
+                )
+            )
+            i += 1
+            await asyncio.sleep(1.2)
+
     # -------------------------------------------------
     # STATUS LOOP
     # -------------------------------------------------
+
+    def _estimate_target_time_ms(self, model_key, seconds, avg_ms):
+        base = BASE_TARGET_MS.get(seconds, 160000)
+        avg = safe_int(avg_ms, base)
+
+        blended = int(base * 0.35 + avg * 0.65)
+        blended = max(base, blended)
+
+        duration_factor = DURATION_FACTOR.get(seconds, 1.0)
+        model_factor = MODEL_TIME_FACTOR.get(model_key, 1.0)
+
+        target = int(blended * duration_factor * model_factor)
+        return max(target, 35000)
+
+    def _calculate_percent(self, elapsed_ms, target_ms, last_percent):
+        raw = elapsed_ms / max(target_ms, 1)
+
+        if raw < 0.25:
+            smoothed = 0.05 + raw * 0.45
+        elif raw < 0.85:
+            smoothed = 0.16 + (raw - 0.25) * 1.20
+        else:
+            smoothed = 0.88 + (raw - 0.85) * 0.50
+
+        percent = int(min(max(smoothed * 100, 5), 97))
+
+        if elapsed_ms > 12000 and percent < 7:
+            percent = 7
+
+        if percent < last_percent:
+            percent = last_percent
+
+        return percent
 
     async def wait_for_result(
         self,
@@ -1118,7 +1237,7 @@ class VideoCog(commands.Cog):
                             print("RETRIEVE HTTP ERROR:", response.status, body_text[:300])
 
                             if hard_fail:
-                                return None, None, (user_error or "❌ Rendering fehlgeschlagen.")
+                                return None, None, (user_error or "Rendering failed.")
                             continue
 
                         # Direct media body
@@ -1145,6 +1264,15 @@ class VideoCog(commands.Cog):
 
                         print("GEN STATUS:", data)
 
+                        # Sometimes provider responds with error JSON but HTTP 200
+                        if isinstance(data.get("error"), dict):
+                            err = data["error"]
+                            if err.get("type") == "provider_content_policy":
+                                txt = "Rendering aborted: Rejected by the model provider due to content policy."
+                                if bool(err.get("credits_refunded")):
+                                    txt += " Credits were refunded by the provider."
+                                return None, None, txt
+
                         status = str(data.get("status", "")).lower()
                         avg = safe_int(data.get("average_execution_time", 180000), 180000)
                         elapsed = safe_int(data.get("execution_duration", 0), 0)
@@ -1168,14 +1296,14 @@ class VideoCog(commands.Cog):
                                 err_msg = data.get("message")
 
                             if isinstance(err, dict) and err.get("type") == "provider_content_policy":
-                                txt = "❌ Rendering abgebrochen: Vom Modellanbieter wegen Content-Policy abgelehnt."
+                                txt = "Rendering aborted: Rejected by the model provider due to content policy."
                                 if bool(err.get("credits_refunded")):
-                                    txt += " Credits wurden erstattet."
+                                    txt += " Credits were refunded by the provider."
                                 return None, None, txt
 
                             if err_msg:
-                                return None, None, f"❌ Rendering abgebrochen: {err_msg}"
-                            return None, None, "❌ Rendering abgebrochen."
+                                return None, None, f"Rendering aborted: {err_msg}"
+                            return None, None, "Rendering aborted."
 
                         if status == "completed":
                             candidate_urls = []
@@ -1208,10 +1336,10 @@ class VideoCog(commands.Cog):
                                     )
 
                             if finalize_attempts >= 40:
-                                return None, None, "❌ Rendering war fertig, aber Datei konnte nicht geliefert werden."
+                                return None, None, "Rendering finished, but the file could not be delivered."
                             continue
 
-                        # Normal processing progress update
+                        # Processing progress update
                         target_ms = self._estimate_target_time_ms(model_key, seconds, avg)
                         percent = self._calculate_percent(elapsed, target_ms, last_percent)
 
@@ -1242,7 +1370,7 @@ class VideoCog(commands.Cog):
                     print("STATUS LOOP ERROR:", repr(e))
                     continue
 
-        return None, None, "❌ Generation fehlgeschlagen oder Timeout."
+        return None, None, "Generation failed or timed out."
 
     # -------------------------------------------------
     # FINAL POST
@@ -1261,64 +1389,85 @@ class VideoCog(commands.Cog):
         progress_message,
         error_message=None
     ):
+        interaction = self.active_interactions.get(user.id)
+
         if not media_data:
             if progress_message:
                 with contextlib.suppress(Exception):
                     await progress_message.delete()
 
-            msg = error_message or "❌ Generation failed or timed out."
-            await channel.send(f"{user.mention} {msg}")
+            reason = error_message or "Generation failed or timed out."
+            error_embed = self._build_error_embed(
+                user=user,
+                prompt=prompt,
+                seconds=seconds,
+                aspect=aspect,
+                model=model,
+                reason=reason
+            )
 
-            interaction = self.active_interactions.get(user.id)
+            await channel.send(embed=error_embed)
+
             if interaction:
+                quota = await self._quota_summary(user)
                 with contextlib.suppress(Exception):
-                    await interaction.followup.send(msg, ephemeral=True)
+                    await interaction.followup.send(
+                        f"❌ {reason}\n\n{quota}",
+                        ephemeral=True
+                    )
             return
 
         is_video = (media_type == "video")
         filename = "AI_video.mp4" if is_video else "AI_image.png"
         file = discord.File(io.BytesIO(media_data), filename=filename)
 
-        prompt_preview = codeblock_safe(trim_prompt(prompt, PROMPT_PREVIEW_LIMIT))
-        settings_line = f"`{aspect}` • `{seconds}s` • `{model['name']}` • `{model['resolution']}`"
-        title_emoji = "🎬" if is_video else "🖼️"
-
-        embed = discord.Embed(
-            title=f"{title_emoji} {user.display_name}",
-            description=(
-                f"📝 **Prompt**\n```{prompt_preview}```\n"
-                f"⚙️ **Settings**\n{settings_line}"
-            ),
-            timestamp=utc_now()
-        )
-
-        icon = channel.guild.icon.url if channel.guild and channel.guild.icon else None
-        embed.set_footer(
-            text=f"{model['resolution']} • AI Generator",
-            icon_url=icon
+        result_embed = self._build_result_embed(
+            user=user,
+            prompt=prompt,
+            seconds=seconds,
+            aspect=aspect,
+            model=model,
+            is_video=is_video
         )
 
         if not is_video:
-            embed.set_image(url=f"attachment://{filename}")
+            result_embed.set_image(url=f"attachment://{filename}")
 
-        await channel.send(embed=embed, file=file)
+        # Charge usage ONLY after successful output post
+        try:
+            await channel.send(embed=result_embed, file=file)
+            await self.save_usage(user, seconds)
+        except Exception as e:
+            print("RESULT SEND ERROR:", repr(e))
+            fail_embed = self._build_error_embed(
+                user=user,
+                prompt=prompt,
+                seconds=seconds,
+                aspect=aspect,
+                model=model,
+                reason="Render output could not be posted."
+            )
+            with contextlib.suppress(Exception):
+                await channel.send(embed=fail_embed)
+
+            if interaction:
+                quota = await self._quota_summary(user)
+                with contextlib.suppress(Exception):
+                    await interaction.followup.send(
+                        f"❌ Render output could not be posted.\n\n{quota}",
+                        ephemeral=True
+                    )
+            return
 
         if progress_message:
             with contextlib.suppress(Exception):
                 await progress_message.delete()
 
-        remaining, reset = await self.get_usage_info(user)
-        tier_name, tier_limit = self.get_user_tier(user)
-
-        interaction = self.active_interactions.get(user.id)
         if interaction:
+            quota = await self._quota_summary(user)
             with contextlib.suppress(Exception):
                 await interaction.followup.send(
-                    f"✅ Completed!\n\n"
-                    f"🏆 Tier: **{tier_name}**\n"
-                    f"⏳ Daily limit: **{tier_limit}s**\n\n"
-                    f"🎬 Remaining: **{remaining}s**\n"
-                    f"🔄 Reset: **{format_reset(reset)}**",
+                    f"✅ Completed!\n\n{quota}",
                     ephemeral=True
                 )
 
