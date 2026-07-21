@@ -37,16 +37,12 @@ PROMPT_PREVIEW_PROGRESS = 420
 PROMPT_PREVIEW_RESULT = 900
 REASON_PREVIEW_LIMIT = 450
 
-# Global concurrency (set to >1 only if provider + bot flow are tested for it)
-MAX_CONCURRENT_RENDERS = 1
-
 
 # =====================================================
 # ROLES / DAILY LIMITS
 # =====================================================
 
 ROLE_LIMITS = {
-    1347956062837407744: 15,
     1377051179615522926: 15,   # Tier 1
     1375147276413964408: 25,   # Tier 2
     1376592697606930593: 35,   # Tier 3
@@ -234,7 +230,7 @@ class VideoDatabase:
 # =====================================================
 
 class ModelSelect(ui.Select):
-    def __init__(self, cog):
+    def __init__(self, cog, disabled=False):
         self.cog = cog
         options = []
 
@@ -252,10 +248,18 @@ class ModelSelect(ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id=GENERATOR_SELECT_CUSTOM_ID
+            custom_id=GENERATOR_SELECT_CUSTOM_ID,
+            disabled=disabled
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if self.cog.is_global_busy():
+            await interaction.response.send_message(
+                "⏳ A render is currently running. Please wait until it finishes.",
+                ephemeral=True
+            )
+            return
+
         limit = self.cog.get_user_limit(interaction.user)
         if limit <= 0:
             await interaction.response.send_message(
@@ -269,9 +273,9 @@ class ModelSelect(ui.Select):
 
 
 class ModelPickerView(ui.View):
-    def __init__(self, cog):
+    def __init__(self, cog, disabled=False):
         super().__init__(timeout=None)
-        self.add_item(ModelSelect(cog))
+        self.add_item(ModelSelect(cog, disabled=disabled))
 
 
 # =====================================================
@@ -294,14 +298,35 @@ class PromptModal(ui.Modal):
         self.add_item(self.prompt)
 
     async def on_submit(self, interaction: discord.Interaction):
+        if self.cog.is_global_busy():
+            await interaction.response.send_message(
+                "⏳ A render is currently running. Please wait until it finishes.",
+                ephemeral=True
+            )
+            return
+
+        remaining, reset = await self.cog.get_usage_info(interaction.user)
+        view = DurationView(
+            self.cog,
+            interaction.user,
+            self.prompt.value,
+            self.model_key,
+            remaining_seconds=remaining
+        )
+
+        if not view.allowed_seconds:
+            await interaction.response.send_message(
+                f"❌ Not enough render time.\n\n"
+                f"Remaining: **{remaining}s**\n"
+                f"Reset: **{format_reset(reset)}**",
+                ephemeral=True
+            )
+            await self.cog.refresh_button(force=True, disabled=self.cog.is_global_busy())
+            return
+
         await interaction.response.send_message(
             "⏱ Choose video length:",
-            view=DurationView(
-                self.cog,
-                interaction.user,
-                self.prompt.value,
-                self.model_key
-            ),
+            view=view,
             ephemeral=True
         )
 
@@ -330,21 +355,23 @@ class DurationButton(ui.Button):
 
 
 class DurationView(ui.View):
-    def __init__(self, cog, user, prompt, model_key):
+    def __init__(self, cog, user, prompt, model_key, remaining_seconds: int):
         super().__init__(timeout=120)
         self.cog = cog
         self.user = user
         self.prompt = prompt
         self.model_key = model_key
+        self.remaining_seconds = max(0, safe_int(remaining_seconds, 0))
 
         model = VIDEO_MODELS.get(model_key, VIDEO_MODELS[DEFAULT_MODEL])
         max_seconds = safe_int(model.get("max_seconds", 15), 15)
-        allowed = [s for s in (5, 10, 15) if s <= max_seconds]
 
-        if not allowed:
+        self.allowed_seconds = [s for s in (5, 10, 15) if s <= max_seconds and s <= self.remaining_seconds]
+
+        if not self.allowed_seconds:
             self.add_item(ui.Button(label="No valid duration", disabled=True, style=discord.ButtonStyle.gray))
         else:
-            for sec in allowed:
+            for sec in self.allowed_seconds:
                 self.add_item(DurationButton(sec))
 
     async def interaction_check(self, interaction):
@@ -357,35 +384,51 @@ class DurationView(ui.View):
         return True
 
     async def choose(self, interaction, seconds):
-        model = VIDEO_MODELS.get(self.model_key, VIDEO_MODELS[DEFAULT_MODEL])
-
-        if seconds > safe_int(model.get("max_seconds", 15), 15):
-            await interaction.response.send_message(
-                f"❌ This model supports max **{model.get('max_seconds', 15)}s**.",
-                ephemeral=True
+        if self.cog.is_global_busy():
+            await interaction.response.edit_message(
+                content="⏳ A render is currently running. Please wait until it finishes.",
+                view=None
             )
             return
+
+        model = VIDEO_MODELS.get(self.model_key, VIDEO_MODELS[DEFAULT_MODEL])
+        max_seconds = safe_int(model.get("max_seconds", 15), 15)
 
         remaining, reset = await self.cog.get_usage_info(self.user)
-        if remaining < seconds:
-            await interaction.response.send_message(
-                f"❌ Not enough render time.\n\n"
-                f"Remaining: **{remaining}s**\n"
-                f"Reset: **{format_reset(reset)}**",
-                ephemeral=True
-            )
+        allowed_now = [s for s in (5, 10, 15) if s <= max_seconds and s <= remaining]
+
+        if seconds not in allowed_now:
+            if allowed_now:
+                await interaction.response.edit_message(
+                    content=(
+                        f"❌ Not enough time for **{seconds}s**.\n"
+                        f"You currently have **{remaining}s** left.\n\n"
+                        f"Choose an available duration:"
+                    ),
+                    view=DurationView(
+                        self.cog,
+                        self.user,
+                        self.prompt,
+                        self.model_key,
+                        remaining_seconds=remaining
+                    )
+                )
+            else:
+                await interaction.response.edit_message(
+                    content=(
+                        f"❌ Not enough render time.\n\n"
+                        f"Remaining: **{remaining}s**\n"
+                        f"Reset: **{format_reset(reset)}**"
+                    ),
+                    view=None
+                )
+
+            await self.cog.refresh_button(force=True, disabled=self.cog.is_global_busy())
             return
 
-        await interaction.response.send_message(
-            "📐 Choose aspect ratio:",
-            view=AspectView(
-                self.cog,
-                self.user,
-                self.prompt,
-                seconds,
-                self.model_key
-            ),
-            ephemeral=True
+        await interaction.response.edit_message(
+            content="📐 Choose aspect ratio:",
+            view=AspectView(self.cog, self.user, self.prompt, seconds, self.model_key)
         )
 
 
@@ -412,6 +455,13 @@ class AspectView(ui.View):
         return True
 
     async def start(self, interaction, aspect):
+        if self.cog.is_global_busy():
+            await interaction.response.edit_message(
+                content="⏳ A render is currently running. Please wait until it finishes.",
+                view=None
+            )
+            return
+
         for child in self.children:
             child.disabled = True
 
@@ -452,29 +502,39 @@ class VideoCog(commands.Cog):
         self.db = VideoDatabase()
 
         self.active_interactions = {}  # user_id -> interaction
-        self.render_lock = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
         self.control_lock = asyncio.Lock()
         self.starting_lock = asyncio.Lock()
         self.starting_users = set()
 
-        self.http_session = None
+        self.global_busy_lock = asyncio.Lock()
+        self.global_busy = False
+
         self.http_lock = asyncio.Lock()
+        self.http_session = None
 
         self.startup_task = None
+        self.panel_guard_task = None
 
     # -------------------------------------------------
     # LIFECYCLE
     # -------------------------------------------------
 
     async def cog_load(self):
-        self.bot.add_view(ModelPickerView(self))
+        self.bot.add_view(ModelPickerView(self, disabled=False))
         await self._ensure_http()
+
         if self.startup_task is None or self.startup_task.done():
             self.startup_task = asyncio.create_task(self.ensure_control_message_with_retry())
+
+        if self.panel_guard_task is None or self.panel_guard_task.done():
+            self.panel_guard_task = asyncio.create_task(self._panel_guard_loop())
 
     def cog_unload(self):
         if self.startup_task and not self.startup_task.done():
             self.startup_task.cancel()
+
+        if self.panel_guard_task and not self.panel_guard_task.done():
+            self.panel_guard_task.cancel()
 
         if self.http_session and not self.http_session.closed:
             self.bot.loop.create_task(self.http_session.close())
@@ -488,6 +548,41 @@ class VideoCog(commands.Cog):
         if self.http_session is None or self.http_session.closed:
             await self._ensure_http()
         return self.http_session
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print("VIDEO COG READY")
+        if self.startup_task is None or self.startup_task.done():
+            self.startup_task = asyncio.create_task(self.ensure_control_message_with_retry())
+        if self.panel_guard_task is None or self.panel_guard_task.done():
+            self.panel_guard_task = asyncio.create_task(self._panel_guard_loop())
+
+    async def _panel_guard_loop(self):
+        await self.bot.wait_until_ready()
+        while not self.bot.is_closed():
+            try:
+                await self.refresh_button(force=False, disabled=self.is_global_busy())
+            except Exception as e:
+                print("PANEL GUARD ERROR:", repr(e))
+            await asyncio.sleep(45)
+
+    # -------------------------------------------------
+    # BUSY GATE
+    # -------------------------------------------------
+
+    async def _try_begin_global_render(self) -> bool:
+        async with self.global_busy_lock:
+            if self.global_busy:
+                return False
+            self.global_busy = True
+            return True
+
+    async def _end_global_render(self):
+        async with self.global_busy_lock:
+            self.global_busy = False
+
+    def is_global_busy(self) -> bool:
+        return self.global_busy
 
     # -------------------------------------------------
     # USER STATE
@@ -507,11 +602,9 @@ class VideoCog(commands.Cog):
     async def _safe_followup_for_user(self, user, content: str):
         interaction = self.active_interactions.get(user.id)
         if interaction:
-            try:
+            with contextlib.suppress(Exception):
                 await interaction.followup.send(content, ephemeral=True)
                 return
-            except Exception as e:
-                print("FOLLOWUP ERROR:", repr(e))
 
         with contextlib.suppress(Exception):
             await user.send(content)
@@ -624,6 +717,20 @@ class VideoCog(commands.Cog):
             pass
         return ids
 
+    def _panel_disabled_state(self, msg: discord.Message):
+        try:
+            for row in (msg.components or []):
+                children = getattr(row, "children", None)
+                if not children:
+                    continue
+                for child in children:
+                    cid = getattr(child, "custom_id", None)
+                    if cid == GENERATOR_SELECT_CUSTOM_ID:
+                        return bool(getattr(child, "disabled", False))
+        except Exception:
+            pass
+        return None
+
     def _looks_like_generator_message(self, msg: discord.Message):
         if msg.author != self.bot.user:
             return False
@@ -631,14 +738,24 @@ class VideoCog(commands.Cog):
         ids = self._message_custom_ids(msg)
         return content.startswith(CONTROL_PREFIX) or (GENERATOR_SELECT_CUSTOM_ID in ids)
 
-    def _is_valid_generator_message(self, msg: discord.Message):
+    def _is_valid_generator_message(self, msg: discord.Message, disabled=None):
         if msg.author != self.bot.user:
             return False
+
         content = (msg.content or "").strip()
         ids = self._message_custom_ids(msg)
-        return content.startswith(CONTROL_PREFIX) and (GENERATOR_SELECT_CUSTOM_ID in ids)
 
-    async def refresh_button(self, force=False):
+        basic_ok = content.startswith(CONTROL_PREFIX) and (GENERATOR_SELECT_CUSTOM_ID in ids)
+        if not basic_ok:
+            return False
+
+        if disabled is None:
+            return True
+
+        msg_disabled = self._panel_disabled_state(msg)
+        return (msg_disabled is not None and msg_disabled == bool(disabled))
+
+    async def refresh_button(self, force=False, disabled=False):
         try:
             async with self.control_lock:
                 channel = await self._get_video_channel()
@@ -654,7 +771,7 @@ class VideoCog(commands.Cog):
                 messages = [m async for m in channel.history(limit=CONTROL_LOOKBACK_LIMIT)]
                 newest = messages[0] if messages else None
                 panel_messages = [m for m in messages if self._looks_like_generator_message(m)]
-                newest_is_valid = newest is not None and self._is_valid_generator_message(newest)
+                newest_is_valid = newest is not None and self._is_valid_generator_message(newest, disabled=disabled)
 
                 if newest_is_valid and not force:
                     for old_msg in panel_messages[1:]:
@@ -666,7 +783,7 @@ class VideoCog(commands.Cog):
                     with contextlib.suppress(Exception):
                         await msg.delete()
 
-                await channel.send(CONTROL_MESSAGE_TEXT, view=ModelPickerView(self))
+                await channel.send(CONTROL_MESSAGE_TEXT, view=ModelPickerView(self, disabled=disabled))
                 print("GENERATOR PANEL POSTED")
                 return True
 
@@ -674,24 +791,10 @@ class VideoCog(commands.Cog):
             print("BUTTON REFRESH ERROR:", repr(e))
             return False
 
-    async def remove_button(self):
-        try:
-            async with self.control_lock:
-                channel = await self._get_video_channel()
-                messages = [m async for m in channel.history(limit=CONTROL_LOOKBACK_LIMIT)]
-                for msg in messages:
-                    if self._looks_like_generator_message(msg):
-                        with contextlib.suppress(Exception):
-                            await msg.delete()
-            return True
-        except Exception as e:
-            print("REMOVE CONTROL ERROR:", repr(e))
-            return False
-
     async def ensure_control_message_with_retry(self):
         await self.bot.wait_until_ready()
         for attempt in range(1, 9):
-            ok = await self.refresh_button(force=False)
+            ok = await self.refresh_button(force=False, disabled=self.is_global_busy())
             if ok:
                 return True
             await asyncio.sleep(min(15, attempt * 2))
@@ -699,7 +802,7 @@ class VideoCog(commands.Cog):
         return False
 
     # -------------------------------------------------
-    # PROGRESS MESSAGE SAFETY
+    # PROGRESS SAFETY
     # -------------------------------------------------
 
     async def _safe_edit_progress(self, progress_message, embed):
@@ -1090,148 +1193,105 @@ class VideoCog(commands.Cog):
             )
             return
 
-        if self.render_lock.locked():
+        acquired = await self._try_begin_global_render()
+        if not acquired:
             await self._unmark_user_starting(user.id)
             await interaction.followup.send(
-                "⏳ A generation is currently running. Please wait.",
+                "⏳ A render is currently running. Please wait until it finishes.",
                 ephemeral=True
             )
             return
 
-        async with self.render_lock:
-            self.active_interactions[user.id] = interaction
-            progress_message = None
-            queue_anim_task = None
-            queue_id = None
+        self.active_interactions[user.id] = interaction
+        progress_message = None
+        queue_anim_task = None
+        queue_id = None
 
-            try:
-                if seconds > model["max_seconds"]:
+        try:
+            # Disable panel globally while rendering
+            await self.refresh_button(force=True, disabled=True)
+
+            if seconds > model["max_seconds"]:
+                await interaction.followup.send(
+                    f"❌ Model limit exceeded. Max is {model['max_seconds']}s.",
+                    ephemeral=True
+                )
+                return
+
+            remaining, reset = await self.get_usage_info(user)
+            if remaining < seconds:
+                allowed = [s for s in (5, 10, 15) if s <= model["max_seconds"] and s <= remaining]
+                if allowed:
                     await interaction.followup.send(
-                        f"❌ Model limit exceeded. Max is {model['max_seconds']}s.",
+                        f"❌ Not enough time for **{seconds}s**.\n"
+                        f"You currently have **{remaining}s** left.\n\n"
+                        f"Please choose one of: **{', '.join(f'{x}s' for x in allowed)}**",
                         ephemeral=True
                     )
-                    return
-
-                remaining, reset = await self.get_usage_info(user)
-                if remaining < seconds:
+                else:
                     await interaction.followup.send(
                         f"❌ Not enough render time.\n\n"
                         f"Remaining: **{remaining}s**\n"
                         f"Reset: **{format_reset(reset)}**",
                         ephemeral=True
                     )
-                    return
+                return
 
-                payload = {
-                    "model": model_key,
-                    "prompt": prompt,
-                    "resolution": model["resolution"],
-                    "aspect_ratio": aspect
-                }
+            payload = {
+                "model": model_key,
+                "prompt": prompt,
+                "resolution": model["resolution"],
+                "aspect_ratio": aspect
+            }
 
-                mode = str(model.get("mode", "")).lower()
-                is_video_model = (mode == "video") or ("text-to-video" in model_key)
-                if is_video_model:
-                    payload["duration"] = f"{seconds}s"
+            mode = str(model.get("mode", "")).lower()
+            is_video_model = (mode == "video") or ("text-to-video" in model_key)
+            if is_video_model:
+                payload["duration"] = f"{seconds}s"
 
-                headers = {
-                    "Authorization": f"Bearer {MORDIEM_API}",
-                    "Content-Type": "application/json"
-                }
+            headers = {
+                "Authorization": f"Bearer {MORDIEM_API}",
+                "Content-Type": "application/json"
+            }
 
-                channel = await self._get_video_channel()
+            channel = await self._get_video_channel()
 
-                # Hide control panel while rendering
-                await self.remove_button()
-
-                try:
-                    progress_message = await channel.send(
-                        embed=self._build_progress_embed(
-                            user=user,
-                            prompt=prompt,
-                            seconds=seconds,
-                            aspect=aspect,
-                            model=model,
-                            percent=5,
-                            elapsed_sec=0,
-                            eta_sec=None,
-                            stage_text="Sending queue request..."
-                        )
-                    )
-                except Exception as e:
-                    print("PROGRESS SEND ERROR:", repr(e))
-                    await interaction.followup.send("❌ Could not create progress message.", ephemeral=True)
-                    return
-
-                queue_anim_task = asyncio.create_task(
-                    self._animate_queue_wait(
-                        progress_message=progress_message,
-                        user=user,
-                        prompt=prompt,
-                        seconds=seconds,
-                        aspect=aspect,
-                        model=model
-                    )
-                )
-
-                print("GEN REQUEST:", payload)
-                queue_id, queue_response, queue_error = await self._queue_generation(payload, headers)
-                print("GEN QUEUE RESPONSE:", queue_response)
-
-                if queue_anim_task:
-                    queue_anim_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await queue_anim_task
-                    queue_anim_task = None
-
-                if not queue_id:
-                    await self.post_result(
-                        channel=channel,
-                        user=user,
-                        prompt=prompt,
-                        seconds=seconds,
-                        aspect=aspect,
-                        model=model,
-                        media_data=None,
-                        media_type=None,
-                        progress_message=progress_message,
-                        error_message=queue_error or "Queue creation failed. Please try again."
-                    )
-                    return
-
-                self.add_active_job(user, queue_id)
-
-                await self._safe_edit_progress(
-                    progress_message,
-                    self._build_progress_embed(
-                        user=user,
-                        prompt=prompt,
-                        seconds=seconds,
-                        aspect=aspect,
-                        model=model,
-                        percent=8,
-                        elapsed_sec=1,
-                        eta_sec=None,
-                        stage_text="Queue accepted. Rendering started."
-                    )
-                )
-
-                queue_download_url = None
-                if isinstance(queue_response, dict):
-                    queue_download_url = queue_response.get("download_url")
-
-                media_data, media_type, error_message = await self.wait_for_result(
-                    queue_id=queue_id,
-                    model_key=model_key,
-                    seconds=seconds,
+            progress_message = await channel.send(
+                embed=self._build_progress_embed(
                     user=user,
                     prompt=prompt,
+                    seconds=seconds,
                     aspect=aspect,
                     model=model,
-                    progress_message=progress_message,
-                    queue_download_url=queue_download_url
+                    percent=5,
+                    elapsed_sec=0,
+                    eta_sec=None,
+                    stage_text="Sending queue request..."
                 )
+            )
 
+            queue_anim_task = asyncio.create_task(
+                self._animate_queue_wait(
+                    progress_message=progress_message,
+                    user=user,
+                    prompt=prompt,
+                    seconds=seconds,
+                    aspect=aspect,
+                    model=model
+                )
+            )
+
+            print("GEN REQUEST:", payload)
+            queue_id, queue_response, queue_error = await self._queue_generation(payload, headers)
+            print("GEN QUEUE RESPONSE:", queue_response)
+
+            if queue_anim_task:
+                queue_anim_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await queue_anim_task
+                queue_anim_task = None
+
+            if not queue_id:
                 await self.post_result(
                     channel=channel,
                     user=user,
@@ -1239,26 +1299,76 @@ class VideoCog(commands.Cog):
                     seconds=seconds,
                     aspect=aspect,
                     model=model,
-                    media_data=media_data,
-                    media_type=media_type,
+                    media_data=None,
+                    media_type=None,
                     progress_message=progress_message,
-                    error_message=error_message
+                    error_message=queue_error or "Queue creation failed. Please try again."
                 )
+                return
 
-            finally:
-                if queue_anim_task:
-                    queue_anim_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await queue_anim_task
+            self.add_active_job(user, queue_id)
 
-                await self._safe_delete_progress_message(progress_message)
+            await self._safe_edit_progress(
+                progress_message,
+                self._build_progress_embed(
+                    user=user,
+                    prompt=prompt,
+                    seconds=seconds,
+                    aspect=aspect,
+                    model=model,
+                    percent=8,
+                    elapsed_sec=1,
+                    eta_sec=None,
+                    stage_text="Queue accepted. Rendering started."
+                )
+            )
 
-                if queue_id:
-                    self.remove_active_job(user)
+            queue_download_url = None
+            if isinstance(queue_response, dict):
+                queue_download_url = queue_response.get("download_url")
 
-                self.active_interactions.pop(user.id, None)
-                await self.refresh_button(force=True)
-                await self._unmark_user_starting(user.id)
+            media_data, media_type, error_message = await self.wait_for_result(
+                queue_id=queue_id,
+                model_key=model_key,
+                seconds=seconds,
+                user=user,
+                prompt=prompt,
+                aspect=aspect,
+                model=model,
+                progress_message=progress_message,
+                queue_download_url=queue_download_url
+            )
+
+            await self.post_result(
+                channel=channel,
+                user=user,
+                prompt=prompt,
+                seconds=seconds,
+                aspect=aspect,
+                model=model,
+                media_data=media_data,
+                media_type=media_type,
+                progress_message=progress_message,
+                error_message=error_message
+            )
+
+        finally:
+            if queue_anim_task:
+                queue_anim_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await queue_anim_task
+
+            await self._safe_delete_progress_message(progress_message)
+
+            if queue_id:
+                self.remove_active_job(user)
+
+            self.active_interactions.pop(user.id, None)
+            await self._end_global_render()
+            await self._unmark_user_starting(user.id)
+
+            # Always post a fresh generator panel at the bottom after each run
+            await self.refresh_button(force=True, disabled=False)
 
     # -------------------------------------------------
     # STATUS LOOP
@@ -1316,7 +1426,6 @@ class VideoCog(commands.Cog):
                             return None, None, (user_error or "Rendering failed.")
                         continue
 
-                    # direct media body
                     if "video" in content_type:
                         data = await response.read()
                         return data, "video", None
@@ -1331,7 +1440,6 @@ class VideoCog(commands.Cog):
                         if guessed:
                             return blob, guessed, None
 
-                    # json status
                     raw_text = await response.text()
                     try:
                         data = json.loads(raw_text)
@@ -1341,7 +1449,6 @@ class VideoCog(commands.Cog):
 
                     print("GEN STATUS:", data)
 
-                    # Some providers return error object with HTTP 200
                     if isinstance(data.get("error"), dict):
                         err = data["error"]
                         if err.get("type") == "provider_content_policy":
@@ -1356,7 +1463,6 @@ class VideoCog(commands.Cog):
                     if elapsed <= 0:
                         elapsed = int((utc_now() - started).total_seconds() * 1000)
 
-                    # adaptive deadline extension for slower jobs
                     expected_total_sec = int((max(avg, 60000) / 1000) * 2.5) + 120
                     candidate_deadline = started + timedelta(seconds=expected_total_sec)
                     if candidate_deadline > adaptive_deadline:
@@ -1419,7 +1525,6 @@ class VideoCog(commands.Cog):
                             return None, None, "Rendering finished, but the file could not be delivered."
                         continue
 
-                    # processing progress
                     target_ms = self._estimate_target_time_ms(model_key, seconds, avg)
                     percent = self._calculate_percent(elapsed, target_ms, last_percent)
 
@@ -1470,7 +1575,6 @@ class VideoCog(commands.Cog):
     ):
         interaction = self.active_interactions.get(user.id)
 
-        # Failure flow (no media)
         if not media_data:
             await self._safe_delete_progress_message(progress_message)
 
@@ -1487,19 +1591,14 @@ class VideoCog(commands.Cog):
             with contextlib.suppress(Exception):
                 await channel.send(embed=error_embed)
 
+            quota = await self._quota_summary(user)
             if interaction:
-                quota = await self._quota_summary(user)
                 with contextlib.suppress(Exception):
-                    await interaction.followup.send(
-                        f"❌ {reason}\n\n{quota}",
-                        ephemeral=True
-                    )
+                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
             else:
-                quota = await self._quota_summary(user)
                 await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
             return
 
-        # Pre-check Discord upload limit (avoid 413 where possible)
         guild_limit = None
         if getattr(channel, "guild", None):
             guild_limit = getattr(channel.guild, "filesize_limit", None)
@@ -1534,7 +1633,6 @@ class VideoCog(commands.Cog):
                 await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
             return
 
-        # Success candidate
         is_video = (media_type == "video")
         filename = "AI_video.mp4" if is_video else "AI_image.png"
         file = discord.File(io.BytesIO(media_data), filename=filename)
@@ -1553,12 +1651,7 @@ class VideoCog(commands.Cog):
 
         try:
             await channel.send(embed=result_embed, file=file)
-
-            # Deduct only AFTER successful Discord post
-            try:
-                await self.save_usage(user, seconds)
-            except Exception as db_err:
-                print("USAGE SAVE ERROR:", repr(db_err))
+            await self.save_usage(user, seconds)  # deduct only on successful Discord post
 
         except discord.HTTPException as e:
             print("RESULT SEND ERROR:", repr(e))
@@ -1622,16 +1715,6 @@ class VideoCog(commands.Cog):
                 await interaction.followup.send(f"✅ Completed!\n\n{quota}", ephemeral=True)
         else:
             await self._safe_followup_for_user(user, f"✅ Completed!\n\n{quota}")
-
-    # -------------------------------------------------
-    # READY
-    # -------------------------------------------------
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        print("VIDEO COG READY")
-        if self.startup_task is None or self.startup_task.done():
-            self.startup_task = asyncio.create_task(self.ensure_control_message_with_retry())
 
 
 # =====================================================
