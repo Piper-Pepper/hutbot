@@ -73,6 +73,7 @@ async def main():
             "hutvote",
             "champions_cog",
             "video_cog",
+            "riddle",
             "hutthreadvote"
         ]
 
