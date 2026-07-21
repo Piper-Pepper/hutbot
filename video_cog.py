@@ -92,7 +92,6 @@ VIDEO_MODELS = {
 
 DEFAULT_MODEL = "wan-2-7-enhanced-text-to-video"
 
-# Duration baseline scaling
 DURATION_FACTOR = {
     5: 0.90,
     10: 0.97,
@@ -105,7 +104,6 @@ BASE_TARGET_MS = {
     15: 190000
 }
 
-# Per-model progress speed tuning (lower = visually faster)
 MODEL_TIME_FACTOR = {
     "wan-2-7-text-to-video": 1.00,
     "wan-2-7-enhanced-text-to-video": 0.95,
@@ -440,7 +438,7 @@ class VideoCog(commands.Cog):
         self.bot = bot
         self.db = VideoDatabase()
         self.active_interactions = {}
-        self.render_lock = asyncio.Lock()  # one global generation
+        self.render_lock = asyncio.Lock()
         self.control_lock = asyncio.Lock()
         self.startup_task = None
 
@@ -649,6 +647,27 @@ class VideoCog(commands.Cog):
         print("FAILED TO ENSURE GENERATOR PANEL AFTER RETRIES")
         return False
 
+    async def _safe_delete_progress_message(self, progress_message):
+        if not progress_message:
+            return
+
+        for attempt in range(3):
+            try:
+                msg = await progress_message.channel.fetch_message(progress_message.id)
+                await msg.delete()
+                return
+            except discord.NotFound:
+                return
+            except discord.Forbidden as e:
+                print("PROGRESS DELETE FORBIDDEN:", repr(e))
+                return
+            except discord.HTTPException as e:
+                print("PROGRESS DELETE HTTP ERROR:", repr(e))
+                await asyncio.sleep(0.6 * (attempt + 1))
+            except Exception as e:
+                print("PROGRESS DELETE ERROR:", repr(e))
+                await asyncio.sleep(0.6 * (attempt + 1))
+
     # -------------------------------------------------
     # EMBEDS
     # -------------------------------------------------
@@ -768,6 +787,67 @@ class VideoCog(commands.Cog):
         )
         embed.set_footer(text="AI Video Generator")
         return embed
+
+    # -------------------------------------------------
+    # PROGRESS / TIME
+    # -------------------------------------------------
+
+    def _estimate_target_time_ms(self, model_key, seconds, avg_ms):
+        base = BASE_TARGET_MS.get(seconds, 160000)
+        avg = safe_int(avg_ms, base)
+
+        blended = int(base * 0.35 + avg * 0.65)
+        blended = max(base, blended)
+
+        duration_factor = DURATION_FACTOR.get(seconds, 1.0)
+        model_factor = MODEL_TIME_FACTOR.get(model_key, 1.0)
+
+        target = int(blended * duration_factor * model_factor)
+        return max(target, 35000)
+
+    def _calculate_percent(self, elapsed_ms, target_ms, last_percent):
+        raw = elapsed_ms / max(target_ms, 1)
+
+        if raw < 0.25:
+            smoothed = 0.05 + raw * 0.45
+        elif raw < 0.85:
+            smoothed = 0.16 + (raw - 0.25) * 1.20
+        else:
+            smoothed = 0.88 + (raw - 0.85) * 0.50
+
+        percent = int(min(max(smoothed * 100, 5), 97))
+
+        if elapsed_ms > 12000 and percent < 7:
+            percent = 7
+
+        if percent < last_percent:
+            percent = last_percent
+
+        return percent
+
+    async def _animate_queue_wait(self, progress_message, user, prompt, seconds, aspect, model):
+        frames = [
+            "Sending queue request.",
+            "Sending queue request..",
+            "Sending queue request..."
+        ]
+        i = 0
+        while True:
+            await progress_message.edit(
+                embed=self._build_progress_embed(
+                    user=user,
+                    prompt=prompt,
+                    seconds=seconds,
+                    aspect=aspect,
+                    model=model,
+                    percent=5,
+                    elapsed_sec=0,
+                    eta_sec=None,
+                    stage_text=frames[i % len(frames)]
+                )
+            )
+            i += 1
+            await asyncio.sleep(1.2)
 
     # -------------------------------------------------
     # API HELPERS
@@ -1004,7 +1084,6 @@ class VideoCog(commands.Cog):
                     "aspect_ratio": aspect
                 }
 
-                # Ensure duration is present for video models
                 mode = str(model.get("mode", "")).lower()
                 is_video_model = (mode == "video") or ("text-to-video" in model_key)
                 if is_video_model:
@@ -1070,21 +1149,20 @@ class VideoCog(commands.Cog):
 
                 self.add_active_job(user, queue_id)
 
-                if progress_message:
-                    with contextlib.suppress(Exception):
-                        await progress_message.edit(
-                            embed=self._build_progress_embed(
-                                user=user,
-                                prompt=prompt,
-                                seconds=seconds,
-                                aspect=aspect,
-                                model=model,
-                                percent=8,
-                                elapsed_sec=1,
-                                eta_sec=None,
-                                stage_text="Queue accepted. Rendering started."
-                            )
+                with contextlib.suppress(Exception):
+                    await progress_message.edit(
+                        embed=self._build_progress_embed(
+                            user=user,
+                            prompt=prompt,
+                            seconds=seconds,
+                            aspect=aspect,
+                            model=model,
+                            percent=8,
+                            elapsed_sec=1,
+                            eta_sec=None,
+                            stage_text="Queue accepted. Rendering started."
                         )
+                    )
 
                 queue_download_url = None
                 if isinstance(queue_response, dict):
@@ -1121,9 +1199,7 @@ class VideoCog(commands.Cog):
                     with contextlib.suppress(asyncio.CancelledError):
                         await queue_anim_task
 
-                if progress_message:
-                    with contextlib.suppress(Exception):
-                        await progress_message.delete()
+                await self._safe_delete_progress_message(progress_message)
 
                 if queue_id:
                     self.remove_active_job(user)
@@ -1132,66 +1208,9 @@ class VideoCog(commands.Cog):
                 await self.refresh_button(force=True)
                 await self._unmark_user_starting(user.id)
 
-    async def _animate_queue_wait(self, progress_message, user, prompt, seconds, aspect, model):
-        frames = [
-            "Sending queue request.",
-            "Sending queue request..",
-            "Sending queue request..."
-        ]
-        i = 0
-        while True:
-            await progress_message.edit(
-                embed=self._build_progress_embed(
-                    user=user,
-                    prompt=prompt,
-                    seconds=seconds,
-                    aspect=aspect,
-                    model=model,
-                    percent=5,
-                    elapsed_sec=0,
-                    eta_sec=None,
-                    stage_text=frames[i % len(frames)]
-                )
-            )
-            i += 1
-            await asyncio.sleep(1.2)
-
     # -------------------------------------------------
     # STATUS LOOP
     # -------------------------------------------------
-
-    def _estimate_target_time_ms(self, model_key, seconds, avg_ms):
-        base = BASE_TARGET_MS.get(seconds, 160000)
-        avg = safe_int(avg_ms, base)
-
-        blended = int(base * 0.35 + avg * 0.65)
-        blended = max(base, blended)
-
-        duration_factor = DURATION_FACTOR.get(seconds, 1.0)
-        model_factor = MODEL_TIME_FACTOR.get(model_key, 1.0)
-
-        target = int(blended * duration_factor * model_factor)
-        return max(target, 35000)
-
-    def _calculate_percent(self, elapsed_ms, target_ms, last_percent):
-        raw = elapsed_ms / max(target_ms, 1)
-
-        if raw < 0.25:
-            smoothed = 0.05 + raw * 0.45
-        elif raw < 0.85:
-            smoothed = 0.16 + (raw - 0.25) * 1.20
-        else:
-            smoothed = 0.88 + (raw - 0.85) * 0.50
-
-        percent = int(min(max(smoothed * 100, 5), 97))
-
-        if elapsed_ms > 12000 and percent < 7:
-            percent = 7
-
-        if percent < last_percent:
-            percent = last_percent
-
-        return percent
 
     async def wait_for_result(
         self,
@@ -1240,7 +1259,6 @@ class VideoCog(commands.Cog):
                                 return None, None, (user_error or "Rendering failed.")
                             continue
 
-                        # Direct media body
                         if "video" in content_type:
                             data = await response.read()
                             return data, "video", None
@@ -1264,7 +1282,6 @@ class VideoCog(commands.Cog):
 
                         print("GEN STATUS:", data)
 
-                        # Sometimes provider responds with error JSON but HTTP 200
                         if isinstance(data.get("error"), dict):
                             err = data["error"]
                             if err.get("type") == "provider_content_policy":
@@ -1279,7 +1296,6 @@ class VideoCog(commands.Cog):
                         if elapsed <= 0:
                             elapsed = int((utc_now() - started).total_seconds() * 1000)
 
-                        # Extend runtime window for slower jobs
                         expected_total_sec = int((max(avg, 60000) / 1000) * 2.5) + 120
                         candidate_deadline = started + timedelta(seconds=expected_total_sec)
                         if candidate_deadline > adaptive_deadline:
@@ -1319,27 +1335,25 @@ class VideoCog(commands.Cog):
                                     return media_data, media_type, None
 
                             finalize_attempts += 1
-                            if progress_message:
-                                with contextlib.suppress(Exception):
-                                    await progress_message.edit(
-                                        embed=self._build_progress_embed(
-                                            user=user,
-                                            prompt=prompt,
-                                            seconds=seconds,
-                                            aspect=aspect,
-                                            model=model,
-                                            percent=max(last_percent, 98),
-                                            elapsed_sec=max(elapsed // 1000, 0),
-                                            eta_sec=None,
-                                            stage_text="Finalizing file delivery..."
-                                        )
+                            with contextlib.suppress(Exception):
+                                await progress_message.edit(
+                                    embed=self._build_progress_embed(
+                                        user=user,
+                                        prompt=prompt,
+                                        seconds=seconds,
+                                        aspect=aspect,
+                                        model=model,
+                                        percent=max(last_percent, 98),
+                                        elapsed_sec=max(elapsed // 1000, 0),
+                                        eta_sec=None,
+                                        stage_text="Finalizing file delivery..."
                                     )
+                                )
 
                             if finalize_attempts >= 40:
                                 return None, None, "Rendering finished, but the file could not be delivered."
                             continue
 
-                        # Processing progress update
                         target_ms = self._estimate_target_time_ms(model_key, seconds, avg)
                         percent = self._calculate_percent(elapsed, target_ms, last_percent)
 
@@ -1347,21 +1361,20 @@ class VideoCog(commands.Cog):
                             last_percent = percent
                             eta_sec = max((target_ms - elapsed) // 1000, 0)
 
-                            if progress_message:
-                                with contextlib.suppress(Exception):
-                                    await progress_message.edit(
-                                        embed=self._build_progress_embed(
-                                            user=user,
-                                            prompt=prompt,
-                                            seconds=seconds,
-                                            aspect=aspect,
-                                            model=model,
-                                            percent=percent,
-                                            elapsed_sec=max(elapsed // 1000, 0),
-                                            eta_sec=eta_sec,
-                                            stage_text="Rendering..."
-                                        )
+                            with contextlib.suppress(Exception):
+                                await progress_message.edit(
+                                    embed=self._build_progress_embed(
+                                        user=user,
+                                        prompt=prompt,
+                                        seconds=seconds,
+                                        aspect=aspect,
+                                        model=model,
+                                        percent=percent,
+                                        elapsed_sec=max(elapsed // 1000, 0),
+                                        eta_sec=eta_sec,
+                                        stage_text="Rendering..."
                                     )
+                                )
 
                 except asyncio.TimeoutError as e:
                     print("STATUS LOOP TIMEOUT:", repr(e))
@@ -1392,9 +1405,7 @@ class VideoCog(commands.Cog):
         interaction = self.active_interactions.get(user.id)
 
         if not media_data:
-            if progress_message:
-                with contextlib.suppress(Exception):
-                    await progress_message.delete()
+            await self._safe_delete_progress_message(progress_message)
 
             reason = error_message or "Generation failed or timed out."
             error_embed = self._build_error_embed(
@@ -1433,19 +1444,25 @@ class VideoCog(commands.Cog):
         if not is_video:
             result_embed.set_image(url=f"attachment://{filename}")
 
-        # Charge usage ONLY after successful output post
         try:
             await channel.send(embed=result_embed, file=file)
-            await self.save_usage(user, seconds)
-        except Exception as e:
+            await self.save_usage(user, seconds)  # deduct ONLY on successful Discord post
+        except discord.HTTPException as e:
             print("RESULT SEND ERROR:", repr(e))
+            await self._safe_delete_progress_message(progress_message)
+
+            if e.status == 413 or getattr(e, "code", None) == 40005:
+                reason = "Render completed, but the output file is too large for this server's Discord upload limit."
+            else:
+                reason = "Render output could not be posted to Discord."
+
             fail_embed = self._build_error_embed(
                 user=user,
                 prompt=prompt,
                 seconds=seconds,
                 aspect=aspect,
                 model=model,
-                reason="Render output could not be posted."
+                reason=reason
             )
             with contextlib.suppress(Exception):
                 await channel.send(embed=fail_embed)
@@ -1454,14 +1471,36 @@ class VideoCog(commands.Cog):
                 quota = await self._quota_summary(user)
                 with contextlib.suppress(Exception):
                     await interaction.followup.send(
-                        f"❌ Render output could not be posted.\n\n{quota}",
+                        f"❌ {reason}\n\n{quota}",
+                        ephemeral=True
+                    )
+            return
+        except Exception as e:
+            print("RESULT SEND ERROR:", repr(e))
+            await self._safe_delete_progress_message(progress_message)
+            reason = "Render output could not be posted to Discord."
+
+            fail_embed = self._build_error_embed(
+                user=user,
+                prompt=prompt,
+                seconds=seconds,
+                aspect=aspect,
+                model=model,
+                reason=reason
+            )
+            with contextlib.suppress(Exception):
+                await channel.send(embed=fail_embed)
+
+            if interaction:
+                quota = await self._quota_summary(user)
+                with contextlib.suppress(Exception):
+                    await interaction.followup.send(
+                        f"❌ {reason}\n\n{quota}",
                         ephemeral=True
                     )
             return
 
-        if progress_message:
-            with contextlib.suppress(Exception):
-                await progress_message.delete()
+        await self._safe_delete_progress_message(progress_message)
 
         if interaction:
             quota = await self._quota_summary(user)
