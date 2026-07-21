@@ -74,6 +74,7 @@ async def main():
             "champions_cog",
             "video_cog",
             "riddle",
+            "import_riddle",
             "hutthreadvote"
         ]
 
