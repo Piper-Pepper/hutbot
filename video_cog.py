@@ -882,7 +882,12 @@ class VideoCog(commands.Cog):
         )
         embed.add_field(
             name="Timing",
-            value=f"• Elapsed: `{elapsed_sec}s`\n• ETA: `{eta_text}`\n• Status: {stage_text}",
+            value=(
+                f"• Elapsed: `{elapsed_sec}s`\n"
+                f"• ETA: `{eta_text}`\n"
+                f"• Status: {stage_text}\n"
+                "• 🔒 Generator locked until this render is complete."
+            ),
             inline=False
         )
         embed.set_footer(text="AI Video Generator")
