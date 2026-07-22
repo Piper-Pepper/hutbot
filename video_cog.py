@@ -37,6 +37,10 @@ PROMPT_PREVIEW_PROGRESS = 420
 PROMPT_PREVIEW_RESULT = 900
 REASON_PREVIEW_LIMIT = 450
 
+# Neu: harte Abbruchgrenzen bei Provider-500-Schleife
+MAX_CONSECUTIVE_5XX = 8
+MAX_5XX_WINDOW_SECONDS = 180
+
 
 # =====================================================
 # ROLES / DAILY LIMITS
@@ -561,7 +565,12 @@ class VideoCog(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
-                await self.refresh_button(force=False, disabled=self.is_global_busy())
+                # WICHTIG: während aktivem Render kein Auto-Repost
+                if self.is_global_busy():
+                    await asyncio.sleep(45)
+                    continue
+
+                await self.refresh_button(force=False, disabled=False)
             except Exception as e:
                 print("PANEL GUARD ERROR:", repr(e))
             await asyncio.sleep(45)
@@ -625,7 +634,7 @@ class VideoCog(commands.Cog):
     async def _finalize_failed_render(self, user, reason: str, progress_message):
         await self._safe_delete_progress_message(progress_message)
         await self._notify_failed_ephemeral(user, reason)
-        await self.refresh_button(force=True, disabled=False)
+        # Kein refresh hier -> passiert zentral in start_generation.finally
 
     # -------------------------------------------------
     # ROLE / LIMIT
@@ -787,14 +796,20 @@ class VideoCog(commands.Cog):
                             return False
 
                 messages = [m async for m in channel.history(limit=CONTROL_LOOKBACK_LIMIT)]
-                newest = messages[0] if messages else None
                 panel_messages = [m for m in messages if self._looks_like_generator_message(m)]
-                newest_is_valid = newest is not None and self._is_valid_generator_message(newest, disabled=disabled)
 
-                if newest_is_valid and not force:
-                    for old_msg in panel_messages[1:]:
-                        with contextlib.suppress(Exception):
-                            await old_msg.delete()
+                # WICHTIG: gültiges Panel darf irgendwo in den letzten Nachrichten sein
+                valid_panel = None
+                for m in panel_messages:
+                    if self._is_valid_generator_message(m, disabled=disabled):
+                        valid_panel = m
+                        break
+
+                if valid_panel and not force:
+                    for old_msg in panel_messages:
+                        if old_msg.id != valid_panel.id:
+                            with contextlib.suppress(Exception):
+                                await old_msg.delete()
                     return True
 
                 for msg in panel_messages:
@@ -1231,7 +1246,6 @@ class VideoCog(commands.Cog):
         queue_id = None
 
         try:
-            # Disable panel globally while rendering
             await self.refresh_button(force=True, disabled=True)
 
             if seconds > model["max_seconds"]:
@@ -1390,7 +1404,6 @@ class VideoCog(commands.Cog):
             await self._end_global_render()
             await self._unmark_user_starting(user.id)
 
-            # Always post a fresh generator panel at the bottom after each run
             await self.refresh_button(force=True, disabled=False)
 
     # -------------------------------------------------
@@ -1421,6 +1434,11 @@ class VideoCog(commands.Cog):
         last_percent = 8
         finalize_attempts = 0
 
+        # Neu: 500-Tracking
+        consecutive_5xx = 0
+        total_5xx = 0
+        first_5xx_at = None
+
         timeout = aiohttp.ClientTimeout(total=90, connect=15, sock_read=70)
         session = await self._http()
 
@@ -1445,9 +1463,45 @@ class VideoCog(commands.Cog):
                         user_error, hard_fail = self._parse_api_error(response.status, body_text)
                         print("RETRIEVE HTTP ERROR:", response.status, body_text[:300])
 
+                        if response.status >= 500:
+                            total_5xx += 1
+                            consecutive_5xx += 1
+                            if first_5xx_at is None:
+                                first_5xx_at = utc_now()
+
+                            await self._safe_edit_progress(
+                                progress_message,
+                                self._build_progress_embed(
+                                    user=user,
+                                    prompt=prompt,
+                                    seconds=seconds,
+                                    aspect=aspect,
+                                    model=model,
+                                    percent=max(last_percent, 12),
+                                    elapsed_sec=max(int((utc_now() - started).total_seconds()), 0),
+                                    eta_sec=None,
+                                    stage_text=f"Provider error {response.status} (retry {total_5xx})..."
+                                )
+                            )
+
+                            too_many = consecutive_5xx >= MAX_CONSECUTIVE_5XX
+                            too_long = (utc_now() - first_5xx_at).total_seconds() >= MAX_5XX_WINDOW_SECONDS
+                            if too_many or too_long:
+                                return None, None, (
+                                    "Provider currently unavailable (repeated 500 errors). "
+                                    "Please try again in a few minutes."
+                                )
+                        else:
+                            consecutive_5xx = 0
+                            first_5xx_at = None
+
                         if hard_fail:
                             return None, None, (user_error or "Rendering failed.")
                         continue
+
+                    # erfolgreicher HTTP-Call => reset 5xx streak
+                    consecutive_5xx = 0
+                    first_5xx_at = None
 
                     if "video" in content_type:
                         data = await response.read()
@@ -1635,7 +1689,7 @@ class VideoCog(commands.Cog):
 
         try:
             await channel.send(embed=result_embed, file=file)
-            await self.save_usage(user, seconds)  # deduct only on successful Discord post
+            await self.save_usage(user, seconds)
 
         except discord.HTTPException as e:
             print("RESULT SEND ERROR:", repr(e))
