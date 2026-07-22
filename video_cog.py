@@ -609,6 +609,24 @@ class VideoCog(commands.Cog):
         with contextlib.suppress(Exception):
             await user.send(content)
 
+    async def _notify_failed_ephemeral(self, user, reason: str):
+        quota = await self._quota_summary(user)
+        text = f"❌ Render failed.\n**Reason:** {reason}\n\n{quota}"
+
+        interaction = self.active_interactions.get(user.id)
+        if interaction:
+            with contextlib.suppress(Exception):
+                await interaction.followup.send(text, ephemeral=True)
+                return
+
+        with contextlib.suppress(Exception):
+            await user.send(text)
+
+    async def _finalize_failed_render(self, user, reason: str, progress_message):
+        await self._safe_delete_progress_message(progress_message)
+        await self._notify_failed_ephemeral(user, reason)
+        await self.refresh_button(force=True, disabled=False)
+
     # -------------------------------------------------
     # ROLE / LIMIT
     # -------------------------------------------------
@@ -1581,27 +1599,8 @@ class VideoCog(commands.Cog):
         interaction = self.active_interactions.get(user.id)
 
         if not media_data:
-            await self._safe_delete_progress_message(progress_message)
-
             reason = error_message or "Generation failed or timed out."
-            error_embed = self._build_error_embed(
-                user=user,
-                prompt=prompt,
-                seconds=seconds,
-                aspect=aspect,
-                model=model,
-                reason=reason
-            )
-
-            with contextlib.suppress(Exception):
-                await channel.send(embed=error_embed)
-
-            quota = await self._quota_summary(user)
-            if interaction:
-                with contextlib.suppress(Exception):
-                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
-            else:
-                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
+            await self._finalize_failed_render(user=user, reason=reason, progress_message=progress_message)
             return
 
         guild_limit = None
@@ -1609,33 +1608,13 @@ class VideoCog(commands.Cog):
             guild_limit = getattr(channel.guild, "filesize_limit", None)
 
         if guild_limit and len(media_data) > guild_limit:
-            await self._safe_delete_progress_message(progress_message)
-
             size_mb = len(media_data) / (1024 * 1024)
             limit_mb = guild_limit / (1024 * 1024)
             reason = (
                 "Render completed, but the output file is too large for this server's Discord upload limit. "
                 f"File: {size_mb:.2f} MB • Limit: {limit_mb:.2f} MB"
             )
-
-            fail_embed = self._build_error_embed(
-                user=user,
-                prompt=prompt,
-                seconds=seconds,
-                aspect=aspect,
-                model=model,
-                reason=reason
-            )
-
-            with contextlib.suppress(Exception):
-                await channel.send(embed=fail_embed)
-
-            quota = await self._quota_summary(user)
-            if interaction:
-                with contextlib.suppress(Exception):
-                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
-            else:
-                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
+            await self._finalize_failed_render(user=user, reason=reason, progress_message=progress_message)
             return
 
         is_video = (media_type == "video")
@@ -1660,56 +1639,17 @@ class VideoCog(commands.Cog):
 
         except discord.HTTPException as e:
             print("RESULT SEND ERROR:", repr(e))
-            await self._safe_delete_progress_message(progress_message)
-
             if e.status == 413 or getattr(e, "code", None) == 40005:
                 reason = "Render completed, but the output file is too large for this server's Discord upload limit."
             else:
                 reason = "Render output could not be posted to Discord."
-
-            fail_embed = self._build_error_embed(
-                user=user,
-                prompt=prompt,
-                seconds=seconds,
-                aspect=aspect,
-                model=model,
-                reason=reason
-            )
-
-            with contextlib.suppress(Exception):
-                await channel.send(embed=fail_embed)
-
-            quota = await self._quota_summary(user)
-            if interaction:
-                with contextlib.suppress(Exception):
-                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
-            else:
-                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
+            await self._finalize_failed_render(user=user, reason=reason, progress_message=progress_message)
             return
 
         except Exception as e:
             print("RESULT SEND ERROR:", repr(e))
-            await self._safe_delete_progress_message(progress_message)
-
             reason = "Render output could not be posted to Discord."
-            fail_embed = self._build_error_embed(
-                user=user,
-                prompt=prompt,
-                seconds=seconds,
-                aspect=aspect,
-                model=model,
-                reason=reason
-            )
-
-            with contextlib.suppress(Exception):
-                await channel.send(embed=fail_embed)
-
-            quota = await self._quota_summary(user)
-            if interaction:
-                with contextlib.suppress(Exception):
-                    await interaction.followup.send(f"❌ {reason}\n\n{quota}", ephemeral=True)
-            else:
-                await self._safe_followup_for_user(user, f"❌ {reason}\n\n{quota}")
+            await self._finalize_failed_render(user=user, reason=reason, progress_message=progress_message)
             return
 
         await self._safe_delete_progress_message(progress_message)
