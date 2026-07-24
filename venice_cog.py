@@ -28,13 +28,13 @@ except Exception:
 # =================================================
 load_dotenv()
 
-VENICE_API_KEY = os.getenv("MORDIEM_API")
+VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env!")
 
-VENICE_IMAGE_URL = os.getenv("MORDIEM_IMAGE_URL")
-VENICE_UPSCALE_URL = os.getenv("MORDIEM_UPSCALE_URL")
-VENICE_MODELS_URL = os.getenv("MORDIEM_MODELS_URL")
+VENICE_IMAGE_URL = os.getenv("VENICE_IMAGE_URL")
+VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL")
+VENICE_MODELS_URL = os.getenv("VENICE_MODELS_URL")
 
 
 def _env_int(name: str, default: int) -> int:
