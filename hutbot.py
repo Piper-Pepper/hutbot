@@ -67,12 +67,11 @@ async def main():
             "status_manager",
             "hut_dm",
             "hut_dm_app",
-            "venice_cog",
+            "venice_image_cog",
             "gather",
             "reset",
             "hutvote",
             "champions_cog",
-            "video_cog",
             "riddle",
             "hutthreadvote"
         ]
