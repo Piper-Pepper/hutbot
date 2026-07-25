@@ -67,7 +67,7 @@ async def main():
             "status_manager",
             "hut_dm",
             "hut_dm_app",
-            "venice_image_cog",
+            "venice_cog",
             "gather",
             "reset",
             "hutvote",
