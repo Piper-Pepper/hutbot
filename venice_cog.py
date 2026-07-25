@@ -1,7 +1,7 @@
-# venice_cog.py
 import asyncio
 import base64
 import binascii
+import contextlib
 import io
 import json
 import logging
@@ -10,7 +10,6 @@ import random
 import re
 import time
 import uuid
-import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any, Callable
@@ -28,6 +27,9 @@ except Exception:
 load_dotenv()
 logger = logging.getLogger("venice_image_cog")
 
+# =================================================
+# ENV
+# =================================================
 VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 VENICE_IMAGE_URL = os.getenv("VENICE_IMAGE_URL")
 VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL")
@@ -39,8 +41,6 @@ if not VENICE_IMAGE_URL:
     raise RuntimeError("VENICE_IMAGE_URL not set in .env")
 if not VENICE_UPSCALE_URL:
     raise RuntimeError("VENICE_UPSCALE_URL not set in .env")
-if not VENICE_MODELS_URL:
-    raise RuntimeError("VENICE_MODELS_URL not set in .env")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -99,9 +99,9 @@ DEFAULT_IMAGE_LIMIT_24H = 2
 MAX_VIDEO_RENDER_SECONDS = 15
 VIDEO_DURATION_CHOICES = [5, 10, 15]
 
-# Resolution gates remain Tier 1 / Tier 2 as before
 LEVEL4_ROLE_ID = TIER_RULES[1]["role_id"]
 LEVEL11_ROLE_ID = TIER_RULES[2]["role_id"]
+
 RESOLUTION_ROLE_REQUIREMENTS = {"2K": LEVEL4_ROLE_ID, "4K": LEVEL11_ROLE_ID}
 RESOLUTION_LEVEL_REQUIREMENTS = {"2K": 4, "4K": 11}
 ROLE_LEVEL_NAMES = {
@@ -114,16 +114,16 @@ ROLE_LEVEL_NAMES = {
 }
 
 # =================================================
-# QUOTA STORE (images only, 24h from first successful use)
+# IMAGE QUOTA STORE (24h from first successful usage)
 # =================================================
 IMAGE_QUOTA_FILE = os.getenv("IMAGE_QUOTA_FILE", "goonhut_image_quota.json")
-QUOTA_WINDOW_SECONDS = 24 * 60 * 60
+IMAGE_WINDOW_SECONDS = 24 * 60 * 60
 
 
 class RollingQuotaStore:
-    def __init__(self, file_path: str, window_seconds: int = QUOTA_WINDOW_SECONDS):
+    def __init__(self, file_path: str, window_seconds: int = IMAGE_WINDOW_SECONDS):
         self.file_path = Path(file_path)
-        self.window_seconds = window_seconds
+        self.window_seconds = int(window_seconds)
         self.lock = asyncio.Lock()
 
     def _read(self) -> dict[str, Any]:
@@ -144,7 +144,7 @@ class RollingQuotaStore:
     def _key(self, guild_id: int, user_id: int) -> str:
         return f"{guild_id}:{user_id}"
 
-    def _normalize_entry(self, entry: dict[str, Any], now_ts: int) -> dict[str, int]:
+    def _normalize(self, entry: dict[str, Any], now_ts: int) -> dict[str, int]:
         start = int(entry.get("start", 0) or 0)
         used = int(entry.get("used", 0) or 0)
         if start > 0 and (now_ts - start) >= self.window_seconds:
@@ -155,75 +155,67 @@ class RollingQuotaStore:
         return {"start": start, "used": used}
 
     async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
-        limit = max(0, int(limit))
         now_ts = int(time.time())
+        limit = max(0, int(limit))
+
         async with self.lock:
             db = self._read()
             key = self._key(guild_id, user_id)
-            entry = self._normalize_entry(db.get(key, {}), now_ts)
+            entry = self._normalize(db.get(key, {}), now_ts)
+
+            db[key] = entry
+            self._write(db)
 
             used = entry["used"]
             start = entry["start"]
             remaining = max(0, limit - used)
             reset_in = max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0
-
-            db[key] = entry
-            self._write(db)
-            return {
-                "used": used,
-                "limit": limit,
-                "remaining": remaining,
-                "start": start,
-                "reset_in": reset_in,
-            }
+            return {"used": used, "limit": limit, "remaining": remaining, "start": start, "reset_in": reset_in}
 
     async def reserve(self, guild_id: int, user_id: int, limit: int, amount: int) -> tuple[bool, dict[str, int], Optional[dict[str, int]]]:
+        now_ts = int(time.time())
         limit = max(0, int(limit))
         amount = max(0, int(amount))
-        now_ts = int(time.time())
 
         async with self.lock:
             db = self._read()
             key = self._key(guild_id, user_id)
-            entry = self._normalize_entry(db.get(key, {}), now_ts)
+            entry = self._normalize(db.get(key, {}), now_ts)
 
             used = entry["used"]
             start = entry["start"]
 
             if limit <= 0 or used + amount > limit:
-                remaining = max(0, limit - used)
-                reset_in = max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0
-                db[key] = entry
-                self._write(db)
-                return False, {
+                state = {
                     "used": used,
                     "limit": limit,
-                    "remaining": remaining,
+                    "remaining": max(0, limit - used),
                     "start": start,
-                    "reset_in": reset_in,
-                }, None
+                    "reset_in": max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0,
+                }
+                db[key] = entry
+                self._write(db)
+                return False, state, None
 
-            # first successful usage starts the 24h window
+            # first successful reservation starts window
             if start <= 0:
                 start = now_ts
                 entry["start"] = start
 
             entry["used"] = used + amount
-            used2 = entry["used"]
-            remaining2 = max(0, limit - used2)
-            reset_in2 = max(0, self.window_seconds - (now_ts - start))
-
             db[key] = entry
             self._write(db)
 
-            token = {"guild_id": guild_id, "user_id": user_id, "amount": amount, "start": start}
-            return True, {
+            used2 = entry["used"]
+            state = {
                 "used": used2,
                 "limit": limit,
-                "remaining": remaining2,
+                "remaining": max(0, limit - used2),
                 "start": start,
-                "reset_in": reset_in2,
-            }, token
+                "reset_in": max(0, self.window_seconds - (now_ts - start)),
+            }
+            token = {"guild_id": guild_id, "user_id": user_id, "amount": amount, "start": start}
+            return True, state, token
 
     async def rollback(self, token: Optional[dict[str, int]]):
         if not token:
@@ -240,12 +232,11 @@ class RollingQuotaStore:
         async with self.lock:
             db = self._read()
             key = self._key(guild_id, user_id)
-            entry = self._normalize_entry(db.get(key, {}), now_ts)
+            entry = self._normalize(db.get(key, {}), now_ts)
 
             cur_start = entry["start"]
             used = entry["used"]
 
-            # only rollback same window
             if cur_start == token_start and used > 0:
                 used = max(0, used - amount)
                 entry["used"] = used
@@ -359,7 +350,6 @@ MODEL_CONFIG: dict[str, dict[str, Any]] = {
 }
 MODEL_ORDER = list(MODELS.keys())
 MODEL_RATINGS = {mid: m["rating"] for mid, m in MODELS.items()}
-OPEN_MODELS = {mid for mid, r in MODEL_RATINGS.items() if r in OPEN_RATINGS}
 DISABLED_MODELS: set[str] = set()
 EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "bria-bg-remover"}
 
@@ -397,13 +387,11 @@ async def track_ephemeral_message(interaction: discord.Interaction, msg: Optiona
 
 async def cleanup_user_ephemerals(interaction: discord.Interaction):
     for m in _ephemeral_messages.pop(_ephemeral_key(interaction), []):
-        try:
+        with contextlib.suppress(Exception):
             await m.delete()
-        except Exception:
-            pass
 
 # =================================================
-# GENERIC HELPERS
+# HELPERS
 # =================================================
 def _safe_float(v: Any, default: Optional[float] = 0.0) -> Optional[float]:
     try:
@@ -446,12 +434,12 @@ def _seconds_human(sec: int) -> str:
     return f"{s}s"
 
 
-def _tier_sorted_asc() -> list[tuple[int, dict[str, int]]]:
-    return sorted(TIER_RULES.items(), key=lambda x: x[0])
-
-
 def _tier_sorted_desc() -> list[tuple[int, dict[str, int]]]:
     return sorted(TIER_RULES.items(), key=lambda x: x[0], reverse=True)
+
+
+def _tier_sorted_asc() -> list[tuple[int, dict[str, int]]]:
+    return sorted(TIER_RULES.items(), key=lambda x: x[0])
 
 
 def get_member_tier(member: Optional[discord.Member]) -> int:
@@ -606,7 +594,7 @@ def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str
     return None, None
 
 
-def build_generate_payload(model_id, ratio, generation_resolution, prompt, negative_prompt, cfg_scale, steps) -> dict[str, Any]:
+def build_generate_payload(model_id: str, ratio: str, generation_resolution: Optional[str], prompt: str, negative_prompt: str, cfg_scale: float, steps: int) -> dict[str, Any]:
     cfg = MODEL_CONFIG[model_id]
     payload: dict[str, Any] = {
         "model": model_id,
@@ -642,7 +630,7 @@ def build_resolution_hint(model_id: str) -> str:
     return " • ".join(parts)
 
 
-def estimate_generation_seconds(model_id, steps, cfg_scale, prompt_len, generation_resolution) -> float:
+def estimate_generation_seconds(model_id: str, steps: int, cfg_scale: float, prompt_len: int, generation_resolution: str) -> float:
     cfg = MODEL_CONFIG[model_id]
     base = 8.5
     model_f = float(cfg.get("speed_factor", 1.0))
@@ -689,6 +677,7 @@ def _infer_image_ext(b: bytes) -> str:
 def _discord_upload_limit_bytes(interaction: discord.Interaction) -> int:
     if DISCORD_UPLOAD_LIMIT_FORCE_MB > 0:
         return DISCORD_UPLOAD_LIMIT_FORCE_MB * 1024 * 1024
+
     inter_limit = getattr(interaction, "filesize_limit", None)
     guild_limit = getattr(interaction.guild, "filesize_limit", None) if interaction.guild else None
     candidates = [v for v in (inter_limit, guild_limit) if isinstance(v, int) and v > 0]
@@ -813,16 +802,14 @@ def _extract_embed_image_urls(msg: discord.Message) -> list[str]:
 
 
 async def _extract_image_bytes_from_message(msg: discord.Message, shared_session: Optional[aiohttp.ClientSession]) -> Optional[bytes]:
-    # attachments first
+    # 1) attachments
     for a in msg.attachments:
-        try:
+        with contextlib.suppress(Exception):
             raw = await a.read()
-        except Exception:
-            continue
-        if _looks_like_image(raw):
-            return raw
+            if _looks_like_image(raw):
+                return raw
 
-    # fallback: embed image urls
+    # 2) embeds/url fallback
     urls = _extract_embed_image_urls(msg)
     if not urls:
         return None
@@ -847,9 +834,8 @@ async def _extract_image_bytes_from_message(msg: discord.Message, shared_session
                 continue
     finally:
         if own_session:
-            with contextlib.suppress(Exception):  # type: ignore[name-defined]
-                await session.close()  # noqa
-
+            with contextlib.suppress(Exception):
+                await session.close()
     return None
 
 # =================================================
@@ -892,13 +878,11 @@ def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> floa
     mid = model_id.lower()
     if "wai-illustrious" in mid or "anime" in mid:
         return 7.0
-    if model_id == "qwen-image":
-        return 6.0
     if default_steps <= 10:
         return 6.0
     if width_div >= 16:
         return 6.8
-    if any(x in mid for x in ["gpt-image", "recraft", "seedream", "krea", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "ideogram", "qwen-image-2"]):
+    if any(x in mid for x in ["gpt-image", "recraft", "seedream", "krea", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "ideogram", "qwen-image"]):
         return 5.0
     return 5.4
 
@@ -933,6 +917,10 @@ def _extract_image_caps(model_obj: dict[str, Any]) -> dict[str, Any]:
 
 
 async def sync_model_caps_from_api(session: aiohttp.ClientSession):
+    if not VENICE_MODELS_URL:
+        logger.warning("VENICE_MODELS_URL missing -> skip model sync")
+        return
+
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     req_id = uuid.uuid4().hex[:8]
     logger.info("[IMG-MODELS %s] -> GET %s", req_id, VENICE_MODELS_URL)
@@ -941,7 +929,7 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
         txt = await resp.text()
         logger.info("[IMG-MODELS %s] <- status=%s", req_id, resp.status)
         if resp.status != 200:
-            logger.warning("Model sync failed %s: %s", resp.status, txt[:600])
+            logger.warning("[IMG-MODELS %s] failed: %s", req_id, txt[:500])
             return
         payload = json.loads(txt) if txt else {}
 
@@ -954,7 +942,7 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
             continue
         m = api_models.get(mid)
         if not m:
-            logger.warning("Model %s not found in API; using baseline fallback.", mid)
+            logger.warning("Model %s not found in API; using fallback caps.", mid)
             continue
         if _is_deprecated(m) and mid != "lustify-sdxl":
             DISABLED_MODELS.add(mid)
@@ -1011,12 +999,10 @@ async def resolve_member_level(interaction: discord.Interaction, member: discord
             continue
 
     for attr in ("level", "lvl", "xp_level"):
-        try:
+        with contextlib.suppress(Exception):
             val = getattr(member, attr, None)
             if val is not None:
                 return int(val)
-        except Exception:
-            pass
 
     max_from_roles: Optional[int] = None
     for r in member.roles:
@@ -1027,16 +1013,17 @@ async def resolve_member_level(interaction: discord.Interaction, member: discord
     return max_from_roles
 
 
-async def send_resolution_lock_message(interaction, resolution, role_id, level_required=None, current_level=None):
+async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int, level_required: Optional[int] = None, current_level: Optional[int] = None):
     level_name = ROLE_LEVEL_NAMES.get(role_id, "Required level")
     level_txt = f"Level {level_required}+" if level_required else level_name
     role_txt = f"<@&{role_id}> ({level_name})" if role_id else "`required role`"
     current_txt = f"\nYour current level: **{current_level}**" if current_level is not None else ""
+
     await send_ephemeral(
         interaction,
         f"🔒 **{resolution}** is locked.\n"
         f"You need **{level_txt}** and role {role_txt}.{current_txt}\n"
-        f"💡 Keep earning XP in Goon Hut to unlock higher resolution rendering."
+        f"💡 Keep earning XP in Goon Hut to unlock higher resolutions."
     )
 
 
@@ -1054,7 +1041,7 @@ async def send_image_quota_message(interaction: discord.Interaction, member: Opt
     else:
         lines.append("🏆 You already have the highest image tier.")
     lines.append(f"Tier limits: `{_image_tier_line()}` • Default: `2`")
-    lines.append("Stay active and keep voting to level up faster.")
+    lines.append("Stay active, chat, and vote to level up faster.")
     await send_ephemeral(interaction, "\n".join(lines))
 
 # =================================================
@@ -1073,16 +1060,18 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
                     img = await _extract_image_from_response(resp)
                     if img and _looks_like_image(img):
                         return img
-                    logger.warning("[IMG %s] 200 but no valid image payload", req_id)
+                    logger.warning("[IMG %s] 200 but invalid image payload", req_id)
                     return None
+
                 body = await resp.text()
-                logger.warning("[IMG %s] error %s: %s", req_id, resp.status, body[:600])
+                logger.warning("[IMG %s] error %s: %s", req_id, resp.status, body[:500])
+
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
                 return None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning("[IMG %s] request failed attempt=%s err=%s", req_id, attempt + 1, e)
+            logger.warning("[IMG %s] request failed attempt=%s: %s", req_id, attempt + 1, e)
             if attempt < retries:
                 await asyncio.sleep(1.2 * (attempt + 1))
                 continue
@@ -1120,11 +1109,13 @@ async def _upscale_once(session: aiohttp.ClientSession, image_bytes: bytes, scal
                     else:
                         logger.warning("[UPS %s] error %s: %s", req_id, resp.status, (await resp.text())[:400])
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning("[UPS %s] request failed attempt=%s err=%s", req_id, attempt + 1, e)
+                logger.warning("[UPS %s] request failed attempt=%s: %s", req_id, attempt + 1, e)
             except Exception as e:
                 logger.exception("[UPS %s] unexpected error: %s", req_id, e)
+
         if attempt < retries:
             await asyncio.sleep(1.2 * (attempt + 1))
+
     return None
 
 
@@ -1159,13 +1150,12 @@ async def run_with_progress(
         ratio = min(0.999, elapsed / max(est, min_est))
         percent = min(end_percent, start_percent + int(ratio * span))
         eta = max(0.0, est - elapsed)
+
         if percent != last_percent:
             last_percent = percent
             if progress_msg:
-                try:
+                with contextlib.suppress(Exception):
                     await progress_msg.edit(content=make_content(percent, eta))
-                except Exception:
-                    pass
         await asyncio.sleep(0.8)
 
     return time.monotonic() - started
@@ -1223,44 +1213,50 @@ class OwnerLockedView(discord.ui.View):
 
 
 class AspectRatioSelect(discord.ui.Select):
-    def __init__(self, session, model_id, hidden_suffix, owner_id, previous_inputs=None):
+    def __init__(self, session: aiohttp.ClientSession, model_id: str, hidden_suffix: str, owner_id: int, previous_inputs=None):
         self.session = session
         self.model_id = model_id
         self.hidden_suffix = hidden_suffix
         self.owner_id = owner_id
         self.previous_inputs = previous_inputs or {}
         options = [discord.SelectOption(label=ASPECT_LABELS.get(r, r), value=r) for r in get_model_ratios(model_id)][:25]
-        super().__init__(placeholder="📐 Choose aspect ratio...", min_values=1, max_values=1, options=options, custom_id=f"venice_aspect_select:{model_id}")
+        super().__init__(
+            placeholder="📐 Choose aspect ratio...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id=f"venice_aspect_select:{model_id}",
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if self.model_id in DISABLED_MODELS:
             await send_ephemeral(interaction, "❌ This model is disabled.")
             return
+
         source_msg = interaction.message
         await interaction.response.send_modal(
             GenerationModal(self.session, self.model_id, self.values[0], self.hidden_suffix, self.owner_id, self.previous_inputs)
         )
         if source_msg:
-            try:
+            with contextlib.suppress(Exception):
                 await source_msg.edit(view=None, content="✅ Aspect ratio selected.")
-            except Exception:
-                pass
 
 
 class AspectRatioSelectView(OwnerLockedView):
-    def __init__(self, session, model_id, hidden_suffix, owner_id, previous_inputs=None):
+    def __init__(self, session: aiohttp.ClientSession, model_id: str, hidden_suffix: str, owner_id: int, previous_inputs=None):
         super().__init__(owner_id=owner_id, timeout=600)
         self.add_item(AspectRatioSelect(session, model_id, hidden_suffix, owner_id, previous_inputs))
 
 
 class EasyModeModal(discord.ui.Modal):
-    def __init__(self, session, model_id, ratio, hidden_suffix, owner_id):
+    def __init__(self, session: aiohttp.ClientSession, model_id: str, ratio: str, hidden_suffix: str, owner_id: int):
         self.session = session
         self.model_id = model_id
         self.ratio = ratio
         self.hidden_suffix_value = hidden_suffix
         self.owner_id = owner_id
         cfg = MODEL_CONFIG[model_id]
+
         super().__init__(title=f"Easy Mode {EASY_MODE_ICON} • {get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}")
         self.prompt = discord.ui.TextInput(
             label="Describe what you want to see",
@@ -1310,7 +1306,7 @@ class EasyModeModal(discord.ui.Modal):
 
 
 class GenerationModal(discord.ui.Modal):
-    def __init__(self, session, model_id, ratio, hidden_suffix, owner_id, previous_inputs=None):
+    def __init__(self, session: aiohttp.ClientSession, model_id: str, ratio: str, hidden_suffix: str, owner_id: int, previous_inputs=None):
         self.session = session
         self.model_id = model_id
         self.ratio = ratio
@@ -1360,6 +1356,7 @@ class GenerationModal(discord.ui.Modal):
             placeholder=(hidden_suffix[:100] if hidden_suffix else ""),
             default=self.previous_inputs.get("hidden_suffix", ""),
         )
+
         for item in (self.prompt, self.negative_prompt, self.cfg_value, self.steps_value, self.hidden_suffix):
             self.add_item(item)
 
@@ -1421,7 +1418,7 @@ class GenerationModal(discord.ui.Modal):
 
 
 class StarterModelSelect(discord.ui.Select):
-    def __init__(self, session, channel_id):
+    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         self.session = session
         self.channel_id = channel_id
         super().__init__(
@@ -1445,7 +1442,7 @@ class StarterModelSelect(discord.ui.Select):
 
 
 class StarterView(discord.ui.View):
-    def __init__(self, session, channel_id):
+    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
         super().__init__(timeout=None)
         self.add_item(StarterModelSelect(session, channel_id))
 
@@ -1483,7 +1480,7 @@ class AnimateDurationView(OwnerLockedView):
         return _cb
 
     async def _run(self, interaction: discord.Interaction, seconds: int):
-        if not isinstance(interaction.user, discord.Member):
+        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
             await send_ephemeral(interaction, "❌ This action is server-only.")
             return
 
@@ -1492,19 +1489,28 @@ class AnimateDurationView(OwnerLockedView):
             await send_ephemeral(interaction, "❌ VeniceVideoCog is not loaded.")
             return
 
-        # one render cannot exceed 15 sec
         if seconds > MAX_VIDEO_RENDER_SECONDS:
-            await send_ephemeral(interaction, "❌ This model supports max 15 seconds per render.")
+            await send_ephemeral(interaction, "❌ Max duration per render is 15 seconds.")
             return
 
-        # disable duration buttons after click
+        # live check again (budget may have changed)
+        try:
+            rem = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
+            if int(rem.get("remaining", 0)) < seconds:
+                await send_ephemeral(
+                    interaction,
+                    f"⛔ Not enough video seconds left right now.\n"
+                    f"Remaining: **{rem.get('remaining', 0)}s** of **{rem.get('limit', 0)}s**."
+                )
+                return
+        except Exception:
+            pass
+
         for child in self.children:
             child.disabled = True
         if interaction.message:
-            try:
+            with contextlib.suppress(Exception):
                 await interaction.message.edit(view=self)
-            except Exception:
-                pass
 
         await interaction.response.defer(ephemeral=True)
 
@@ -1522,10 +1528,10 @@ class AnimateDurationView(OwnerLockedView):
             await interaction.followup.send("❌ Source image message not found.", ephemeral=True)
             return
 
-        # robust image extraction: attachment OR embed image URL
         image_cog = interaction.client.get_cog("VeniceImageCog")
         shared_session = getattr(image_cog, "session", None) if image_cog else None
         image_bytes = await _extract_image_bytes_from_message(source_message, shared_session)
+
         if not image_bytes:
             await interaction.followup.send("❌ No valid image data found on source message.", ephemeral=True)
             return
@@ -1564,19 +1570,23 @@ class AnimateActionView(OwnerLockedView):
             await send_ephemeral(interaction, "❌ VeniceVideoCog is not loaded.")
             return
 
-        info = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
-        budget = int(info["limit"])
-        used = int(info["used"])
-        remaining = int(info["remaining"])
-        reset_in = int(info["reset_in"])
-        tier = int(info["tier"])
+        try:
+            info = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
+            budget = int(info["limit"])
+            used = int(info["used"])
+            remaining = int(info["remaining"])
+            reset_in = int(info["reset_in"])
+            tier = int(info["tier"])
+        except Exception:
+            await send_ephemeral(interaction, "❌ Could not load your video quota right now.")
+            return
 
         if budget <= 0:
             await send_ephemeral(
                 interaction,
                 "🎬 Video rendering is locked for members without a Tier role.\n"
-                "Unlock Tier 1 to start your daily video seconds budget.\n"
-                "Keep earning XP in Goon Hut to level up."
+                "Unlock Tier 1 to start your daily video seconds.\n"
+                "Keep earning XP in Goon Hut."
             )
             return
 
@@ -1594,7 +1604,7 @@ class AnimateActionView(OwnerLockedView):
 
         await send_ephemeral(
             interaction,
-            f"⏱ Choose video length (remaining today: **{remaining}s**, max per render: **15s**):",
+            content=f"⏱ Choose video length (remaining today: **{remaining}s**, max per render: **15s**):",
             view=AnimateDurationView(
                 owner_id=self.owner_id,
                 source_channel_id=self.source_channel_id,
@@ -1609,13 +1619,14 @@ class AnimateActionView(OwnerLockedView):
 # RESOLUTION + GENERATION
 # =================================================
 class ResolutionSelectView(OwnerLockedView):
-    def __init__(self, session, generation_data):
+    def __init__(self, session: aiohttp.ClientSession, generation_data: dict[str, Any]):
         super().__init__(owner_id=generation_data["owner_id"], timeout=900)
         self.session = session
         self.generation_data = generation_data
 
         model_id = generation_data["model_id"]
         native = set(MODEL_CONFIG[model_id]["resolutions"])
+
         for res in RESOLUTION_TIERS:
             label = f"{res} ↗" if (res not in native and res in ("2K", "4K")) else res
             style = (
@@ -1646,10 +1657,9 @@ class ResolutionSelectView(OwnerLockedView):
 
             await interaction.response.defer(ephemeral=True)
             if interaction.message:
-                try:
+                with contextlib.suppress(Exception):
                     await interaction.message.edit(view=None, content="✅ Resolution selected.")
-                except Exception:
-                    pass
+
             await self.generate_image(interaction, resolution)
 
         return callback
@@ -1675,12 +1685,12 @@ class ResolutionSelectView(OwnerLockedView):
             self.stop()
             return
 
-        # --------- daily image quota reserve ----------
+        # --------- reserve image quota ----------
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         image_limit = get_image_limit_for_member(member)
-        ok, state, token = await image_quota.reserve(interaction.guild.id, interaction.user.id, image_limit, 1)
-        if not ok:
-            await send_image_quota_message(interaction, member, state)
+        ok_quota, state_quota, token_quota = await image_quota.reserve(interaction.guild.id, interaction.user.id, image_limit, 1)
+        if not ok_quota:
+            await send_image_quota_message(interaction, member, state_quota)
             self.stop()
             return
 
@@ -1710,6 +1720,7 @@ class ResolutionSelectView(OwnerLockedView):
 
             if not image_bytes:
                 await interaction.followup.send("❌ Generation failed.", ephemeral=True)
+                self.stop()
                 return
 
             upscaled_success = False
@@ -1726,7 +1737,7 @@ class ResolutionSelectView(OwnerLockedView):
                     image_bytes = upscaled
                     upscaled_success = True
 
-            with contextlib.suppress(Exception):  # type: ignore[name-defined]
+            with contextlib.suppress(Exception):
                 await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
 
             embed = discord.Embed(color=discord.Color.blurple())
@@ -1758,6 +1769,7 @@ class ResolutionSelectView(OwnerLockedView):
 
             if not interaction.channel:
                 await interaction.followup.send("❌ Channel is unavailable.", ephemeral=True)
+                self.stop()
                 return
 
             upload_limit = _discord_upload_limit_bytes(interaction)
@@ -1787,12 +1799,14 @@ class ResolutionSelectView(OwnerLockedView):
 
             if posted is None:
                 await interaction.followup.send("❌ Upload failed after compression retries.", ephemeral=True)
+                self.stop()
                 return
 
+            # success => keep quota reservation
             quota_success = True
 
             for emo in REACTIONS:
-                with contextlib.suppress(Exception):  # type: ignore[name-defined]
+                with contextlib.suppress(Exception):
                     await posted.add_reaction(emo)
 
             if isinstance(interaction.channel, discord.TextChannel):
@@ -1817,7 +1831,7 @@ class ResolutionSelectView(OwnerLockedView):
             )
         finally:
             if not quota_success:
-                await image_quota.rollback(token)
+                await image_quota.rollback(token_quota)
             self.stop()
 
 # =================================================
@@ -1854,13 +1868,13 @@ class VeniceImageCog(commands.Cog):
             asyncio.create_task(self.session.close())
 
     @staticmethod
-    async def _delete_recent_model_dropdown_posts_unlocked(channel, bot_user_id, limit):
+    async def _delete_recent_model_dropdown_posts_unlocked(channel: discord.TextChannel, bot_user_id: Optional[int], limit: int) -> int:
         deleted = 0
         async for msg in channel.history(limit=limit):
             if bot_user_id is not None and msg.author.id != bot_user_id:
                 continue
             if is_model_dropdown_message(msg):
-                with contextlib.suppress(Exception):  # type: ignore[name-defined]
+                with contextlib.suppress(Exception):
                     await msg.delete()
                     deleted += 1
         return deleted
@@ -1878,7 +1892,7 @@ class VeniceImageCog(commands.Cog):
                 logger.warning("ensure_starter_message failed in channel %s: %s", channel.id, e)
 
     @staticmethod
-    async def ensure_starter_message_static(channel, session, bot_user_id):
+    async def ensure_starter_message_static(channel: discord.TextChannel, session: aiohttp.ClientSession, bot_user_id: Optional[int]):
         async with get_channel_lock(channel.id):
             try:
                 await VeniceImageCog._delete_recent_model_dropdown_posts_unlocked(
