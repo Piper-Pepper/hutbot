@@ -68,6 +68,7 @@ async def main():
             "hut_dm",
             "hut_dm_app",
             "venice_cog",
+            "video_cog",
             "gather",
             "reset",
             "hutvote",

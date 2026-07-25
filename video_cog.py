@@ -1,3 +1,4 @@
+# video_cog.py
 import asyncio
 import base64
 import contextlib
@@ -5,7 +6,10 @@ import io
 import json
 import logging
 import os
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import aiohttp
@@ -22,23 +26,161 @@ VENICE_VIDEO_RETRIEVE_URL = os.getenv("VENICE_VIDEO_RETRIEVE_URL")
 VENICE_VIDEO_I2V_MODEL = os.getenv("VENICE_VIDEO_I2V_MODEL", "wan-2-7-image-to-video")
 VENICE_VIDEO_RESOLUTION = os.getenv("VENICE_VIDEO_RESOLUTION", "720p")
 
-VIDEO_ALLOWED_DURATIONS = [10, 15, 20, 25, 30, 40]
+# model/runtime constraints
+MAX_VIDEO_RENDER_SECONDS = 15
+VIDEO_CHOICES = [5, 10, 15]
 
+# polling
 VIDEO_POLL_SECONDS = 6
 VIDEO_HARD_TIMEOUT_SECONDS = 1800
 VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 720
 VIDEO_MAX_CONSECUTIVE_5XX = 8
 VIDEO_5XX_WINDOW_SECONDS = 180
 
-# Tier rules (same as image cog)
+# tier budgets (seconds / 24h window)
 TIER_RULES: dict[int, dict[str, int]] = {
-    1: {"role_id": 1377051179615522926, "level": 4, "image_limit": 5, "video_max_seconds": 10},
-    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 10, "video_max_seconds": 15},
-    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 15, "video_max_seconds": 20},
-    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 20, "video_max_seconds": 25},
-    5: {"role_id": 1375666588404940830, "level": 43, "image_limit": 30, "video_max_seconds": 30},
-    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69, "video_max_seconds": 40},
+    1: {"role_id": 1377051179615522926, "level": 4, "video_budget_sec": 10},
+    2: {"role_id": 1375147276413964408, "level": 11, "video_budget_sec": 15},
+    3: {"role_id": 1376592697606930593, "level": 21, "video_budget_sec": 20},
+    4: {"role_id": 1381791848875430069, "level": 33, "video_budget_sec": 25},
+    5: {"role_id": 1375666588404940830, "level": 43, "video_budget_sec": 30},
+    6: {"role_id": 1375584380914896978, "level": 69, "video_budget_sec": 40},
 }
+DEFAULT_VIDEO_BUDGET_SEC = 0
+
+VIDEO_QUOTA_FILE = os.getenv("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
+VIDEO_WINDOW_SECONDS = 24 * 60 * 60
+
+
+class RollingQuotaStore:
+    def __init__(self, file_path: str, window_seconds: int = VIDEO_WINDOW_SECONDS):
+        self.file_path = Path(file_path)
+        self.window_seconds = window_seconds
+        self.lock = asyncio.Lock()
+
+    def _read(self) -> dict[str, Any]:
+        if not self.file_path.exists():
+            return {}
+        try:
+            raw = self.file_path.read_text(encoding="utf-8")
+            obj = json.loads(raw) if raw else {}
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+
+    def _write(self, obj: dict[str, Any]):
+        if self.file_path.parent and str(self.file_path.parent) != ".":
+            self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+
+    def _key(self, guild_id: int, user_id: int) -> str:
+        return f"{guild_id}:{user_id}"
+
+    def _normalize(self, entry: dict[str, Any], now_ts: int) -> dict[str, int]:
+        start = int(entry.get("start", 0) or 0)
+        used = int(entry.get("used", 0) or 0)
+        if start > 0 and (now_ts - start) >= self.window_seconds:
+            start = 0
+            used = 0
+        if used < 0:
+            used = 0
+        return {"start": start, "used": used}
+
+    async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
+        now_ts = int(time.time())
+        limit = max(0, int(limit))
+
+        async with self.lock:
+            db = self._read()
+            key = self._key(guild_id, user_id)
+            entry = self._normalize(db.get(key, {}), now_ts)
+            db[key] = entry
+            self._write(db)
+
+            used = entry["used"]
+            start = entry["start"]
+            remaining = max(0, limit - used)
+            reset_in = max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0
+
+            return {
+                "used": used,
+                "limit": limit,
+                "remaining": remaining,
+                "start": start,
+                "reset_in": reset_in,
+            }
+
+    async def reserve(self, guild_id: int, user_id: int, limit: int, amount: int) -> tuple[bool, dict[str, int], Optional[dict[str, int]]]:
+        now_ts = int(time.time())
+        limit = max(0, int(limit))
+        amount = max(0, int(amount))
+
+        async with self.lock:
+            db = self._read()
+            key = self._key(guild_id, user_id)
+            entry = self._normalize(db.get(key, {}), now_ts)
+
+            used = entry["used"]
+            start = entry["start"]
+
+            if limit <= 0 or used + amount > limit:
+                state = {
+                    "used": used,
+                    "limit": limit,
+                    "remaining": max(0, limit - used),
+                    "start": start,
+                    "reset_in": max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0,
+                }
+                db[key] = entry
+                self._write(db)
+                return False, state, None
+
+            if start <= 0:
+                start = now_ts
+                entry["start"] = start
+
+            entry["used"] = used + amount
+            db[key] = entry
+            self._write(db)
+
+            used2 = entry["used"]
+            state = {
+                "used": used2,
+                "limit": limit,
+                "remaining": max(0, limit - used2),
+                "start": start,
+                "reset_in": max(0, self.window_seconds - (now_ts - start)),
+            }
+            token = {"guild_id": guild_id, "user_id": user_id, "amount": amount, "start": start}
+            return True, state, token
+
+    async def rollback(self, token: Optional[dict[str, int]]):
+        if not token:
+            return
+
+        guild_id = int(token.get("guild_id", 0))
+        user_id = int(token.get("user_id", 0))
+        amount = int(token.get("amount", 0))
+        token_start = int(token.get("start", 0))
+        if guild_id <= 0 or user_id <= 0 or amount <= 0:
+            return
+
+        now_ts = int(time.time())
+        async with self.lock:
+            db = self._read()
+            key = self._key(guild_id, user_id)
+            entry = self._normalize(db.get(key, {}), now_ts)
+            cur_start = entry["start"]
+            used = entry["used"]
+
+            if cur_start == token_start and used > 0:
+                used = max(0, used - amount)
+                entry["used"] = used
+                if used == 0:
+                    entry["start"] = 0
+
+            db[key] = entry
+            self._write(db)
 
 
 def utc_now() -> datetime:
@@ -84,6 +226,18 @@ def _progress_bar(percent: int, blocks: int = 14) -> str:
     return "█" * filled + "░" * (blocks - filled)
 
 
+def _seconds_human(sec: int) -> str:
+    sec = max(0, int(sec))
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    if h > 0:
+        return f"{h}h {m}m"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
 def _extract_queue_id(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -123,73 +277,16 @@ def _extract_urls_from_payload(payload: Any) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
-def _tier_sorted_desc() -> list[tuple[int, dict[str, int]]]:
+def _tier_desc() -> list[tuple[int, dict[str, int]]]:
     return sorted(TIER_RULES.items(), key=lambda x: x[0], reverse=True)
 
 
-def _tier_sorted_asc() -> list[tuple[int, dict[str, int]]]:
+def _tier_asc() -> list[tuple[int, dict[str, int]]]:
     return sorted(TIER_RULES.items(), key=lambda x: x[0])
 
 
-def get_member_tier(member: Optional[discord.Member]) -> int:
-    if not isinstance(member, discord.Member):
-        return 0
-    role_ids = {r.id for r in member.roles}
-    for tier, cfg in _tier_sorted_desc():
-        if cfg["role_id"] in role_ids:
-            return tier
-    return 0
-
-
-def get_video_max_seconds_for_member(member: Optional[discord.Member]) -> int:
-    tier = get_member_tier(member)
-    if tier <= 0:
-        return 0
-    return int(TIER_RULES[tier]["video_max_seconds"])
-
-
-def get_next_tier_info(current_tier: int) -> Optional[tuple[int, dict[str, int]]]:
-    for tier, cfg in _tier_sorted_asc():
-        if tier > current_tier:
-            return tier, cfg
-    return None
-
-
-def _video_tier_compact_line() -> str:
-    parts = [f"T{tier}:{cfg['video_max_seconds']}s" for tier, cfg in _tier_sorted_asc()]
-    return " • ".join(parts)
-
-
-def build_video_lock_text(member: Optional[discord.Member], requested_seconds: Optional[int] = None) -> str:
-    tier = get_member_tier(member)
-    max_sec = get_video_max_seconds_for_member(member)
-    next_info = get_next_tier_info(tier)
-
-    if max_sec <= 0:
-        return (
-            "🎬 Video rendering is locked for members without a Tier role.\n"
-            f"Unlock Tier 1: <@&{TIER_RULES[1]['role_id']}> (Level {TIER_RULES[1]['level']}) "
-            f"to render up to **{TIER_RULES[1]['video_max_seconds']}s**.\n"
-            f"Video limits: `{_video_tier_compact_line()}`\n"
-            "Keep earning XP in **Goon Hut** to unlock video renders."
-        )
-
-    if requested_seconds is not None and requested_seconds > max_sec:
-        lines = [
-            f"🎬 Your current max video duration is **{max_sec}s** (Tier {tier}).",
-            f"Requested: **{requested_seconds}s**.",
-        ]
-        if next_info:
-            nt, cfg = next_info
-            lines.append(
-                f"🚀 Next unlock: **Tier {nt}** (<@&{cfg['role_id']}>, Level {cfg['level']}) → **{cfg['video_max_seconds']}s**."
-            )
-        else:
-            lines.append("🏆 You already have the highest video tier.")
-        lines.append(f"Video limits: `{_video_tier_compact_line()}`")
-        return "\n".join(lines)
-
-    return ""
+def _video_tier_line() -> str:
+    return " • ".join([f"T{t}:{cfg['video_budget_sec']}s" for t, cfg in _tier_asc()])
 
 
 class VeniceVideoCog(commands.Cog):
@@ -200,6 +297,8 @@ class VeniceVideoCog(commands.Cog):
 
         self.global_busy = False
         self.global_busy_lock = asyncio.Lock()
+
+        self.video_quota = RollingQuotaStore(VIDEO_QUOTA_FILE)
 
     async def _ensure_session(self):
         async with self.session_lock:
@@ -233,6 +332,39 @@ class VeniceVideoCog(commands.Cog):
     async def _end_global(self):
         async with self.global_busy_lock:
             self.global_busy = False
+
+    def get_member_tier(self, member: Optional[discord.Member]) -> int:
+        if not isinstance(member, discord.Member):
+            return 0
+        role_ids = {r.id for r in member.roles}
+        for tier, cfg in _tier_desc():
+            if cfg["role_id"] in role_ids:
+                return tier
+        return 0
+
+    def get_budget_for_member(self, member: Optional[discord.Member]) -> int:
+        tier = self.get_member_tier(member)
+        if tier <= 0:
+            return DEFAULT_VIDEO_BUDGET_SEC
+        return int(TIER_RULES[tier]["video_budget_sec"])
+
+    def _next_tier(self, current_tier: int) -> Optional[tuple[int, dict[str, int]]]:
+        for tier, cfg in _tier_asc():
+            if tier > current_tier:
+                return tier, cfg
+        return None
+
+    async def get_remaining_info(self, guild_id: int, member: discord.Member) -> dict[str, int]:
+        tier = self.get_member_tier(member)
+        budget = self.get_budget_for_member(member)
+        state = await self.video_quota.peek(guild_id, member.id, budget)
+        return {
+            "tier": tier,
+            "used": int(state["used"]),
+            "limit": int(state["limit"]),
+            "remaining": int(state["remaining"]),
+            "reset_in": int(state["reset_in"]),
+        }
 
     def _build_progress_embed(
         self,
@@ -372,19 +504,20 @@ class VeniceVideoCog(commands.Cog):
         prompt: str,
         aspect: str,
         seconds: int,
-    ) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str]]:
+    ) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str], Optional[str]]:
         if not VENICE_VIDEO_QUEUE_URL:
-            return None, None, "VENICE_VIDEO_QUEUE_URL is missing."
+            return None, None, "VENICE_VIDEO_QUEUE_URL is missing.", None
         if not VENICE_API_KEY:
-            return None, None, "VENICE_API_KEY is missing."
+            return None, None, "VENICE_API_KEY is missing.", None
         if not _looks_like_image(image_bytes):
-            return None, None, "Invalid source image."
+            return None, None, "Invalid source image.", None
 
         await self._ensure_session()
         assert self.session is not None
 
         headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
         b64 = base64.b64encode(image_bytes).decode("utf-8")
+        request_id = uuid.uuid4().hex[:8]
 
         payload_variants = [
             {
@@ -424,11 +557,15 @@ class VeniceVideoCog(commands.Cog):
         timeout = aiohttp.ClientTimeout(total=35, connect=10, sock_read=30)
         last_error = "Queue request failed."
 
+        logger.info("[VID %s] -> queue model=%s duration=%ss aspect=%s", request_id, VENICE_VIDEO_I2V_MODEL, seconds, aspect)
+
         for attempt in range(3):
             for payload in payload_variants:
                 try:
                     async with self.session.post(VENICE_VIDEO_QUEUE_URL, headers=headers, json=payload, timeout=timeout) as resp:
                         text = await resp.text()
+                        logger.info("[VID %s] <- queue status=%s attempt=%s", request_id, resp.status, attempt + 1)
+
                         try:
                             data = json.loads(text) if text else {}
                         except Exception:
@@ -437,12 +574,12 @@ class VeniceVideoCog(commands.Cog):
                         if resp.status >= 400:
                             last_error = f"Queue error ({resp.status}): {text[:250]}"
                             if resp.status in (401, 403, 422):
-                                return None, data, last_error
+                                return None, data, last_error, request_id
                             continue
 
                         queue_id = _extract_queue_id(data)
                         if queue_id:
-                            return queue_id, data, None
+                            return queue_id, data, None, request_id
 
                         last_error = "Queue response did not include queue_id."
                 except Exception as e:
@@ -451,7 +588,7 @@ class VeniceVideoCog(commands.Cog):
 
             await asyncio.sleep(1.2 * (attempt + 1))
 
-        return None, None, last_error
+        return None, None, last_error, request_id
 
     async def _wait_for_result(
         self,
@@ -462,6 +599,7 @@ class VeniceVideoCog(commands.Cog):
         aspect: str,
         seconds: int,
         queue_download_url: Optional[str] = None,
+        request_id: str = "unknown",
     ) -> tuple[Optional[bytes], Optional[str], Optional[str]]:
         if not VENICE_VIDEO_RETRIEVE_URL:
             return None, None, "VENICE_VIDEO_RETRIEVE_URL is missing."
@@ -493,6 +631,7 @@ class VeniceVideoCog(commands.Cog):
             elapsed_sec = int((utc_now() - started).total_seconds())
 
             try:
+                logger.info("[VID %s] -> retrieve queue_id=%s", request_id, queue_id)
                 async with self.session.post(
                     VENICE_VIDEO_RETRIEVE_URL,
                     headers=headers,
@@ -500,6 +639,7 @@ class VeniceVideoCog(commands.Cog):
                     timeout=timeout,
                 ) as response:
                     ctype = (response.headers.get("content-type") or "").lower()
+                    logger.info("[VID %s] <- retrieve status=%s", request_id, response.status)
 
                     if response.status >= 400:
                         body_text = await response.text()
@@ -560,6 +700,8 @@ class VeniceVideoCog(commands.Cog):
                         continue
 
                     status = str(data.get("status", "")).lower()
+                    logger.info("[VID %s] poll status field=%s", request_id, status or "unknown")
+
                     avg_ms = _safe_int(data.get("average_execution_time", 180000), 180000)
                     exec_ms = _safe_int(data.get("execution_duration", 0), 0)
                     if exec_ms <= 0:
@@ -588,6 +730,7 @@ class VeniceVideoCog(commands.Cog):
                         candidate_urls = list(dict.fromkeys(candidate_urls))
 
                         for media_url in candidate_urls:
+                            logger.info("[VID %s] fetch media %s", request_id, media_url)
                             media_data, media_type = await self._fetch_media_from_url(media_url, headers)
                             if media_data:
                                 return media_data, media_type, None
@@ -658,24 +801,48 @@ class VeniceVideoCog(commands.Cog):
         if not _looks_like_image(image_bytes):
             await self._ephemeral(interaction, "❌ Invalid source image.")
             return False
-
-        if seconds not in VIDEO_ALLOWED_DURATIONS:
-            await self._ephemeral(interaction, f"❌ Invalid duration. Allowed values: {', '.join(map(str, VIDEO_ALLOWED_DURATIONS))}.")
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            await self._ephemeral(interaction, "❌ This action is server-only.")
             return False
 
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        max_sec = get_video_max_seconds_for_member(member)
-
-        if max_sec <= 0:
-            await self._ephemeral(interaction, build_video_lock_text(member))
+        if seconds > MAX_VIDEO_RENDER_SECONDS:
+            await self._ephemeral(interaction, "❌ This model supports max 15 seconds per render.")
+            return False
+        if seconds <= 0:
+            await self._ephemeral(interaction, "❌ Invalid duration.")
             return False
 
-        if seconds > max_sec:
-            await self._ephemeral(interaction, build_video_lock_text(member, requested_seconds=seconds))
+        tier = self.get_member_tier(interaction.user)
+        budget = self.get_budget_for_member(interaction.user)
+
+        if budget <= 0:
+            await self._ephemeral(
+                interaction,
+                "🎬 Video rendering is locked for members without a Tier role.\n"
+                "Unlock Tier 1 to start using daily video seconds."
+            )
+            return False
+
+        # reserve seconds budget before sending request
+        ok_q, state_q, token = await self.video_quota.reserve(interaction.guild.id, interaction.user.id, budget, seconds)
+        if not ok_q:
+            nxt = self._next_tier(tier)
+            msg = (
+                f"⛔ Not enough video seconds left in your 24h window.\n"
+                f"Used: **{state_q['used']}/{state_q['limit']}s** • Remaining: **{state_q['remaining']}s**\n"
+                f"⏳ Reset in **{_seconds_human(state_q['reset_in'])}**.\n"
+                f"Current tier: **T{tier}**."
+            )
+            if nxt:
+                nt, cfg = nxt
+                msg += f"\n🚀 Next unlock: **Tier {nt}** (<@&{cfg['role_id']}>, Level {cfg['level']}) → **{cfg['video_budget_sec']}s/day**."
+            msg += f"\nTier budgets: `{_video_tier_line()}`"
+            await self._ephemeral(interaction, msg)
             return False
 
         acquired = await self._try_begin_global()
         if not acquired:
+            await self.video_quota.rollback(token)
             await self._ephemeral(interaction, "⏳ A video render is already running. Please wait.")
             return False
 
@@ -683,7 +850,7 @@ class VeniceVideoCog(commands.Cog):
             aspect = "16:9"
 
         progress_message: Optional[discord.Message] = None
-        queue_id: Optional[str] = None
+        quota_success = False
 
         try:
             progress_embed = self._build_progress_embed(
@@ -697,7 +864,7 @@ class VeniceVideoCog(commands.Cog):
             )
             progress_message = await target_channel.send(embed=progress_embed)
 
-            queue_id, queue_response, queue_error = await self._queue_i2v(
+            queue_id, queue_response, queue_error, request_id = await self._queue_i2v(
                 image_bytes=image_bytes,
                 prompt=prompt,
                 aspect=aspect,
@@ -743,7 +910,8 @@ class VeniceVideoCog(commands.Cog):
                 prompt=prompt,
                 aspect=aspect,
                 seconds=seconds,
-                queue_download_url=queue_download_url
+                queue_download_url=queue_download_url,
+                request_id=request_id or "unknown",
             )
 
             if not media_data:
@@ -801,7 +969,15 @@ class VeniceVideoCog(commands.Cog):
                 file=file,
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
-            await self._ephemeral(interaction, "✅ Animation completed and posted in this image channel.")
+
+            quota_success = True
+            info = await self.get_remaining_info(interaction.guild.id, interaction.user)
+            await self._ephemeral(
+                interaction,
+                f"✅ Animation completed.\n"
+                f"Remaining today: **{info['remaining']}s** of **{info['limit']}s** "
+                f"(resets in **{_seconds_human(info['reset_in'])}**)."
+            )
             return True
 
         except discord.Forbidden:
@@ -812,6 +988,8 @@ class VeniceVideoCog(commands.Cog):
             await self._ephemeral(interaction, f"❌ Animation failed: {e}")
             return False
         finally:
+            if not quota_success:
+                await self.video_quota.rollback(token)
             await self._safe_delete_message(progress_message)
             await self._end_global()
 
