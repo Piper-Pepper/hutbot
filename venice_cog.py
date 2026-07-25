@@ -1,4 +1,3 @@
-# venice_cog.py
 import asyncio
 import base64
 import binascii
@@ -297,7 +296,7 @@ DEFAULT_MODEL_ROW = {
 _FULL_ASPECTS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
 
 MODELS: dict[str, dict[str, Any]] = {
-    "hidream": {"label": "🌙 HiDream", "rating": RATING_NUDITY,
+    "hidream": {"label": "🌙 HiDream", "rating": RATING_SFW,
                 "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW,
                    "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
@@ -319,7 +318,7 @@ MODELS: dict[str, dict[str, Any]] = {
                        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY,
                         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
-    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_NUDITY,
+    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT,
                      "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
     "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW,
                          "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
@@ -337,7 +336,7 @@ MODELS: dict[str, dict[str, Any]] = {
                         "caps": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []}},
     "z-image-turbo": {"label": "⚡ Z-Image Turbo", "rating": RATING_EXPLICIT,
                       "caps": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "chroma": {"label": "🌈 Chroma", "rating": RATING_NUDITY,
+    "chroma": {"label": "🌈 Chroma", "rating": RATING_SFW,
                "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
 }
 
@@ -388,8 +387,26 @@ async def cleanup_user_ephemerals(interaction: discord.Interaction):
             await m.delete()
 
 # =================================================
-# GENERIC HELPERS
+# HELPERS
 # =================================================
+def _to_int(v: Any, default: int) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _safe_float(v: Any, default: Optional[float] = 0.0) -> Optional[float]:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
 def _resolution_sort_key(x: str) -> int:
     return RESOLUTION_TIERS.index(x) if x in RESOLUTION_TIERS else 999
 
@@ -826,7 +843,6 @@ async def _extract_image_bytes_from_message(msg: discord.Message, shared_session
 
 
 def _extract_source_image_url(msg: discord.Message) -> Optional[str]:
-    # prefer attachment URL
     for a in msg.attachments:
         ctype = (a.content_type or "").lower()
         name = (a.filename or "").lower()
@@ -834,7 +850,6 @@ def _extract_source_image_url(msg: discord.Message) -> Optional[str]:
             if isinstance(a.url, str) and a.url.startswith("http"):
                 return a.url
 
-    # fallback: embed image/thumb/url
     for emb in msg.embeds:
         u = (emb.image.url if emb.image else None) or (emb.thumbnail.url if emb.thumbnail else None)
         if isinstance(u, str) and u.startswith("http"):
@@ -862,24 +877,18 @@ def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
     pricing = (model_obj.get("model_spec") or {}).get("pricing") or {}
     gen = pricing.get("generation")
     if isinstance(gen, dict) and "usd" in gen:
-        try:
-            return float(gen["usd"])
-        except Exception:
-            return None
+        return _safe_float(gen["usd"], None)
+
     res = pricing.get("resolutions")
     if isinstance(res, dict) and res:
         if isinstance(res.get("1K"), dict):
-            try:
-                return float(res["1K"].get("usd"))
-            except Exception:
-                return None
+            return _safe_float(res["1K"].get("usd"), None)
         vals = []
         for row in res.values():
             if isinstance(row, dict) and "usd" in row:
-                try:
-                    vals.append(float(row["usd"]))
-                except Exception:
-                    pass
+                v = _safe_float(row.get("usd"), None)
+                if v is not None:
+                    vals.append(v)
         if vals:
             return min(vals)
     return None
@@ -888,7 +897,7 @@ def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
 def _calc_speed_factor_from_price(usd: Optional[float]) -> float:
     if usd is None or usd <= 0:
         return 1.0
-    return max(0.70, min((usd / 0.05) ** 0.20, 1.55))
+    return _clamp((usd / 0.05) ** 0.20, 0.70, 1.55)
 
 
 def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> float:
@@ -972,7 +981,7 @@ async def sync_model_caps_from_api(session: aiohttp.ClientSession):
         DISABLED_MODELS.clear()
 
 # =================================================
-# EPHEMERAL TEXT HELPERS
+# EPHEMERAL HELPERS
 # =================================================
 async def send_ephemeral(interaction: discord.Interaction, content: Optional[str] = None, **kwargs) -> Optional[discord.Message]:
     payload = dict(kwargs)
@@ -1065,7 +1074,7 @@ async def send_image_quota_message(interaction: discord.Interaction, member: Opt
     await send_ephemeral(interaction, "\n".join(lines))
 
 # =================================================
-# API CALLS
+# API
 # =================================================
 async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
@@ -1085,6 +1094,7 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
 
                 body = await resp.text()
                 logger.warning("[IMG %s] error %s: %s", req_id, resp.status, body[:500])
+
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
@@ -1098,6 +1108,7 @@ async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any
         except Exception as e:
             logger.exception("[IMG %s] unexpected error: %s", req_id, e)
             return None
+
     return None
 
 
@@ -1217,7 +1228,7 @@ async def handle_model_selection(
     )
 
 # =================================================
-# VIEWS
+# VIEWS / MODALS
 # =================================================
 class OwnerLockedView(discord.ui.View):
     def __init__(self, owner_id: int, timeout: Optional[float] = 900):
@@ -1466,6 +1477,100 @@ class StarterView(discord.ui.View):
         self.add_item(StarterModelSelect(session, channel_id))
 
 
+class AnimatePromptModal(discord.ui.Modal):
+    def __init__(
+        self,
+        owner_id: int,
+        source_channel_id: int,
+        source_message_id: int,
+        base_prompt: str,
+        ratio: str,
+    ):
+        self.owner_id = owner_id
+        self.source_channel_id = source_channel_id
+        self.source_message_id = source_message_id
+        self.base_prompt = (base_prompt or "").strip()
+        self.ratio = ratio
+
+        super().__init__(title="🎬 Animate Image • Video Prompt")
+
+        default_prompt = (self.base_prompt[:2000] if self.base_prompt else "")
+        self.video_prompt = discord.ui.TextInput(
+            label="Video Prompt",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=2000,
+            default=default_prompt,
+            placeholder="Describe movement, camera motion, atmosphere...",
+        )
+        self.add_item(self.video_prompt)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This modal does not belong to you.")
+            return
+        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
+            await send_ephemeral(interaction, "❌ This action is server-only.")
+            return
+
+        final_prompt = (self.video_prompt.value or "").strip()
+        if not final_prompt:
+            final_prompt = self.base_prompt or "Animate this image with natural motion."
+
+        video_cog = interaction.client.get_cog("VeniceVideoCog")
+        if not video_cog:
+            await send_ephemeral(interaction, "❌ VeniceVideoCog is not loaded.")
+            return
+
+        try:
+            info = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
+            budget = int(info["limit"])
+            used = int(info["used"])
+            remaining = int(info["remaining"])
+            reset_in = int(info["reset_in"])
+            tier = int(info["tier"])
+        except Exception:
+            await send_ephemeral(interaction, "❌ Could not load your video quota right now.")
+            return
+
+        if budget <= 0:
+            await send_ephemeral(
+                interaction,
+                "🎬 Video rendering is locked for members without a Tier role.\n"
+                "Unlock Tier 1 to start your daily video seconds.\n"
+                "Keep earning XP in Goon Hut."
+            )
+            return
+
+        max_now = min(MAX_VIDEO_RENDER_SECONDS, remaining)
+        allowed = [s for s in VIDEO_DURATION_CHOICES if s <= max_now]
+
+        if not allowed:
+            await send_ephemeral(
+                interaction,
+                f"⛔ Video seconds used up for this 24h window: **{used}/{budget}s**.\n"
+                f"⏳ Reset in **{_seconds_human(reset_in)}**.\n"
+                f"Current tier: **T{tier}**."
+            )
+            return
+
+        await send_ephemeral(
+            interaction,
+            content=(
+                f"✅ Video prompt set.\n"
+                f"⏱ Choose video length (remaining today: **{remaining}s**, max per render: **15s**):"
+            ),
+            view=AnimateDurationView(
+                owner_id=self.owner_id,
+                source_channel_id=self.source_channel_id,
+                source_message_id=self.source_message_id,
+                prompt_text=final_prompt,
+                ratio=self.ratio,
+                allowed_durations=allowed,
+            ),
+        )
+
+
 class AnimateDurationView(OwnerLockedView):
     def __init__(
         self,
@@ -1585,54 +1690,15 @@ class AnimateActionView(OwnerLockedView):
             await send_ephemeral(interaction, "❌ This action is server-only.")
             return
 
-        video_cog = interaction.client.get_cog("VeniceVideoCog")
-        if not video_cog:
-            await send_ephemeral(interaction, "❌ VeniceVideoCog is not loaded.")
-            return
-
-        try:
-            info = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
-            budget = int(info["limit"])
-            used = int(info["used"])
-            remaining = int(info["remaining"])
-            reset_in = int(info["reset_in"])
-            tier = int(info["tier"])
-        except Exception:
-            await send_ephemeral(interaction, "❌ Could not load your video quota right now.")
-            return
-
-        if budget <= 0:
-            await send_ephemeral(
-                interaction,
-                "🎬 Video rendering is locked for members without a Tier role.\n"
-                "Unlock Tier 1 to start your daily video seconds.\n"
-                "Keep earning XP in Goon Hut."
-            )
-            return
-
-        max_now = min(MAX_VIDEO_RENDER_SECONDS, remaining)
-        allowed = [s for s in VIDEO_DURATION_CHOICES if s <= max_now]
-
-        if not allowed:
-            await send_ephemeral(
-                interaction,
-                f"⛔ Video seconds used up for this 24h window: **{used}/{budget}s**.\n"
-                f"⏳ Reset in **{_seconds_human(reset_in)}**.\n"
-                f"Current tier: **T{tier}**."
-            )
-            return
-
-        await send_ephemeral(
-            interaction,
-            content=f"⏱ Choose video length (remaining today: **{remaining}s**, max per render: **15s**):",
-            view=AnimateDurationView(
+        # open modal with prefilled image prompt (editable)
+        await interaction.response.send_modal(
+            AnimatePromptModal(
                 owner_id=self.owner_id,
                 source_channel_id=self.source_channel_id,
                 source_message_id=self.source_message_id,
-                prompt_text=self.prompt_text,
+                base_prompt=self.prompt_text,
                 ratio=self.ratio,
-                allowed_durations=allowed,
-            ),
+            )
         )
 
 # =================================================
