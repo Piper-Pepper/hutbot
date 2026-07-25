@@ -1,5 +1,5 @@
+# video_cog.py
 import asyncio
-import base64
 import contextlib
 import io
 import json
@@ -26,18 +26,15 @@ VENICE_VIDEO_RETRIEVE_URL = os.getenv("VENICE_VIDEO_RETRIEVE_URL")
 VENICE_VIDEO_I2V_MODEL = os.getenv("VENICE_VIDEO_I2V_MODEL", "wan-2-7-image-to-video")
 VENICE_VIDEO_RESOLUTION = os.getenv("VENICE_VIDEO_RESOLUTION", "720p")
 
-# hard model/runtime cap
 MAX_VIDEO_RENDER_SECONDS = 15
 VIDEO_CHOICES = [5, 10, 15]
 
-# polling + retry tuning
 VIDEO_POLL_SECONDS = 6
 VIDEO_HARD_TIMEOUT_SECONDS = 1800
 VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 720
 VIDEO_MAX_CONSECUTIVE_5XX = 8
 VIDEO_5XX_WINDOW_SECONDS = 180
 
-# tier budgets (seconds / 24h window)
 TIER_RULES: dict[int, dict[str, int]] = {
     1: {"role_id": 1377051179615522926, "level": 4, "video_budget_sec": 10},
     2: {"role_id": 1375147276413964408, "level": 11, "video_budget_sec": 15},
@@ -53,10 +50,6 @@ VIDEO_WINDOW_SECONDS = 24 * 60 * 60
 
 
 class RollingQuotaStore:
-    """
-    24h rolling window that starts at first successful usage.
-    Stored per guild:user in json file.
-    """
     def __init__(self, file_path: str, window_seconds: int = VIDEO_WINDOW_SECONDS):
         self.file_path = Path(file_path)
         self.window_seconds = int(window_seconds)
@@ -93,6 +86,7 @@ class RollingQuotaStore:
     async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
         now_ts = int(time.time())
         limit = max(0, int(limit))
+
         async with self.lock:
             db = self._read()
             key = self._key(guild_id, user_id)
@@ -104,19 +98,9 @@ class RollingQuotaStore:
             start = entry["start"]
             remaining = max(0, limit - used)
             reset_in = max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0
-            return {
-                "used": used,
-                "limit": limit,
-                "remaining": remaining,
-                "start": start,
-                "reset_in": reset_in,
-            }
+            return {"used": used, "limit": limit, "remaining": remaining, "start": start, "reset_in": reset_in}
 
     async def reserve(self, guild_id: int, user_id: int, limit: int, amount: int) -> tuple[bool, dict[str, int], Optional[dict[str, int]]]:
-        """
-        Reserve budget before API call.
-        Rollback if render fails.
-        """
         now_ts = int(time.time())
         limit = max(0, int(limit))
         amount = max(0, int(amount))
@@ -284,12 +268,19 @@ def _extract_urls_from_payload(payload: Any) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _sanitize_error_text(text: str, limit: int = 300) -> str:
+    t = (text or "").strip()
+    t = re.sub(r"https?://\S+", "[link removed]", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:limit] if len(t) > limit else t
+
+
 def _parse_retry_after_seconds(headers: "aiohttp.typedefs.LooseHeaders", text: str) -> int:
     retry_after = 0
     try:
-        val = headers.get("Retry-After")  # type: ignore[attr-defined]
-        if val is not None:
-            retry_after = int(str(val).strip())
+        raw = headers.get("Retry-After")  # type: ignore[attr-defined]
+        if raw is not None:
+            retry_after = int(str(raw).strip())
     except Exception:
         retry_after = 0
 
@@ -301,15 +292,6 @@ def _parse_retry_after_seconds(headers: "aiohttp.typedefs.LooseHeaders", text: s
     return max(2, min(retry_after if retry_after > 0 else 20, 90))
 
 
-def _sanitize_error_text(text: str, limit: int = 260) -> str:
-    t = (text or "").strip()
-    # remove long URLs from provider docs
-    t = re.sub(r"https?://\S+", "[link removed]", t)
-    # collapse whitespace
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:limit] if len(t) > limit else t
-
-
 class VeniceVideoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -319,12 +301,14 @@ class VeniceVideoCog(commands.Cog):
         self.global_busy = False
         self.global_busy_lock = asyncio.Lock()
 
-        # prevents same user from double-click spamming animation
         self._active_users: set[int] = set()
         self._active_users_lock = asyncio.Lock()
 
         self.video_quota = RollingQuotaStore(VIDEO_QUOTA_FILE)
 
+    # -------------------------------------------------
+    # lifecycle
+    # -------------------------------------------------
     async def _ensure_session(self):
         async with self.session_lock:
             if self.session is None or self.session.closed:
@@ -340,13 +324,9 @@ class VeniceVideoCog(commands.Cog):
         if self.session and not self.session.closed:
             asyncio.create_task(self.session.close())
 
-    async def _ephemeral(self, interaction: discord.Interaction, content: str):
-        with contextlib.suppress(Exception):
-            if interaction.response.is_done():
-                await interaction.followup.send(content, ephemeral=True)
-            else:
-                await interaction.response.send_message(content, ephemeral=True)
-
+    # -------------------------------------------------
+    # locks
+    # -------------------------------------------------
     async def _try_begin_global(self) -> bool:
         async with self.global_busy_lock:
             if self.global_busy:
@@ -369,6 +349,9 @@ class VeniceVideoCog(commands.Cog):
         async with self._active_users_lock:
             self._active_users.discard(user_id)
 
+    # -------------------------------------------------
+    # tier helpers
+    # -------------------------------------------------
     def _tier_desc(self) -> list[tuple[int, dict[str, int]]]:
         return sorted(TIER_RULES.items(), key=lambda x: x[0], reverse=True)
 
@@ -411,11 +394,32 @@ class VeniceVideoCog(commands.Cog):
             "reset_in": int(state["reset_in"]),
         }
 
+    # -------------------------------------------------
+    # message helpers
+    # -------------------------------------------------
+    async def _ephemeral(self, interaction: discord.Interaction, content: str):
+        with contextlib.suppress(Exception):
+            if interaction.response.is_done():
+                await interaction.followup.send(content, ephemeral=True)
+            else:
+                await interaction.response.send_message(content, ephemeral=True)
+
+    async def _safe_edit_progress(self, message: Optional[discord.Message], embed: discord.Embed):
+        if not message:
+            return
+        with contextlib.suppress(Exception):
+            await message.edit(embed=embed)
+
+    async def _safe_delete_message(self, message: Optional[discord.Message]):
+        if not message:
+            return
+        with contextlib.suppress(Exception):
+            await message.delete()
+
     def _build_progress_embed(
         self,
         user: discord.abc.User,
         prompt: str,
-        aspect: str,
         seconds: int,
         percent: int,
         elapsed_sec: int,
@@ -433,7 +437,7 @@ class VeniceVideoCog(commands.Cog):
         embed.add_field(name="Progress", value=f"`{bar} {percent}%`", inline=False)
         embed.add_field(
             name="Settings",
-            value=f"• Aspect: `{aspect}`\n• Duration: `{seconds}s`\n• Resolution: `{VENICE_VIDEO_RESOLUTION}`",
+            value=f"• Duration: `{seconds}s`\n• Resolution: `{VENICE_VIDEO_RESOLUTION}`",
             inline=False
         )
         embed.add_field(name="Timing", value=f"• Elapsed: `{elapsed_sec}s`\n• Status: {stage_text}", inline=False)
@@ -444,7 +448,6 @@ class VeniceVideoCog(commands.Cog):
         self,
         user: discord.abc.User,
         prompt: str,
-        aspect: str,
         seconds: int,
     ) -> discord.Embed:
         preview = _codeblock_safe(_trim(prompt, 900))
@@ -457,7 +460,7 @@ class VeniceVideoCog(commands.Cog):
         embed.add_field(name="Prompt", value=f"```{preview}```", inline=False)
         embed.add_field(
             name="Settings",
-            value=f"• Model: `{VENICE_VIDEO_I2V_MODEL}`\n• Aspect: `{aspect}`\n• Duration: `{seconds}s`\n• Resolution: `{VENICE_VIDEO_RESOLUTION}`",
+            value=f"• Model: `{VENICE_VIDEO_I2V_MODEL}`\n• Duration: `{seconds}s`\n• Resolution: `{VENICE_VIDEO_RESOLUTION}`",
             inline=False
         )
         embed.set_footer(text="Image → Video")
@@ -467,7 +470,6 @@ class VeniceVideoCog(commands.Cog):
         self,
         user: discord.abc.User,
         prompt: str,
-        aspect: str,
         seconds: int,
         reason: str,
     ) -> discord.Embed:
@@ -483,24 +485,15 @@ class VeniceVideoCog(commands.Cog):
         embed.add_field(name="Prompt", value=f"```{preview}```", inline=False)
         embed.add_field(
             name="Settings",
-            value=f"• Model: `{VENICE_VIDEO_I2V_MODEL}`\n• Aspect: `{aspect}`\n• Duration: `{seconds}s`\n• Resolution: `{VENICE_VIDEO_RESOLUTION}`",
+            value=f"• Model: `{VENICE_VIDEO_I2V_MODEL}`\n• Duration: `{seconds}s`\n• Resolution: `{VENICE_VIDEO_RESOLUTION}`",
             inline=False
         )
         embed.set_footer(text="Image → Video")
         return embed
 
-    async def _safe_edit_progress(self, message: Optional[discord.Message], embed: discord.Embed):
-        if not message:
-            return
-        with contextlib.suppress(Exception):
-            await message.edit(embed=embed)
-
-    async def _safe_delete_message(self, message: Optional[discord.Message]):
-        if not message:
-            return
-        with contextlib.suppress(Exception):
-            await message.delete()
-
+    # -------------------------------------------------
+    # media fetch
+    # -------------------------------------------------
     async def _fetch_media_from_url(self, url: str, headers: dict[str, str], visited: Optional[set[str]] = None):
         if not isinstance(url, str) or not url.startswith("http"):
             return None, None
@@ -543,44 +536,46 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None
 
+    # -------------------------------------------------
+    # provider calls
+    # -------------------------------------------------
     async def _queue_i2v(
         self,
-        image_bytes: bytes,
+        image_url: str,
         prompt: str,
-        aspect: str,
         seconds: int,
     ) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str], str]:
         if not VENICE_VIDEO_QUEUE_URL:
             return None, None, "VENICE_VIDEO_QUEUE_URL is missing.", "noid"
         if not VENICE_API_KEY:
             return None, None, "VENICE_API_KEY is missing.", "noid"
-        if not _looks_like_image(image_bytes):
-            return None, None, "Invalid source image.", "noid"
+        if not image_url or not image_url.startswith("http"):
+            return None, None, "No valid image_url provided.", "noid"
 
         await self._ensure_session()
         assert self.session is not None
 
         headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
         request_id = uuid.uuid4().hex[:8]
 
-        # intentionally reduced variants to avoid provider anti-spam triggers
+        # IMPORTANT:
+        # Model expects visual URL input.
+        # Do NOT send "image" key.
+        # Do NOT send "aspect_ratio" for this model (provider returns unsupported).
         payload_variants = [
             {
                 "model": VENICE_VIDEO_I2V_MODEL,
                 "prompt": prompt,
                 "resolution": VENICE_VIDEO_RESOLUTION,
-                "aspect_ratio": aspect,
                 "duration": f"{seconds}s",
-                "image": f"data:image/png;base64,{b64}",
+                "image_url": image_url,
             },
             {
                 "model": VENICE_VIDEO_I2V_MODEL,
                 "prompt": prompt,
                 "resolution": VENICE_VIDEO_RESOLUTION,
-                "aspect_ratio": aspect,
                 "duration_seconds": seconds,
-                "image_base64": b64,
+                "reference_image_urls": [image_url],
             },
         ]
 
@@ -588,7 +583,7 @@ class VeniceVideoCog(commands.Cog):
         max_attempts = 2
         last_error = "Queue request failed."
 
-        logger.info("[VID %s] -> queue model=%s duration=%ss aspect=%s", request_id, VENICE_VIDEO_I2V_MODEL, seconds, aspect)
+        logger.info("[VID %s] -> queue model=%s duration=%ss", request_id, VENICE_VIDEO_I2V_MODEL, seconds)
 
         for attempt in range(max_attempts):
             for payload in payload_variants:
@@ -597,7 +592,6 @@ class VeniceVideoCog(commands.Cog):
                         text = await resp.text()
                         logger.info("[VID %s] <- queue status=%s attempt=%s", request_id, resp.status, attempt + 1)
 
-                        # hard fail statuses: do not spam retries
                         if resp.status in (400, 401, 403, 404, 422):
                             msg = _sanitize_error_text(text)
                             return None, {"raw": text}, f"Queue error ({resp.status}): {msg}", request_id
@@ -605,8 +599,7 @@ class VeniceVideoCog(commands.Cog):
                         if resp.status == 429:
                             msg = _sanitize_error_text(text)
                             wait_s = _parse_retry_after_seconds(resp.headers, text)
-                            logger.warning("[VID %s] rate-limited (429), retry in %ss: %s", request_id, wait_s, msg)
-                            # if provider explicitly says too many failed attempts, stop fast
+                            logger.warning("[VID %s] queue 429, wait=%ss msg=%s", request_id, wait_s, msg)
                             if "too many failed attempts" in (text or "").lower():
                                 return None, {"raw": text}, f"Provider rate limit: {msg}", request_id
                             await asyncio.sleep(wait_s)
@@ -642,7 +635,6 @@ class VeniceVideoCog(commands.Cog):
         progress_message: Optional[discord.Message],
         user: discord.abc.User,
         prompt: str,
-        aspect: str,
         seconds: int,
         queue_download_url: Optional[str] = None,
         request_id: str = "unknown",
@@ -690,7 +682,7 @@ class VeniceVideoCog(commands.Cog):
                     if response.status == 429:
                         text_429 = await response.text()
                         wait_s = _parse_retry_after_seconds(response.headers, text_429)
-                        logger.warning("[VID %s] retrieve 429, sleeping %ss", request_id, wait_s)
+                        logger.warning("[VID %s] retrieve 429 -> wait %ss", request_id, wait_s)
                         await asyncio.sleep(wait_s)
                         continue
 
@@ -709,7 +701,6 @@ class VeniceVideoCog(commands.Cog):
                                 self._build_progress_embed(
                                     user=user,
                                     prompt=prompt,
-                                    aspect=aspect,
                                     seconds=seconds,
                                     percent=p,
                                     elapsed_sec=elapsed_sec,
@@ -797,7 +788,6 @@ class VeniceVideoCog(commands.Cog):
                             self._build_progress_embed(
                                 user=user,
                                 prompt=prompt,
-                                aspect=aspect,
                                 seconds=seconds,
                                 percent=p,
                                 elapsed_sec=elapsed_sec,
@@ -822,7 +812,6 @@ class VeniceVideoCog(commands.Cog):
                             self._build_progress_embed(
                                 user=user,
                                 prompt=prompt,
-                                aspect=aspect,
                                 seconds=seconds,
                                 percent=percent,
                                 elapsed_sec=elapsed_sec,
@@ -838,23 +827,26 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None, "Generation timed out."
 
+    # -------------------------------------------------
+    # public entry for image cog
+    # -------------------------------------------------
     async def animate_image_to_video(
         self,
         interaction: discord.Interaction,
-        image_bytes: bytes,
+        image_url: str,
+        image_bytes: Optional[bytes],
         prompt: str,
         aspect: str,
         seconds: int,
         target_channel: discord.abc.Messageable,
     ) -> bool:
+        _ = aspect  # currently not used in payload for this model
+
         if not VENICE_API_KEY:
             await self._ephemeral(interaction, "❌ VENICE_API_KEY is missing.")
             return False
         if not VENICE_VIDEO_QUEUE_URL or not VENICE_VIDEO_RETRIEVE_URL:
             await self._ephemeral(interaction, "❌ Video API endpoints are missing in .env.")
-            return False
-        if not _looks_like_image(image_bytes):
-            await self._ephemeral(interaction, "❌ Invalid source image.")
             return False
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await self._ephemeral(interaction, "❌ This action is server-only.")
@@ -869,7 +861,10 @@ class VeniceVideoCog(commands.Cog):
             await self._ephemeral(interaction, "❌ Allowed durations are 5, 10, 15 seconds.")
             return False
 
-        # per-user lock first
+        if (not image_url or not image_url.startswith("http")) and (not image_bytes or not _looks_like_image(image_bytes)):
+            await self._ephemeral(interaction, "❌ No valid source image for video generation.")
+            return False
+
         got_user_lock = await self._try_lock_user(interaction.user.id)
         if not got_user_lock:
             await self._ephemeral(interaction, "⏳ You already have a video render running. Please wait.")
@@ -887,7 +882,6 @@ class VeniceVideoCog(commands.Cog):
             await self._unlock_user(interaction.user.id)
             return False
 
-        # reserve user budget (seconds)
         ok_q, state_q, token = await self.video_quota.reserve(interaction.guild.id, interaction.user.id, budget, seconds)
         if not ok_q:
             nxt = self._next_tier(tier)
@@ -905,16 +899,12 @@ class VeniceVideoCog(commands.Cog):
             await self._unlock_user(interaction.user.id)
             return False
 
-        # optional global single render lock
         got_global = await self._try_begin_global()
         if not got_global:
             await self.video_quota.rollback(token)
             await self._ephemeral(interaction, "⏳ Another video render is currently running. Please wait.")
             await self._unlock_user(interaction.user.id)
             return False
-
-        if aspect not in {"1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"}:
-            aspect = "16:9"
 
         progress_message: Optional[discord.Message] = None
         quota_success = False
@@ -923,7 +913,6 @@ class VeniceVideoCog(commands.Cog):
             progress_embed = self._build_progress_embed(
                 user=interaction.user,
                 prompt=prompt,
-                aspect=aspect,
                 seconds=seconds,
                 percent=5,
                 elapsed_sec=0,
@@ -932,9 +921,8 @@ class VeniceVideoCog(commands.Cog):
             progress_message = await target_channel.send(embed=progress_embed)
 
             queue_id, queue_response, queue_error, request_id = await self._queue_i2v(
-                image_bytes=image_bytes,
+                image_url=image_url,
                 prompt=prompt,
-                aspect=aspect,
                 seconds=seconds,
             )
 
@@ -943,7 +931,6 @@ class VeniceVideoCog(commands.Cog):
                     embed=self._build_error_embed(
                         user=interaction.user,
                         prompt=prompt,
-                        aspect=aspect,
                         seconds=seconds,
                         reason=queue_error or "Queue failed."
                     )
@@ -962,7 +949,6 @@ class VeniceVideoCog(commands.Cog):
                 self._build_progress_embed(
                     user=interaction.user,
                     prompt=prompt,
-                    aspect=aspect,
                     seconds=seconds,
                     percent=8,
                     elapsed_sec=1,
@@ -975,7 +961,6 @@ class VeniceVideoCog(commands.Cog):
                 progress_message=progress_message,
                 user=interaction.user,
                 prompt=prompt,
-                aspect=aspect,
                 seconds=seconds,
                 queue_download_url=queue_download_url,
                 request_id=request_id,
@@ -986,7 +971,6 @@ class VeniceVideoCog(commands.Cog):
                     embed=self._build_error_embed(
                         user=interaction.user,
                         prompt=prompt,
-                        aspect=aspect,
                         seconds=seconds,
                         reason=error_message or "Generation failed or timed out."
                     )
@@ -999,7 +983,6 @@ class VeniceVideoCog(commands.Cog):
                     embed=self._build_error_embed(
                         user=interaction.user,
                         prompt=prompt,
-                        aspect=aspect,
                         seconds=seconds,
                         reason="Provider returned non-video output."
                     )
@@ -1015,7 +998,6 @@ class VeniceVideoCog(commands.Cog):
                     embed=self._build_error_embed(
                         user=interaction.user,
                         prompt=prompt,
-                        aspect=aspect,
                         seconds=seconds,
                         reason="Video is larger than Discord upload limit for this server."
                     )
@@ -1027,7 +1009,6 @@ class VeniceVideoCog(commands.Cog):
             result_embed = self._build_result_embed(
                 user=interaction.user,
                 prompt=prompt,
-                aspect=aspect,
                 seconds=seconds,
             )
             await target_channel.send(
