@@ -72,7 +72,7 @@ async def main():
             "reset",
             "hutvote",
             "champions_cog",
-            "venice_image_cog",
+            "video_cog",
             "riddle",
             "hutthreadvote"
         ]
