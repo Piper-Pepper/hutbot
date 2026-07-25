@@ -42,6 +42,7 @@ TIER_RULES: dict[int, dict[str, int]] = {
     4: {"role_id": 1381791848875430069, "level": 33, "video_budget_sec": 25},
     5: {"role_id": 1375666588404940830, "level": 43, "video_budget_sec": 30},
     6: {"role_id": 1375584380914896978, "level": 69, "video_budget_sec": 40},
+    7: {"role_id": 1346414581643219029, "level": 99, "video_budget_sec": 300},
 }
 DEFAULT_VIDEO_BUDGET_SEC = 0
 
