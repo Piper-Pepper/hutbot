@@ -1684,7 +1684,7 @@ class AnimateActionView(OwnerLockedView):
         self.prompt_text = prompt_text
         self.ratio = ratio
 
-    @discord.ui.button(label="🎬 Animate", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="🎬 Make Video", style=discord.ButtonStyle.primary)
     async def animate(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not interaction.guild:
             await send_ephemeral(interaction, "❌ This action is server-only.")
