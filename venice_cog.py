@@ -111,11 +111,11 @@ LEVEL11_ROLE_ID = TIER_RULES[2]["role_id"]
 RESOLUTION_ROLE_REQUIREMENTS = {"2K": LEVEL4_ROLE_ID, "4K": LEVEL11_ROLE_ID}
 RESOLUTION_LEVEL_REQUIREMENTS = {"2K": 4, "4K": 11}
 ROLE_LEVEL_NAMES = {
-    TIER_RULES[1]["role_id"]: "Tier 1 / Level 4",
+    TIER_RULES[1]["role_id"]: "Tier 1 / Level 3",
     TIER_RULES[2]["role_id"]: "Tier 2 / Level 11",
     TIER_RULES[3]["role_id"]: "Tier 3 / Level 21",
     TIER_RULES[4]["role_id"]: "Tier 4 / Level 33",
-    TIER_RULES[5]["role_id"]: "Tier 5 / Level 43",
+    TIER_RULES[5]["role_id"]: "Tier 5 / Level 33",
     TIER_RULES[6]["role_id"]: "Tier 6 / Level 69",
     TIER_RULES[7]["role_id"]: "Tier 7 / Level 99",
 }
