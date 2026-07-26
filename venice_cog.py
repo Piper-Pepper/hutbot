@@ -1767,7 +1767,7 @@ class ResolutionSelectView(OwnerLockedView):
             default_hidden = channel_suffix(channel_id)
             used_hidden = previous_inputs.get("hidden_suffix")
             if isinstance(used_hidden, str) and used_hidden and used_hidden != default_hidden:
-                embed.add_field(name="Hidden Prompt", value="✅ 🕶️Hidden Prompt🕶️", inline=False)
+                embed.add_field(name="Hidden Prompt", value="✅", inline=False)
 
             if negative_prompt and negative_prompt != DEFAULT_NEGATIVE_PROMPT:
                 np = _trim(negative_prompt, 1000)
@@ -1777,7 +1777,7 @@ class ResolutionSelectView(OwnerLockedView):
             ratio_label = ASPECT_LABELS.get(ratio, ratio)
             upflag = "📈" if upscaled_success else ""
             embed.set_footer(
-                text=f"🖼️ IMG • 🎨 {get_model_label(model_id)} • 📐 {ratio_label} • 🧱 {resolution}{upflag} • 🤖 {cfg_val} • 🪜 {steps}",
+                text=f"{get_model_label(model_id)} • 📐 {ratio_label} • 🧱 {resolution}{upflag} • 🤖 {cfg_val} • 🪜 {steps}",
                 icon_url=guild_icon,
             )
 
