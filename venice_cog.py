@@ -24,6 +24,11 @@ try:
 except Exception:
     Image = None
 
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
+
 load_dotenv()
 logger = logging.getLogger("venice_image_cog")
 
@@ -238,6 +243,19 @@ SERVER_ANIM_ICON = "<a:01pepper_icon:1377636862847619213>"
 pepper = SERVER_ANIM_ICON
 REACTIONS = ["1️⃣", "2️⃣", "3️⃣", "<:011:1346549711817146400>", "<:011pump:1346549688836296787>"]
 
+AUTO_FILTER_EPHEMERAL_TEXT = (
+    "⚠️ Your prompt triggered this model’s automatic safety filter, so no image was posted.\n"
+    "Please try a different prompt, or use another image model that is less sensitive."
+)
+VENICE_FILTER_OCR_KEYWORDS = (
+    "detected content",
+    "violates our terms",
+    "terms of service",
+    "support@venice.ai",
+    "please try changing your prompt",
+    "try changing your prompt",
+)
+
 ASPECT_LABELS = {
     "auto": "⚙️ Auto",
     "1:1": "🟦 1:1",
@@ -274,7 +292,7 @@ DEFAULT_MODEL_ROW = {
 _FULL_ASPECTS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
 
 MODELS: dict[str, dict[str, Any]] = {
-    "hidream": {"label": "🌙 HiDream", "rating": RATING_NUDITY,
+    "hidream": {"label": "🌙 HiDream", "rating": RATING_SFW,
                 "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW,
                    "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
@@ -296,7 +314,7 @@ MODELS: dict[str, dict[str, Any]] = {
                        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
     "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY,
                         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
-    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_NUDITY,
+    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT,
                      "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
     "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW,
                          "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
@@ -389,6 +407,65 @@ def _trim(text: str, limit: int) -> str:
 
 def _codeblock_safe(text: str) -> str:
     return (text or "").replace("```", "'''").strip()
+
+
+def _contains_filter_keywords(text: str) -> bool:
+    t = (text or "").lower()
+    hits = sum(1 for k in VENICE_FILTER_OCR_KEYWORDS if k in t)
+    return hits >= 2
+
+
+def _is_venice_filter_placeholder(image_bytes: bytes) -> bool:
+    """
+    Detects common Venice auto-filter placeholder frames.
+    Strategy:
+    1) OCR (if pytesseract available) for known phrases
+    2) strict visual fallback (dark background + white text-like distribution)
+    """
+    if not image_bytes or Image is None:
+        return False
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception:
+        return False
+
+    gray = img.convert("L")
+    w, h = gray.size
+
+    # OCR first (most reliable when available)
+    if pytesseract is not None:
+        try:
+            txt = pytesseract.image_to_string(gray)
+            if _contains_filter_keywords(txt):
+                return True
+        except Exception:
+            pass
+
+    # Strict fallback heuristic
+    hist = gray.histogram()
+    total = max(1, w * h)
+    dark_ratio = sum(hist[:28]) / total
+    bright_ratio = sum(hist[220:]) / total
+    mid_ratio = sum(hist[80:180]) / total
+
+    mean = sum(i * c for i, c in enumerate(hist)) / total
+    var = sum(((i - mean) ** 2) * c for i, c in enumerate(hist)) / total
+    std = var ** 0.5
+
+    squareish = abs(w - h) <= max(24, int(0.06 * max(w, h)))
+    common_sizes = {512, 768, 896, 1024, 1280, 1536, 1792, 2048}
+    likely_size = (w in common_sizes and h in common_sizes)
+
+    return (
+        squareish
+        and likely_size
+        and dark_ratio > 0.70
+        and 0.006 < bright_ratio < 0.16
+        and mid_ratio < 0.34
+        and mean < 75
+        and 16 < std < 78
+    )
 
 
 def _resolution_sort_key(x: str) -> int:
@@ -1748,6 +1825,13 @@ class ResolutionSelectView(OwnerLockedView):
                     image_bytes = upscaled
                     upscaled_success = True
 
+            # Block Venice filter placeholder BEFORE any channel post
+            if _is_venice_filter_placeholder(image_bytes):
+                with contextlib.suppress(Exception):
+                    await progress_msg.delete()
+                await interaction.followup.send(AUTO_FILTER_EPHEMERAL_TEXT, ephemeral=True)
+                return
+
             with contextlib.suppress(Exception):
                 await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
 
@@ -1777,7 +1861,7 @@ class ResolutionSelectView(OwnerLockedView):
             ratio_label = ASPECT_LABELS.get(ratio, ratio)
             upflag = "📈" if upscaled_success else ""
             embed.set_footer(
-                text=f"{get_model_label(model_id)} • 📐 {ratio_label} • 🧱 {resolution}{upflag} • 🤖 {cfg_val} • 🪜 {steps}",
+                text=f"{get_model_label(model_id)} • {ratio_label} • 🧱 {resolution}{upflag} • 🤖 {cfg_val} • 🪜 {steps}",
                 icon_url=guild_icon,
             )
 
