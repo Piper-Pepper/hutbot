@@ -203,7 +203,6 @@ class RollingQuotaStore:
     async def rollback(self, token: Optional[dict[str, int]]):
         if not token:
             return
-
         guild_id = int(token.get("guild_id", 0))
         user_id = int(token.get("user_id", 0))
         amount = int(token.get("amount", 0))
@@ -235,7 +234,8 @@ image_quota = RollingQuotaStore(IMAGE_QUOTA_FILE)
 DEFAULT_NEGATIVE_PROMPT = "disfigured, missing fingers, extra limbs, watermark, underage"
 PROMPT_SUFFIX = " "
 
-pepper = "<a:01pepper_icon:1377636862847619213>"
+SERVER_ANIM_ICON = "<a:01pepper_icon:1377636862847619213>"
+pepper = SERVER_ANIM_ICON
 REACTIONS = ["1️⃣", "2️⃣", "3️⃣", "<:011:1346549711817146400>", "<:011pump:1346549688836296787>"]
 
 ASPECT_LABELS = {
@@ -388,7 +388,6 @@ def _trim(text: str, limit: int) -> str:
 
 
 def _codeblock_safe(text: str) -> str:
-    # <- dieser Helper hat bei dir gefehlt (NameError-Fix)
     return (text or "").replace("```", "'''").strip()
 
 
@@ -1753,7 +1752,7 @@ class ResolutionSelectView(OwnerLockedView):
                 await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
 
             embed = discord.Embed(
-                title="🖼️ IMAGE BUILD",
+                title="🖼️ Image",
                 color=discord.Color.blurple(),
                 timestamp=datetime.now(timezone.utc),
             )
@@ -1800,7 +1799,7 @@ class ResolutionSelectView(OwnerLockedView):
 
                 try:
                     posted = await interaction.channel.send(
-                        content=f"🖼️ **IMAGE BUILD** • {interaction.user.mention}",
+                        content=f"{SERVER_ANIM_ICON} 🖼️ **Image** • {interaction.user.mention}",
                         embed=embed,
                         file=candidate_file,
                         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
