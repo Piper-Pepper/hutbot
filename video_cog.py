@@ -469,8 +469,6 @@ class VeniceVideoCog(commands.Cog):
         model_label = _video_model_label(VENICE_VIDEO_I2V_MODEL)
         preview = _codeblock_safe(_trim(prompt, 1500))
         embed = discord.Embed(
-            title="🎬 Video",
-            description="▶ Click the video preview/file to play.",
             color=discord.Color.dark_magenta(),
             timestamp=utc_now(),
         )
