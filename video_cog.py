@@ -50,7 +50,7 @@ VIDEO_POST_REACTIONS = [
     "<:011pump:1346549688836296787>",
 ]
 
-# simple model rename map (exakt wie gewünscht)
+# simple model rename map
 VIDEO_MODEL_RENAMES = {
     "wan-2-7-enhanced-image-to-video": "WAN27-Enh",
 }
@@ -584,12 +584,11 @@ class VeniceVideoCog(commands.Cog):
         headers = {"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"}
         request_id = uuid.uuid4().hex[:8]
 
-        # strict payload for WAN i2v
         payload = {
             "model": VENICE_VIDEO_I2V_MODEL,
             "prompt": prompt,
             "resolution": VENICE_VIDEO_RESOLUTION,
-            "duration": f"{seconds}s",  # required by provider
+            "duration": f"{seconds}s",
             "image_url": image_url,
         }
 

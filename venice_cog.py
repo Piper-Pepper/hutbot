@@ -38,7 +38,7 @@ logger = logging.getLogger("venice_image_cog")
 VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 VENICE_IMAGE_URL = os.getenv("VENICE_IMAGE_URL")
 VENICE_UPSCALE_URL = os.getenv("VENICE_UPSCALE_URL")
-VENICE_MODELS_URL = os.getenv("VENICE_MODELS_URL")
+VENICE_MODELS_URL = os.getenv("VENICE_MODELS_URL")  # optional
 
 if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env")
@@ -59,21 +59,6 @@ DISCORD_UPLOAD_LIMIT_FORCE_MB = _env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)
 DISCORD_UPLOAD_LIMIT_FALLBACK_MB = _env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)
 DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
 
-BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
-LEGACY_STARTER_TEXTS = {
-    "💡 Choose Model for 🖼️ NEW image!",
-    "💡 Choose a model for a new image!",
-}
-RECENT_SCAN_LIMIT = 12
-
-EASY_MODE_VALUE = "__easy_mode__"
-EASY_MODE_ICON = "🔞"
-EASY_MODE_LABEL = f"👉Easy Mode {EASY_MODE_ICON}👈"
-NO_MODEL_VALUE = "__no_models__"
-
-if Image is None:
-    logger.warning("Pillow not available. Upload compression fallback is limited.")
-
 # =================================================
 # CHANNELS
 # =================================================
@@ -89,6 +74,13 @@ NSFW_CHANNELS = [
 SFW_CHANNEL = 1461752750550552741
 ALLOWED_CHANNEL_IDS = set(NSFW_CHANNELS + [SFW_CHANNEL])
 
+BUTTON_MESSAGE_TEXT = "💡 Choose Model for 🖼️ NEW image!"
+LEGACY_STARTER_TEXTS = {
+    "💡 Choose Model for 🖼️ NEW image!",
+    "💡 Choose a model for a new image!",
+}
+RECENT_SCAN_LIMIT = 12
+
 # =================================================
 # TIERS / LIMITS
 # =================================================
@@ -102,23 +94,12 @@ TIER_RULES: dict[int, dict[str, int]] = {
     7: {"role_id": 1346414581643219029, "level": 99, "image_limit": 300, "video_budget_sec": 300},
 }
 DEFAULT_IMAGE_LIMIT_24H = 2
+
+# HART: 2K nur Tier1+, 4K nur Tier2+
+RESOLUTION_MIN_TIER = {"1K": 0, "2K": 1, "4K": 2}
+
 MAX_VIDEO_RENDER_SECONDS = 15
 VIDEO_DURATION_CHOICES = [5, 10, 15]
-
-LEVEL4_ROLE_ID = TIER_RULES[1]["role_id"]
-LEVEL11_ROLE_ID = TIER_RULES[2]["role_id"]
-
-RESOLUTION_ROLE_REQUIREMENTS = {"2K": LEVEL4_ROLE_ID, "4K": LEVEL11_ROLE_ID}
-RESOLUTION_LEVEL_REQUIREMENTS = {"2K": 4, "4K": 11}
-ROLE_LEVEL_NAMES = {
-    TIER_RULES[1]["role_id"]: "Tier 1 / Level 3",
-    TIER_RULES[2]["role_id"]: "Tier 2 / Level 11",
-    TIER_RULES[3]["role_id"]: "Tier 3 / Level 21",
-    TIER_RULES[4]["role_id"]: "Tier 4 / Level 33",
-    TIER_RULES[5]["role_id"]: "Tier 5 / Level 33",
-    TIER_RULES[6]["role_id"]: "Tier 6 / Level 69",
-    TIER_RULES[7]["role_id"]: "Tier 7 / Level 99",
-}
 
 # =================================================
 # IMAGE QUOTA
@@ -160,6 +141,22 @@ class RollingQuotaStore:
         if used < 0:
             used = 0
         return {"start": start, "used": used}
+
+    async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
+        now_ts = int(time.time())
+        limit = max(0, int(limit))
+        async with self.lock:
+            db = self._read()
+            key = self._key(guild_id, user_id)
+            entry = self._normalize(db.get(key, {}), now_ts)
+            db[key] = entry
+            self._write(db)
+
+            used = entry["used"]
+            start = entry["start"]
+            remaining = max(0, limit - used)
+            reset_in = max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0
+            return {"used": used, "limit": limit, "remaining": remaining, "start": start, "reset_in": reset_in}
 
     async def reserve(self, guild_id: int, user_id: int, limit: int, amount: int) -> tuple[bool, dict[str, int], Optional[dict[str, int]]]:
         now_ts = int(time.time())
@@ -234,14 +231,18 @@ class RollingQuotaStore:
 image_quota = RollingQuotaStore(IMAGE_QUOTA_FILE)
 
 # =================================================
-# UI / MODEL CONSTANTS
+# MODEL / UI CONSTANTS
 # =================================================
 DEFAULT_NEGATIVE_PROMPT = "disfigured, missing fingers, extra limbs, watermark, underage"
 PROMPT_SUFFIX = " "
 
 SERVER_ANIM_ICON = "<a:01pepper_icon:1377636862847619213>"
-pepper = SERVER_ANIM_ICON
 REACTIONS = ["1️⃣", "2️⃣", "3️⃣", "<:011:1346549711817146400>", "<:011pump:1346549688836296787>"]
+
+EASY_MODE_VALUE = "__easy_mode__"
+EASY_MODE_ICON = "🔞"
+EASY_MODE_LABEL = f"👉Easy Mode {EASY_MODE_ICON}👈"
+NO_MODEL_VALUE = "__no_models__"
 
 AUTO_FILTER_EPHEMERAL_TEXT = (
     "⚠️ Your prompt triggered this model’s automatic safety filter, so no image was posted.\n"
@@ -292,48 +293,27 @@ DEFAULT_MODEL_ROW = {
 _FULL_ASPECTS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
 
 MODELS: dict[str, dict[str, Any]] = {
-    "hidream": {"label": "🌙 HiDream", "rating": RATING_SFW,
-                "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW,
-                   "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
-    "gpt-image-2": {"label": "🧠 GPT Image 2", "rating": RATING_SFW,
-                    "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "rating": RATING_SFW,
-                      "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": []}},
-    "hunyuan-image-v3": {"label": "🐉 Hunyuan Image 3.0", "rating": RATING_NUDITY,
-                         "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "rating": RATING_SFW,
-                           "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []}},
-    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "rating": RATING_SFW,
-                    "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "nano-banana-2": {"label": "🐵 Nano Banana 2", "rating": RATING_SFW,
-                      "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "rating": RATING_SFW,
-                        "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "rating": RATING_SFW,
-                       "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY,
-                        "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
-    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT,
-                     "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW,
-                         "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "rating": RATING_SFW,
-                                  "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "rating": RATING_SFW,
-                                   "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "lustify-sdxl": {"label": "💋 Lustify SDXL (Legacy)", "rating": RATING_EXPLICIT,
-                     "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "lustify-v7": {"label": "🥵 Lustify v7", "rating": RATING_EXPLICIT,
-                   "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "lustify-v8": {"label": "🔥 Lustify v8", "rating": RATING_EXPLICIT,
-                   "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "wai-illustrious": {"label": "🎌 Anime (WAI)", "rating": RATING_SFW,
-                        "caps": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []}},
-    "z-image-turbo": {"label": "⚡ Z-Image Turbo", "rating": RATING_EXPLICIT,
-                      "caps": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "chroma": {"label": "🌈 Chroma", "rating": RATING_NUDITY,
-               "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "hidream": {"label": "🌙 HiDream", "rating": RATING_SFW, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
+    "gpt-image-2": {"label": "🧠 GPT Image 2", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
+    "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "rating": RATING_SFW, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": []}},
+    "hunyuan-image-v3": {"label": "🐉 Hunyuan Image 3.0", "rating": RATING_NUDITY, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
+    "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []}},
+    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
+    "nano-banana-2": {"label": "🐵 Nano Banana 2", "rating": RATING_SFW, "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
+    "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
+    "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
+    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
+    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
+    "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
+    "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
+    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "rating": RATING_SFW, "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
+    "lustify-sdxl": {"label": "💋 Lustify SDXL (Legacy)", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "lustify-v7": {"label": "🥵 Lustify v7", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "lustify-v8": {"label": "🔥 Lustify v8", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "wai-illustrious": {"label": "🎌 Anime (WAI)", "rating": RATING_SFW, "caps": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []}},
+    "z-image-turbo": {"label": "⚡ Z-Image Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "chroma": {"label": "🌈 Chroma", "rating": RATING_NUDITY, "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
 }
 
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
@@ -343,14 +323,13 @@ MODEL_CONFIG: dict[str, dict[str, Any]] = {
 MODEL_ORDER = list(MODELS.keys())
 MODEL_RATINGS = {mid: m["rating"] for mid, m in MODELS.items()}
 DISABLED_MODELS: set[str] = set()
-EXCLUDED_IMAGE_MODELS = {"venice-sd35", "flux-2-pro", "bria-bg-remover"}
 
 NATIVE_RES_TIME_FACTOR = {"1K": 1.00, "2K": 1.30, "4K": 1.70}
 UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}
 UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
 
 # =================================================
-# GLOBAL LOCKS / EPHEMERALS
+# GLOBAL LOCKS / EPHEMERAL TRACKING
 # =================================================
 _channel_locks: dict[int, asyncio.Lock] = {}
 _ephemeral_messages: dict[tuple[int, int], list[discord.Message]] = {}
@@ -409,6 +388,12 @@ def _codeblock_safe(text: str) -> str:
     return (text or "").replace("```", "'''").strip()
 
 
+def _progress_bar(percent: int, blocks: int = 14) -> str:
+    p = max(0, min(100, int(percent)))
+    filled = int(blocks * p / 100)
+    return "█" * filled + "░" * (blocks - filled)
+
+
 def _contains_filter_keywords(text: str) -> bool:
     t = (text or "").lower()
     hits = sum(1 for k in VENICE_FILTER_OCR_KEYWORDS if k in t)
@@ -416,15 +401,8 @@ def _contains_filter_keywords(text: str) -> bool:
 
 
 def _is_venice_filter_placeholder(image_bytes: bytes) -> bool:
-    """
-    Detects common Venice auto-filter placeholder frames.
-    Strategy:
-    1) OCR (if pytesseract available) for known phrases
-    2) strict visual fallback (dark background + white text-like distribution)
-    """
     if not image_bytes or Image is None:
         return False
-
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:
@@ -433,16 +411,12 @@ def _is_venice_filter_placeholder(image_bytes: bytes) -> bool:
     gray = img.convert("L")
     w, h = gray.size
 
-    # OCR first (most reliable when available)
     if pytesseract is not None:
-        try:
+        with contextlib.suppress(Exception):
             txt = pytesseract.image_to_string(gray)
             if _contains_filter_keywords(txt):
                 return True
-        except Exception:
-            pass
 
-    # Strict fallback heuristic
     hist = gray.histogram()
     total = max(1, w * h)
     dark_ratio = sum(hist[:28]) / total
@@ -466,10 +440,6 @@ def _is_venice_filter_placeholder(image_bytes: bytes) -> bool:
         and mean < 75
         and 16 < std < 78
     )
-
-
-def _resolution_sort_key(x: str) -> int:
-    return RESOLUTION_TIERS.index(x) if x in RESOLUTION_TIERS else 999
 
 
 def _eta_text(seconds_float: float) -> str:
@@ -550,6 +520,10 @@ def _image_tier_line() -> str:
     return " • ".join([f"T{t}:{cfg['image_limit']}" for t, cfg in _tier_sorted_asc()])
 
 
+def required_tier_for_resolution(resolution: Optional[str]) -> int:
+    return int(RESOLUTION_MIN_TIER.get(resolution or "1K", 0))
+
+
 def make_safe_filename(prompt: str, ext: str = "png") -> str:
     base = "_".join((prompt or "").split()[:5]) or "image"
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)
@@ -578,6 +552,7 @@ def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -
         w, h = base_long_side, int(round(base_long_side * (rh / rw)))
     else:
         h, w = base_long_side, int(round(base_long_side * (rw / rh)))
+
     return snap_to_divisor(w, divisor), snap_to_divisor(h, divisor)
 
 
@@ -603,6 +578,39 @@ def build_easy_embed(model_id: str, ratio: str) -> discord.Embed:
     )
 
 
+def _build_image_progress_embed(
+    user: discord.abc.User,
+    prompt: str,
+    model_label: str,
+    ratio: str,
+    resolution: str,
+    percent: int,
+    eta_sec: float,
+    stage: str,
+    quota_used: int,
+    quota_limit: int,
+    quota_remaining: int,
+) -> discord.Embed:
+    bar = _progress_bar(percent)
+    preview = _codeblock_safe(_trim(prompt, 420))
+    emb = discord.Embed(
+        title="🖼️ IMAGE RENDER",
+        description=user.mention,
+        color=discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    emb.add_field(name="Prompt", value=f"```{preview}```", inline=False)
+    emb.add_field(name="Progress", value=f"`{bar} {percent}%`", inline=False)
+    emb.add_field(name="Status", value=f"• {stage}\n• ETA: `{_eta_text(eta_sec)}`", inline=False)
+    emb.add_field(
+        name="Kontingent (24h)",
+        value=f"• Used: `{quota_used}/{quota_limit}`\n• Remaining: `{quota_remaining}`",
+        inline=False,
+    )
+    emb.set_footer(text=f"{model_label} • {ASPECT_LABELS.get(ratio, ratio)} • {resolution}")
+    return emb
+
+
 def is_model_dropdown_message(msg: discord.Message) -> bool:
     if not msg.components or msg.embeds or msg.attachments:
         return False
@@ -612,18 +620,6 @@ def is_model_dropdown_message(msg: discord.Message) -> bool:
             if isinstance(cid, str) and (cid.startswith("venice_model_select:") or cid.startswith("venice_model_select_")):
                 return True
     return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
-
-
-def required_role_for_resolution(resolution: Optional[str]) -> Optional[int]:
-    return RESOLUTION_ROLE_REQUIREMENTS.get(resolution) if resolution else None
-
-
-def required_level_for_resolution(resolution: Optional[str]) -> Optional[int]:
-    return RESOLUTION_LEVEL_REQUIREMENTS.get(resolution) if resolution else None
-
-
-def has_role(member: discord.Member, role_id: int) -> bool:
-    return any(r.id == role_id for r in member.roles)
 
 
 def channel_suffix(channel_id: Optional[int]) -> str:
@@ -678,17 +674,16 @@ def build_generate_payload(
 
     if generation_resolution and generation_resolution in set(cfg.get("resolutions", [])):
         payload["resolution"] = generation_resolution
+
     return payload
 
 
 def build_resolution_hint(model_id: str) -> str:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
     if not native:
-        return "1K is native for this model. 2K/4K via upscale."
-    parts = [f"Native: {', '.join(sorted(native, key=_resolution_sort_key))}"]
-    parts.append("2K" if "2K" in native else "2K via upscale")
-    parts.append("4K" if "4K" in native else "4K via upscale")
-    return " • ".join(parts)
+        return "1K ist nativ. 2K/4K via Upscale."
+    sorted_native = sorted(native, key=lambda x: RESOLUTION_TIERS.index(x) if x in RESOLUTION_TIERS else 999)
+    return f"Native: {', '.join(sorted_native)} • 2K/4K ggf. via Upscale"
 
 
 def estimate_generation_seconds(model_id: str, steps: int, cfg_scale: float, prompt_len: int, generation_resolution: str) -> float:
@@ -710,7 +705,7 @@ def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> fl
     return max(4.0, min(base * UPSCALE_TARGET_FACTOR.get(target_resolution, 1.0), 180.0))
 
 # =================================================
-# IMAGE BYTES / EXTRACT
+# IMAGE BYTE HELPERS
 # =================================================
 def _looks_like_image(binary: bytes) -> bool:
     if not binary or len(binary) < 12:
@@ -773,29 +768,25 @@ def _fit_image_for_discord(image_bytes: bytes, max_bytes: int) -> tuple[bytes, s
         work = img.copy()
         work.thumbnail((max_side, max_side), resample)
         for q in (92, 86, 80, 74, 68, 62, 56, 50, 44, 38, 32, 28, 24):
-            try:
+            with contextlib.suppress(Exception):
                 buf = io.BytesIO()
                 work.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
                 data = buf.getvalue()
                 remember(data, "jpg")
                 if len(data) <= target:
                     return data, "jpg"
-            except Exception:
-                continue
 
     for max_side in (3072, 2560, 2048, 1536, 1280, 1024, 896, 768, 640, 512):
         work = img.copy()
         work.thumbnail((max_side, max_side), resample)
         for q in (90, 80, 70, 60, 50, 40, 30, 24):
-            try:
+            with contextlib.suppress(Exception):
                 buf = io.BytesIO()
                 work.save(buf, format="WEBP", quality=q, method=6)
                 data = buf.getvalue()
                 remember(data, "webp")
                 if len(data) <= target:
                     return data, "webp"
-            except Exception:
-                continue
 
     return best_data, best_ext
 
@@ -881,17 +872,15 @@ async def _extract_image_bytes_from_message(msg: discord.Message, shared_session
     try:
         assert session is not None
         for url in urls[:8]:
-            try:
+            with contextlib.suppress(Exception):
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         continue
                     raw = await resp.read()
                     if _looks_like_image(raw):
                         return raw
-            except Exception:
-                continue
     finally:
-        if own:
+        if own and session:
             with contextlib.suppress(Exception):
                 await session.close()
 
@@ -916,229 +905,18 @@ def _extract_source_image_url(msg: discord.Message) -> Optional[str]:
     return None
 
 # =================================================
-# MODEL SYNC
-# =================================================
-def _is_deprecated(model_obj: dict[str, Any]) -> bool:
-    dep = (model_obj.get("model_spec") or {}).get("deprecation") or {}
-    d = dep.get("date")
-    if not d:
-        return False
-    try:
-        return datetime.fromisoformat(d.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
-    except Exception:
-        return False
-
-
-def _extract_price_usd(model_obj: dict[str, Any]) -> Optional[float]:
-    pricing = (model_obj.get("model_spec") or {}).get("pricing") or {}
-    gen = pricing.get("generation")
-    if isinstance(gen, dict) and "usd" in gen:
-        return _safe_float(gen["usd"], None)
-
-    res = pricing.get("resolutions")
-    if isinstance(res, dict) and res:
-        if isinstance(res.get("1K"), dict):
-            return _safe_float(res["1K"].get("usd"), None)
-        vals = []
-        for row in res.values():
-            if isinstance(row, dict) and "usd" in row:
-                v = _safe_float(row.get("usd"), None)
-                if v is not None:
-                    vals.append(v)
-        if vals:
-            return min(vals)
-    return None
-
-
-def _calc_speed_factor_from_price(usd: Optional[float]) -> float:
-    if usd is None or usd <= 0:
-        return 1.0
-    return _clamp((usd / 0.05) ** 0.20, 0.70, 1.55)
-
-
-def _auto_cfg_default(model_id: str, default_steps: int, width_div: int) -> float:
-    mid = model_id.lower()
-    if "wai-illustrious" in mid or "anime" in mid:
-        return 7.0
-    if default_steps <= 10:
-        return 6.0
-    if width_div >= 16:
-        return 6.8
-    if any(x in mid for x in ["gpt-image", "recraft", "seedream", "krea", "flux", "wan-2-7", "grok-imagine", "nano-banana", "hunyuan", "imagineart", "ideogram", "qwen-image"]):
-        return 5.0
-    return 5.4
-
-
-def _extract_image_caps(model_obj: dict[str, Any]) -> dict[str, Any]:
-    spec = model_obj.get("model_spec") or {}
-    cons = spec.get("constraints") or {}
-    steps = cons.get("steps") or {}
-
-    prompt_limit = _to_int(cons.get("promptCharacterLimit"), 1500)
-    default_steps = _to_int(steps.get("default"), 20)
-    max_steps = _to_int(steps.get("max"), max(default_steps, 20))
-    aspect_ratios = cons.get("aspectRatios") or None
-    default_aspect = cons.get("defaultAspectRatio") or (aspect_ratios[0] if aspect_ratios else "1:1")
-    width_div = _to_int(cons.get("widthHeightDivisor"), 8)
-    resolutions = cons.get("resolutions") or []
-    default_resolution = cons.get("defaultResolution") or ("1K" if "1K" in resolutions else (resolutions[0] if resolutions else "1K"))
-    usd = _extract_price_usd(model_obj)
-
-    return {
-        "prompt_limit": prompt_limit,
-        "default_steps": default_steps,
-        "max_steps": max_steps,
-        "aspect_ratios": aspect_ratios,
-        "default_aspect_ratio": default_aspect,
-        "width_height_divisor": width_div,
-        "resolutions": resolutions,
-        "default_resolution": default_resolution,
-        "cfg_default": _auto_cfg_default(model_obj.get("id", ""), default_steps, width_div),
-        "speed_factor": _calc_speed_factor_from_price(usd),
-    }
-
-
-async def sync_model_caps_from_api(session: aiohttp.ClientSession):
-    if not VENICE_MODELS_URL:
-        logger.warning("VENICE_MODELS_URL missing -> model sync skipped")
-        return
-
-    headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
-    req_id = uuid.uuid4().hex[:8]
-    logger.info("[IMG-MODELS %s] -> GET %s", req_id, VENICE_MODELS_URL)
-
-    async with session.get(VENICE_MODELS_URL, headers=headers) as resp:
-        txt = await resp.text()
-        logger.info("[IMG-MODELS %s] <- status=%s", req_id, resp.status)
-        if resp.status != 200:
-            logger.warning("[IMG-MODELS %s] failed: %s", req_id, txt[:400])
-            return
-        payload = json.loads(txt) if txt else {}
-
-    DISABLED_MODELS.clear()
-    api_models = {m["id"]: m for m in payload.get("data", []) if m.get("type") == "image" and m.get("id")}
-
-    for mid in MODEL_ORDER:
-        if mid in EXCLUDED_IMAGE_MODELS:
-            DISABLED_MODELS.add(mid)
-            continue
-
-        m = api_models.get(mid)
-        if not m:
-            logger.warning("Model %s not found in API; keeping local caps.", mid)
-            continue
-
-        if _is_deprecated(m) and mid != "lustify-sdxl":
-            DISABLED_MODELS.add(mid)
-            continue
-
-        MODEL_CONFIG[mid].update(_extract_image_caps(m))
-
-    if not get_active_model_ids():
-        DISABLED_MODELS.clear()
-
-# =================================================
-# EPHEMERAL HELPERS
-# =================================================
-async def send_ephemeral(interaction: discord.Interaction, content: Optional[str] = None, **kwargs) -> Optional[discord.Message]:
-    payload = dict(kwargs)
-    payload["ephemeral"] = True
-    if content is not None:
-        payload["content"] = content
-
-    try:
-        if interaction.response.is_done():
-            msg = await interaction.followup.send(wait=True, **payload)
-        else:
-            await interaction.response.send_message(**payload)
-            msg = await interaction.original_response()
-        await track_ephemeral_message(interaction, msg)
-        return msg
-    except Exception:
-        return None
-
-
-async def resolve_member_level(interaction: discord.Interaction, member: discord.Member) -> Optional[int]:
-    bot = interaction.client
-    gid = interaction.guild.id if interaction.guild else None
-    uid = member.id
-
-    for fn_name in ("get_user_level", "get_level", "xp_get_level", "fetch_user_level", "level_for_user"):
-        fn = getattr(bot, fn_name, None)
-        if not callable(fn):
-            continue
-        try:
-            try:
-                res = fn(gid, uid)
-            except TypeError:
-                try:
-                    res = fn(uid, gid)
-                except TypeError:
-                    res = fn(member)
-            if asyncio.iscoroutine(res):
-                res = await res
-            if res is not None:
-                return int(res)
-        except Exception:
-            continue
-
-    for attr in ("level", "lvl", "xp_level"):
-        with contextlib.suppress(Exception):
-            val = getattr(member, attr, None)
-            if val is not None:
-                return int(val)
-
-    max_from_roles: Optional[int] = None
-    for r in member.roles:
-        m = re.search(r"(?:lvl|level)\s*(\d+)", r.name or "", flags=re.IGNORECASE)
-        if m:
-            lv = int(m.group(1))
-            max_from_roles = lv if max_from_roles is None else max(max_from_roles, lv)
-    return max_from_roles
-
-
-async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, role_id: int, level_required: Optional[int], current_level: Optional[int]):
-    level_name = ROLE_LEVEL_NAMES.get(role_id, "Required level")
-    level_txt = f"Level {level_required}+" if level_required else level_name
-    role_txt = f"<@&{role_id}> ({level_name})" if role_id else "`required role`"
-    current_txt = f"\nYour current level: **{current_level}**" if current_level is not None else ""
-
-    await send_ephemeral(
-        interaction,
-        f"🔒 **{resolution}** is locked.\n"
-        f"You need **{level_txt}** and role {role_txt}.{current_txt}\n"
-        f"💡 Keep earning XP in Goon Hut to unlock higher resolutions."
-    )
-
-
-async def send_image_quota_message(interaction: discord.Interaction, member: Optional[discord.Member], state: dict[str, int]):
-    tier = get_member_tier(member)
-    nxt = _next_tier(tier)
-
-    lines = [
-        f"⛔ Daily image limit reached: **{state['used']}/{state['limit']}** in this 24h window.",
-        f"⏳ Reset in **{_seconds_human(state['reset_in'])}**.",
-        f"Current: **Tier {tier}** → **{state['limit']} images/24h**" if tier > 0 else f"Current: **No Tier** → **{state['limit']} images/24h**",
-    ]
-    if nxt:
-        nt, cfg = nxt
-        lines.append(f"🚀 Next unlock: **Tier {nt}** (<@&{cfg['role_id']}>, Level {cfg['level']}) → **{cfg['image_limit']} images/24h**.")
-    else:
-        lines.append("🏆 You already have the highest image tier.")
-    lines.append(f"Tier limits: `{_image_tier_line()}` • Default: `2`")
-    await send_ephemeral(interaction, "\n".join(lines))
-
-# =================================================
-# VENICE API CALLS
+# API CALLS
 # =================================================
 async def venice_generate(session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     req_id = uuid.uuid4().hex[:8]
     logger.info("[IMG %s] -> POST generate model=%s", req_id, payload.get("model"))
 
+    timeout = aiohttp.ClientTimeout(total=120, connect=20, sock_read=90)
+
     for attempt in range(retries + 1):
         try:
-            async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload) as resp:
+            async with session.post(VENICE_IMAGE_URL, headers=headers, json=payload, timeout=timeout) as resp:
                 logger.info("[IMG %s] <- status=%s attempt=%s", req_id, resp.status, attempt + 1)
                 if resp.status == 200:
                     img = await _extract_image_from_response(resp)
@@ -1171,10 +949,12 @@ async def _upscale_once(session: aiohttp.ClientSession, image_bytes: bytes, scal
     req_id = uuid.uuid4().hex[:8]
     logger.info("[UPS %s] -> POST upscale %sx", req_id, scale)
 
+    timeout = aiohttp.ClientTimeout(total=120, connect=20, sock_read=90)
+
     for attempt in range(retries + 1):
         for payload in payloads:
             try:
-                async with session.post(VENICE_UPSCALE_URL, headers=headers, json=payload) as resp:
+                async with session.post(VENICE_UPSCALE_URL, headers=headers, json=payload, timeout=timeout) as resp:
                     logger.info("[UPS %s] <- status=%s attempt=%s", req_id, resp.status, attempt + 1)
                     if resp.status == 200:
                         out = await _extract_image_from_response(resp)
@@ -1196,7 +976,59 @@ async def venice_upscale(session: aiohttp.ClientSession, image_bytes: bytes, sca
     return await _upscale_once(session, image_bytes, scale, retries=retries)
 
 # =================================================
-# PROGRESS
+# EPHEMERAL + QUOTA MSGS
+# =================================================
+async def send_ephemeral(interaction: discord.Interaction, content: Optional[str] = None, **kwargs) -> Optional[discord.Message]:
+    payload = dict(kwargs)
+    payload["ephemeral"] = True
+    if content is not None:
+        payload["content"] = content
+
+    try:
+        if interaction.response.is_done():
+            msg = await interaction.followup.send(wait=True, **payload)
+        else:
+            await interaction.response.send_message(**payload)
+            msg = await interaction.original_response()
+        await track_ephemeral_message(interaction, msg)
+        return msg
+    except Exception:
+        return None
+
+
+async def send_resolution_lock_message(interaction: discord.Interaction, resolution: str, required_tier: int, current_tier: int):
+    cfg = TIER_RULES.get(required_tier)
+    if not cfg:
+        await send_ephemeral(interaction, f"🔒 **{resolution}** ist gesperrt.")
+        return
+
+    await send_ephemeral(
+        interaction,
+        f"🔒 **{resolution}** ist gesperrt.\n"
+        f"Benötigt: **Tier {required_tier}+** (<@&{cfg['role_id']}>, Level {cfg['level']}+)\n"
+        f"Aktuell: **Tier {current_tier}**."
+    )
+
+
+async def send_image_quota_message(interaction: discord.Interaction, member: Optional[discord.Member], state: dict[str, int]):
+    tier = get_member_tier(member)
+    nxt = _next_tier(tier)
+
+    lines = [
+        f"⛔ Daily image limit reached: **{state['used']}/{state['limit']}** in this 24h window.",
+        f"⏳ Reset in **{_seconds_human(state['reset_in'])}**.",
+        f"Current: **Tier {tier}** → **{state['limit']} images/24h**" if tier > 0 else f"Current: **No Tier** → **{state['limit']} images/24h**",
+    ]
+    if nxt:
+        nt, cfg = nxt
+        lines.append(f"🚀 Next unlock: **Tier {nt}** (<@&{cfg['role_id']}>, Level {cfg['level']}) → **{cfg['image_limit']} images/24h**.")
+    else:
+        lines.append("🏆 You already have the highest image tier.")
+    lines.append(f"Tier limits: `{_image_tier_line()}` • Default: `2`")
+    await send_ephemeral(interaction, "\n".join(lines))
+
+# =================================================
+# PROGRESS LOOP
 # =================================================
 async def run_with_progress(
     task: asyncio.Task,
@@ -1204,7 +1036,7 @@ async def run_with_progress(
     est: float,
     start_percent: int,
     end_percent: int,
-    make_content: Callable[[int, float], str],
+    make_embed: Callable[[int, float], discord.Embed],
     min_est: float = 6.0,
 ) -> float:
     started = time.monotonic()
@@ -1223,13 +1055,13 @@ async def run_with_progress(
             last_percent = percent
             if progress_msg:
                 with contextlib.suppress(Exception):
-                    await progress_msg.edit(content=make_content(percent, eta))
+                    await progress_msg.edit(content=None, embed=make_embed(percent, eta))
         await asyncio.sleep(0.8)
 
     return time.monotonic() - started
 
 # =================================================
-# FLOW
+# UI FLOW: MODEL SELECTION
 # =================================================
 async def handle_model_selection(
     interaction: discord.Interaction,
@@ -1278,6 +1110,36 @@ class OwnerLockedView(discord.ui.View):
             await send_ephemeral(interaction, "🚫 This menu belongs to another user.")
             return False
         return True
+
+
+class StarterModelSelect(discord.ui.Select):
+    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
+        self.session = session
+        self.channel_id = channel_id
+        super().__init__(
+            placeholder="🎨 Choose your model...",
+            min_values=1,
+            max_values=1,
+            options=build_model_options(channel_id, include_easy=True),
+            custom_id=f"venice_model_select:{channel_id}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        cid = interaction.channel.id if interaction.channel else self.channel_id
+        await handle_model_selection(
+            interaction=interaction,
+            session=self.session,
+            selected=self.values[0],
+            hidden_suffix=channel_suffix(cid),
+            owner_id=interaction.user.id,
+            channel_id=cid,
+        )
+
+
+class StarterView(discord.ui.View):
+    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
+        super().__init__(timeout=None)
+        self.add_item(StarterModelSelect(session, channel_id))
 
 
 class AspectRatioSelect(discord.ui.Select):
@@ -1480,36 +1342,6 @@ class GenerationModal(discord.ui.Modal):
         )
 
 
-class StarterModelSelect(discord.ui.Select):
-    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
-        self.session = session
-        self.channel_id = channel_id
-        super().__init__(
-            placeholder="🎨 Choose your model...",
-            min_values=1,
-            max_values=1,
-            options=build_model_options(channel_id, include_easy=True),
-            custom_id=f"venice_model_select:{channel_id}",
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        cid = interaction.channel.id if interaction.channel else self.channel_id
-        await handle_model_selection(
-            interaction,
-            self.session,
-            self.values[0],
-            hidden_suffix=channel_suffix(cid),
-            owner_id=interaction.user.id,
-            channel_id=cid,
-        )
-
-
-class StarterView(discord.ui.View):
-    def __init__(self, session: aiohttp.ClientSession, channel_id: int):
-        super().__init__(timeout=None)
-        self.add_item(StarterModelSelect(session, channel_id))
-
-
 class AnimatePromptModal(discord.ui.Modal):
     def __init__(self, owner_id: int, source_channel_id: int, source_message_id: int, base_prompt: str, ratio: str):
         self.owner_id = owner_id
@@ -1630,7 +1462,7 @@ class AnimateDurationView(OwnerLockedView):
             await send_ephemeral(interaction, "❌ Max duration per render is 15 seconds.")
             return
 
-        try:
+        with contextlib.suppress(Exception):
             rem = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
             if int(rem.get("remaining", 0)) < seconds:
                 await send_ephemeral(
@@ -1638,33 +1470,24 @@ class AnimateDurationView(OwnerLockedView):
                     f"⛔ Not enough video seconds left.\nRemaining: **{rem.get('remaining', 0)}s** of **{rem.get('limit', 0)}s**."
                 )
                 return
-        except Exception:
-            pass
-
-        for child in self.children:
-            child.disabled = True
-        if interaction.message:
-            with contextlib.suppress(Exception):
-                await interaction.message.edit(view=self)
 
         await interaction.response.defer(ephemeral=True)
 
         channel = interaction.client.get_channel(self.source_channel_id)
         if channel is None:
-            try:
+            with contextlib.suppress(Exception):
                 channel = await interaction.client.fetch_channel(self.source_channel_id)
-            except Exception:
-                await interaction.followup.send("❌ Source channel not found.", ephemeral=True)
-                return
-
+        if channel is None:
+            await send_ephemeral(interaction, "❌ Source channel not found.")
+            return
         if not hasattr(channel, "fetch_message"):
-            await interaction.followup.send("❌ Source channel is not message-compatible.", ephemeral=True)
+            await send_ephemeral(interaction, "❌ Source channel is not message-compatible.")
             return
 
         try:
             source_message = await channel.fetch_message(self.source_message_id)
         except Exception:
-            await interaction.followup.send("❌ Source image message not found.", ephemeral=True)
+            await send_ephemeral(interaction, "❌ Source image message not found.")
             return
 
         source_image_url = _extract_source_image_url(source_message)
@@ -1673,7 +1496,7 @@ class AnimateDurationView(OwnerLockedView):
         image_bytes = await _extract_image_bytes_from_message(source_message, shared_session)
 
         if not source_image_url:
-            await interaction.followup.send("❌ No usable image URL found on source message.", ephemeral=True)
+            await send_ephemeral(interaction, "❌ No usable image URL found on source message.")
             return
 
         aspect = self.ratio if self.ratio in VIDEO_ALLOWED_ASPECTS else "16:9"
@@ -1693,7 +1516,8 @@ class AnimateDurationView(OwnerLockedView):
 
 class AnimateActionView(OwnerLockedView):
     def __init__(self, owner_id: int, source_channel_id: int, source_message_id: int, prompt_text: str, ratio: str):
-        super().__init__(owner_id=owner_id, timeout=1200)
+        # timeout=None => nicht von selbst "ausgegraut" im Runtime-Leben des Bots
+        super().__init__(owner_id=owner_id, timeout=None)
         self.source_channel_id = source_channel_id
         self.source_message_id = source_message_id
         self.prompt_text = prompt_text
@@ -1705,11 +1529,16 @@ class AnimateActionView(OwnerLockedView):
             await send_ephemeral(interaction, "❌ This action is server-only.")
             return
 
+        msg_id = self.source_message_id or (interaction.message.id if interaction.message else 0)
+        if not msg_id:
+            await send_ephemeral(interaction, "❌ Source message id missing.")
+            return
+
         await interaction.response.send_modal(
             AnimatePromptModal(
                 owner_id=self.owner_id,
                 source_channel_id=self.source_channel_id,
-                source_message_id=self.source_message_id,
+                source_message_id=msg_id,
                 base_prompt=self.prompt_text,
                 ratio=self.ratio,
             )
@@ -1724,6 +1553,7 @@ class ResolutionSelectView(OwnerLockedView):
 
         model_id = generation_data["model_id"]
         native = set(MODEL_CONFIG[model_id]["resolutions"])
+
         for res in RESOLUTION_TIERS:
             label = f"{res} ↗" if (res not in native and res in ("2K", "4K")) else res
             style = discord.ButtonStyle.success if res == "1K" else discord.ButtonStyle.primary if res == "2K" else discord.ButtonStyle.danger
@@ -1737,15 +1567,10 @@ class ResolutionSelectView(OwnerLockedView):
                 await send_ephemeral(interaction, "❌ This action can only be used in a server.")
                 return
 
-            role_needed = required_role_for_resolution(resolution)
-            level_needed = required_level_for_resolution(resolution)
-            current_level = await resolve_member_level(interaction, interaction.user)
-
-            missing_role = bool(role_needed and not has_role(interaction.user, role_needed))
-            missing_level = bool(level_needed and current_level is not None and current_level < level_needed)
-
-            if missing_role or missing_level:
-                await send_resolution_lock_message(interaction, resolution, role_needed or 0, level_needed, current_level)
+            current_tier = get_member_tier(interaction.user)
+            needed_tier = required_tier_for_resolution(resolution)
+            if current_tier < needed_tier:
+                await send_resolution_lock_message(interaction, resolution, needed_tier, current_tier)
                 return
 
             await interaction.response.defer(ephemeral=True)
@@ -1769,11 +1594,11 @@ class ResolutionSelectView(OwnerLockedView):
         channel_id = gd["channel_id"]
 
         if model_id in DISABLED_MODELS:
-            await interaction.followup.send("❌ This model is disabled.", ephemeral=True)
+            await send_ephemeral(interaction, "❌ This model is disabled.")
             self.stop()
             return
         if not interaction.guild:
-            await interaction.followup.send("❌ This action is server-only.", ephemeral=True)
+            await send_ephemeral(interaction, "❌ This action is server-only.")
             self.stop()
             return
 
@@ -1796,19 +1621,42 @@ class ResolutionSelectView(OwnerLockedView):
             est_gen = estimate_generation_seconds(model_id, steps, cfg_val, len(prompt_text or ""), effective_gen_res)
             gen_cap = 82 if upscale_factor in (2, 4) else 97
 
-            progress_msg = await interaction.followup.send(f"{pepper} Generating image...", ephemeral=True, wait=True)
-            await track_ephemeral_message(interaction, progress_msg)
+            progress_embed = _build_image_progress_embed(
+                user=interaction.user,
+                prompt=prompt_text,
+                model_label=get_model_label(model_id),
+                ratio=ratio,
+                resolution=resolution,
+                percent=0,
+                eta_sec=est_gen,
+                stage="Initialisiere Request...",
+                quota_used=int(state_quota["used"]),
+                quota_limit=int(state_quota["limit"]),
+                quota_remaining=int(state_quota["remaining"]),
+            )
+            progress_msg = await send_ephemeral(interaction, embed=progress_embed)
 
             gen_task = asyncio.create_task(venice_generate(self.session, payload))
-            display_name = interaction.user.display_name
 
-            def gen_content(percent: int, eta: float) -> str:
-                return f"{pepper} Generating image for **{display_name}**... {percent}% (ETA ~{_eta_text(eta)})"
+            def gen_embed(percent: int, eta: float) -> discord.Embed:
+                return _build_image_progress_embed(
+                    user=interaction.user,
+                    prompt=prompt_text,
+                    model_label=get_model_label(model_id),
+                    ratio=ratio,
+                    resolution=resolution,
+                    percent=percent,
+                    eta_sec=eta,
+                    stage="Bild wird generiert...",
+                    quota_used=int(state_quota["used"]),
+                    quota_limit=int(state_quota["limit"]),
+                    quota_remaining=int(state_quota["remaining"]),
+                )
 
-            await run_with_progress(gen_task, progress_msg, est_gen, 0, gen_cap, gen_content, min_est=6.0)
+            await run_with_progress(gen_task, progress_msg, est_gen, 0, gen_cap, gen_embed, min_est=6.0)
             image_bytes = await gen_task
             if not image_bytes:
-                await interaction.followup.send("❌ Generation failed.", ephemeral=True)
+                await send_ephemeral(interaction, "❌ Generation failed.")
                 return
 
             upscaled_success = False
@@ -1816,24 +1664,56 @@ class ResolutionSelectView(OwnerLockedView):
                 est_up = estimate_upscale_seconds(upscale_factor, resolution)
                 up_task = asyncio.create_task(venice_upscale(self.session, image_bytes, upscale_factor))
 
-                def up_content(percent: int, eta: float) -> str:
-                    return f"{pepper} Upscaling ({upscale_factor}x) for **{display_name}**... {percent}% (ETA ~{_eta_text(eta)})"
+                def up_embed(percent: int, eta: float) -> discord.Embed:
+                    return _build_image_progress_embed(
+                        user=interaction.user,
+                        prompt=prompt_text,
+                        model_label=get_model_label(model_id),
+                        ratio=ratio,
+                        resolution=resolution,
+                        percent=percent,
+                        eta_sec=eta,
+                        stage=f"Upscaling {upscale_factor}x...",
+                        quota_used=int(state_quota["used"]),
+                        quota_limit=int(state_quota["limit"]),
+                        quota_remaining=int(state_quota["remaining"]),
+                    )
 
-                await run_with_progress(up_task, progress_msg, est_up, gen_cap, 99, up_content, min_est=4.0)
+                await run_with_progress(up_task, progress_msg, est_up, gen_cap, 99, up_embed, min_est=4.0)
                 upscaled = await up_task
                 if upscaled:
                     image_bytes = upscaled
                     upscaled_success = True
 
-            # Block Venice filter placeholder BEFORE any channel post
             if _is_venice_filter_placeholder(image_bytes):
-                with contextlib.suppress(Exception):
-                    await progress_msg.delete()
-                await interaction.followup.send(AUTO_FILTER_EPHEMERAL_TEXT, ephemeral=True)
+                if progress_msg:
+                    with contextlib.suppress(Exception):
+                        await progress_msg.delete()
+                await send_ephemeral(interaction, AUTO_FILTER_EPHEMERAL_TEXT)
                 return
 
-            with contextlib.suppress(Exception):
-                await progress_msg.edit(content=f"{pepper} Finalizing... 100%")
+            if progress_msg:
+                with contextlib.suppress(Exception):
+                    await progress_msg.edit(
+                        content=None,
+                        embed=_build_image_progress_embed(
+                            user=interaction.user,
+                            prompt=prompt_text,
+                            model_label=get_model_label(model_id),
+                            ratio=ratio,
+                            resolution=resolution,
+                            percent=100,
+                            eta_sec=0.0,
+                            stage="Finalisiere Upload...",
+                            quota_used=int(state_quota["used"]),
+                            quota_limit=int(state_quota["limit"]),
+                            quota_remaining=int(state_quota["remaining"]),
+                        ),
+                    )
+
+            if not interaction.channel:
+                await send_ephemeral(interaction, "❌ Channel unavailable.")
+                return
 
             embed = discord.Embed(
                 title="🖼️ Image",
@@ -1841,7 +1721,7 @@ class ResolutionSelectView(OwnerLockedView):
                 timestamp=datetime.now(timezone.utc),
             )
             embed.set_author(
-                name=f"{display_name} • {datetime.now().strftime('%Y-%m-%d')}",
+                name=f"{interaction.user.display_name} • {datetime.now().strftime('%Y-%m-%d')}",
                 icon_url=interaction.user.display_avatar.url,
             )
 
@@ -1865,10 +1745,6 @@ class ResolutionSelectView(OwnerLockedView):
                 icon_url=guild_icon,
             )
 
-            if not interaction.channel:
-                await interaction.followup.send("❌ Channel unavailable.", ephemeral=True)
-                return
-
             upload_limit = _discord_upload_limit_bytes(interaction)
             posted: Optional[discord.Message] = None
 
@@ -1886,6 +1762,13 @@ class ResolutionSelectView(OwnerLockedView):
                         content=f"{SERVER_ANIM_ICON} 🖼️ **Image** • {interaction.user.mention}",
                         embed=embed,
                         file=candidate_file,
+                        view=AnimateActionView(
+                            owner_id=interaction.user.id,
+                            source_channel_id=interaction.channel.id,
+                            source_message_id=0,  # setzen wir gleich auf posted.id via edit
+                            prompt_text=prompt_text,
+                            ratio=ratio,
+                        ),
                         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                     )
                     break
@@ -1895,8 +1778,20 @@ class ResolutionSelectView(OwnerLockedView):
                     raise
 
             if posted is None:
-                await interaction.followup.send("❌ Upload failed after compression retries.", ephemeral=True)
+                await send_ephemeral(interaction, "❌ Upload failed after compression retries.")
                 return
+
+            # Wichtig: source_message_id auf echte msg id fixen
+            with contextlib.suppress(Exception):
+                await posted.edit(
+                    view=AnimateActionView(
+                        owner_id=interaction.user.id,
+                        source_channel_id=interaction.channel.id,
+                        source_message_id=posted.id,
+                        prompt_text=prompt_text,
+                        ratio=ratio,
+                    )
+                )
 
             quota_success = True
 
@@ -1911,17 +1806,12 @@ class ResolutionSelectView(OwnerLockedView):
                     bot_user_id=(interaction.client.user.id if interaction.client.user else None),
                 )
 
-            await cleanup_user_ephemerals(interaction)
+            quota_now = await image_quota.peek(interaction.guild.id, interaction.user.id, image_limit)
             await send_ephemeral(
                 interaction,
-                content="🎬 Animate this image?",
-                view=AnimateActionView(
-                    owner_id=interaction.user.id,
-                    source_channel_id=interaction.channel.id,
-                    source_message_id=posted.id,
-                    prompt_text=prompt_text,
-                    ratio=ratio,
-                ),
+                f"✅ Bild erstellt.\n"
+                f"Verbleibend in 24h: **{quota_now['remaining']} / {quota_now['limit']}** "
+                f"(Reset in **{_seconds_human(quota_now['reset_in'])}**)."
             )
         finally:
             if not quota_success:
@@ -1948,11 +1838,8 @@ class VeniceImageCog(commands.Cog):
 
     async def cog_load(self):
         await self._ensure_session()
-        try:
-            await sync_model_caps_from_api(self.session)
-        except Exception as e:
-            logger.warning("Model sync failed in cog_load: %s", e)
 
+        # persistente StarterViews
         for channel_id in ALLOWED_CHANNEL_IDS:
             self.bot.add_view(StarterView(self.session, channel_id))
 
@@ -2001,11 +1888,6 @@ class VeniceImageCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def venice_reload(self, ctx: commands.Context):
         await self._ensure_session()
-        try:
-            await sync_model_caps_from_api(self.session)
-        except Exception as e:
-            await ctx.send(f"⚠️ Model sync failed: {e}")
-            return
 
         reposted = 0
         for guild in self.bot.guilds:
