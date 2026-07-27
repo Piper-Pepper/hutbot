@@ -79,7 +79,6 @@ async def main():
             "gather",
             "reset",
             "hutvote",
-            "champions_cog",
             "riddle",
             "hutthreadvote",
         ]
