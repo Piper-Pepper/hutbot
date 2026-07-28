@@ -114,6 +114,18 @@ def truncate_text(text: str, max_len: int = 180) -> str:
     return text or ""
 
 
+def clamp_embed_value(text: Optional[str], limit: int = 1024) -> str:
+    """Discord embed field value limit is 1024."""
+    t = (text or "").strip()
+    return t if len(t) <= limit else t[: limit - 1] + "…"
+
+
+def clamp_embed_description(text: Optional[str], limit: int = 4096) -> str:
+    """Discord embed description limit is 4096."""
+    t = (text or "").strip()
+    return t if len(t) <= limit else t[: limit - 1] + "…"
+
+
 def extract_link(text: str) -> tuple[str, Optional[str]]:
     text = text or ""
     m = re.search(r"(https?://\S+)", text)
@@ -201,6 +213,22 @@ def build_xpadd_commands(member_mention: str, member_name: str, xp_amount: int) 
     xp = max(0, to_int(xp_amount, 0))
     safe_name = (member_name or "UnknownUser").replace('"', "").strip() or "UnknownUser"
     return f'/xpadd "{safe_name}" {xp}', f"/xpadd {member_mention} {xp}"
+
+
+async def safe_defer(
+    interaction: Interaction,
+    *,
+    ephemeral: bool = False,
+    thinking: bool = False,
+) -> bool:
+    """Safely defer an interaction response, avoiding Unknown interaction crashes."""
+    if interaction.response.is_done():
+        return True
+    try:
+        await interaction.response.defer(ephemeral=ephemeral, thinking=thinking)
+        return True
+    except (discord.NotFound, discord.HTTPException):
+        return False
 
 
 # =========================================================
@@ -1132,7 +1160,6 @@ class RiddleRepo:
     async def clear_user_stats(self, guild_id: int):
         await self._exec("DELETE FROM user_stats WHERE guild_id=?", (guild_id,))
 
-
 # =========================================================
 # COG
 # =========================================================
@@ -1234,7 +1261,7 @@ class RiddleCog(commands.Cog):
         r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
         embed = discord.Embed(
             title=f"🧩 Goon Hut Riddle No.{r_no}",
-            description=(riddle.get("text") or "*No riddle text set.*").strip(),
+            description=clamp_embed_description((riddle.get("text") or "*No riddle text set.*").strip()),
             color=discord.Color.blurple(),
         )
         if guild:
@@ -1352,13 +1379,13 @@ class RiddleCog(commands.Cog):
         else:
             e1 = discord.Embed(
                 title=f"🧩 Goon Hut Riddle No.{to_int(ctx.get('riddle_no'), to_int(ctx.get('riddle_id'), 0))}",
-                description=ctx.get("riddle_text") or "*Unknown*",
+                description=clamp_embed_description(ctx.get("riddle_text") or "*Unknown*"),
                 color=discord.Color.blurple(),
             )
 
         e1.color = discord.Color.green()
-        e1.add_field(name="✅ Status", value=f"Solved by {solver_mention}", inline=False)
-        e1.add_field(name="🏆 XP Reward", value=str(max(0, to_int(ctx.get("xp"), 0))), inline=False)
+        e1.add_field(name="✅ Status", value=clamp_embed_value(f"Solved by {solver_mention}"), inline=False)
+        e1.add_field(name="🏆 XP Reward", value=clamp_embed_value(str(max(0, to_int(ctx.get("xp"), 0)))), inline=False)
         e1.set_footer(text=footer_text(msg.guild))
 
         # embed 2 = solution
@@ -1367,7 +1394,11 @@ class RiddleCog(commands.Cog):
         if more_link:
             sol_text += f"\n🔗 [🧠**MORE**]({more_link})"
 
-        e2 = discord.Embed(title="✅ Lösung", description=sol_text, color=discord.Color.green())
+        e2 = discord.Embed(
+            title="✅ Lösung",
+            description=clamp_embed_description(sol_text),
+            color=discord.Color.green(),
+        )
 
         s_img = ctx.get("solution_url")
         if not is_http_url(s_img):
@@ -1393,11 +1424,11 @@ class RiddleCog(commands.Cog):
         else:
             embed = discord.Embed(
                 title=f"🧩 Goon Hut Riddle No.{to_int(riddle.get('riddle_no'), to_int(riddle.get('id'), 0))}",
-                description=riddle.get("text") or "*Unknown*",
+                description=clamp_embed_description(riddle.get("text") or "*Unknown*"),
                 color=discord.Color.red(),
             )
         embed.color = discord.Color.red()
-        embed.add_field(name="🔒 Status", value="Closed unsolved", inline=False)
+        embed.add_field(name="🔒 Status", value=clamp_embed_value("Closed unsolved"), inline=False)
         embed.set_footer(text=footer_text(msg.guild))
         try:
             await msg.edit(embed=embed, view=None)
@@ -1442,7 +1473,7 @@ class RiddleCog(commands.Cog):
 
             embed = discord.Embed(
                 title="📜 New Solution Submitted",
-                description=row.get("riddle_text") or "*No riddle text*",
+                description=clamp_embed_description(row.get("riddle_text") or "*No riddle text*"),
                 color=discord.Color.gold(),
             )
             if uavatar:
@@ -1450,10 +1481,10 @@ class RiddleCog(commands.Cog):
             else:
                 embed.set_author(name=uname)
 
-            embed.add_field(name="🧠 User Answer", value=row.get("answer") or "*Empty*", inline=False)
-            embed.add_field(name="✅ Correct Solution", value=row.get("solution") or "*Not set*", inline=False)
-            embed.add_field(name="🏆 XP Reward", value=str(max(0, to_int(row.get("xp"), 0))), inline=False)
-            embed.add_field(name="🆔 User ID", value=str(uid), inline=False)
+            embed.add_field(name="🧠 User Answer", value=clamp_embed_value(row.get("answer") or "*Empty*"), inline=False)
+            embed.add_field(name="✅ Correct Solution", value=clamp_embed_value(row.get("solution") or "*Not set*"), inline=False)
+            embed.add_field(name="🏆 XP Reward", value=clamp_embed_value(str(max(0, to_int(row.get("xp"), 0)))), inline=False)
+            embed.add_field(name="🆔 User ID", value=clamp_embed_value(str(uid)), inline=False)
             embed.set_footer(text=footer_text(guild))
 
             try:
@@ -1614,9 +1645,6 @@ class RiddleCog(commands.Cog):
 
 
 # =========================================================
-# PLAY UI
-# =========================================================
-# =========================================================
 # PLAY UI (compact)
 # =========================================================
 async def _edit_vote_result_message(
@@ -1637,10 +1665,10 @@ async def _edit_vote_result_message(
 
         if ok:
             e.color = discord.Color.green()
-            e.add_field(name="✅ Result", value=f"Approved by {moderator_mention}", inline=False)
+            e.add_field(name="✅ Result", value=clamp_embed_value(f"Approved by {moderator_mention}"), inline=False)
         else:
             e.color = discord.Color.red()
-            e.add_field(name="❌ Result", value=f"Rejected by {moderator_mention}", inline=False)
+            e.add_field(name="❌ Result", value=clamp_embed_value(f"Rejected by {moderator_mention}"), inline=False)
 
         await msg.edit(embed=e, view=None)
     except Exception:
@@ -1667,7 +1695,10 @@ class SubmitSolutionModal(Modal):
             await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
+        ok = await safe_defer(interaction, ephemeral=True)
+        if not ok:
+            logger.warning("SubmitSolutionModal: interaction expired before defer.")
+            return
 
         riddle = await self.cog.repo.get_open_riddle_by_id(interaction.guild.id, self.riddle_id)
         if not riddle:
@@ -1697,20 +1728,20 @@ class SubmitSolutionModal(Modal):
 
         embed = discord.Embed(
             title="📜 New Solution Submitted",
-            description=riddle.get("text") or "*No riddle text*",
+            description=clamp_embed_description(riddle.get("text") or "*No riddle text*"),
             color=discord.Color.gold(),
         )
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="🧠 User Answer", value=ans, inline=False)
-        embed.add_field(name="✅ Correct Solution", value=riddle.get("solution") or "*Not set*", inline=False)
-        embed.add_field(name="🏆 XP Reward", value=str(max(0, to_int(riddle.get("xp"), 0))), inline=False)
-        embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)
+        embed.add_field(name="🧠 User Answer", value=clamp_embed_value(ans), inline=False)
+        embed.add_field(name="✅ Correct Solution", value=clamp_embed_value(riddle.get("solution") or "*Not set*"), inline=False)
+        embed.add_field(name="🏆 XP Reward", value=clamp_embed_value(str(max(0, to_int(riddle.get("xp"), 0)))), inline=False)
+        embed.add_field(name="🆔 User ID", value=clamp_embed_value(str(interaction.user.id)), inline=False)
         embed.set_footer(text=footer_text(interaction.guild))
 
         try:
             vote_msg = await vote_channel.send(embed=embed, view=VoteButtons(self.cog))
-            ok = await self.cog.repo.set_submission_vote_message(submission_id, vote_msg.id)
-            if not ok:
+            linked = await self.cog.repo.set_submission_vote_message(submission_id, vote_msg.id)
+            if not linked:
                 await self.cog.repo.delete_submission(submission_id)
                 try:
                     await vote_msg.delete()
@@ -1773,7 +1804,10 @@ class _VoteBaseButton(discord.ui.Button):
             await interaction.response.send_message("❌ Message context missing.", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        ok = await safe_defer(interaction, ephemeral=False)
+        if not ok:
+            logger.warning("Vote button: interaction expired before defer.")
+            return
 
         if self.approve:
             status, ctx = await self.cog.repo.approve_submission(interaction.message.id, interaction.user.id)
@@ -1834,12 +1868,12 @@ class _VoteBaseButton(discord.ui.Button):
 
             solved_embed = discord.Embed(
                 title="✅ Riddle Solved",
-                description=f"Solved by {solver_mention}",
+                description=clamp_embed_description(f"Solved by {solver_mention}"),
                 color=discord.Color.green(),
             )
-            solved_embed.add_field(name="🧩 Riddle", value=ctx.get("riddle_text") or "*Unknown*", inline=False)
-            solved_embed.add_field(name="✅ Solution", value=solution_display, inline=False)
-            solved_embed.add_field(name="🏆 XP Reward", value=str(max(0, to_int(ctx.get("xp_gain"), 0))), inline=False)
+            solved_embed.add_field(name="🧩 Riddle", value=clamp_embed_value(ctx.get("riddle_text") or "*Unknown*"), inline=False)
+            solved_embed.add_field(name="✅ Solution", value=clamp_embed_value(solution_display), inline=False)
+            solved_embed.add_field(name="🏆 XP Reward", value=clamp_embed_value(str(max(0, to_int(ctx.get("xp_gain"), 0)))), inline=False)
             if is_http_url(s_img):
                 solved_embed.set_image(url=s_img)
             solved_embed.set_footer(text=footer_text(interaction.guild))
@@ -1903,7 +1937,7 @@ class VoteButtons(LoggedPersistentView):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
-        
+
 # =========================================================
 # ADMIN PANEL UI
 # =========================================================
@@ -1939,10 +1973,14 @@ class SlotSelect(Select):
         )
 
     async def callback(self, interaction: Interaction):
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("SlotSelect: interaction expired before defer.")
+            return
+
         self.panel.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, to_int(self.values[0], 1)))
         await self.panel.refresh_data()
         await self.panel.safe_edit_panel()
-        await interaction.response.defer()
 
 
 class EditContentButton(discord.ui.Button):
@@ -2059,7 +2097,10 @@ class RiddleContentModal(Modal):
             await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("RiddleContentModal: interaction expired before defer.")
+            return
 
         role_ids = parse_role_input(str(self.mentions.value or ""), interaction.guild, max_roles=5)
         role_csv = ",".join(str(r) for r in role_ids) if role_ids else None
@@ -2114,7 +2155,11 @@ class RiddleImagesModal(Modal):
         if interaction.guild is None:
             await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
-        await interaction.response.defer()
+
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("RiddleImagesModal: interaction expired before defer.")
+            return
 
         r_img = clean_value(self.riddle_image.value)
         s_img = clean_value(self.solution_image.value)
@@ -2130,14 +2175,14 @@ class RiddleImagesModal(Modal):
             await self.panel.safe_edit_panel()
             return
 
-        ok = await self.panel.cog.repo.set_slot_images(
+        ok_save = await self.panel.cog.repo.set_slot_images(
             guild_id=interaction.guild.id,
             slot_no=self.slot_no,
             riddle_image_url=r_img,
             solution_image_url=s_img,
             user_id=interaction.user.id,
         )
-        if not ok:
+        if not ok_save:
             self.panel.last_info = "❌ Slot not found. Save content first."
         else:
             if await self.panel.cog.repo.is_enabled(interaction.guild.id):
@@ -2194,9 +2239,9 @@ class RiddleAdminPanelView(View):
             ),
             color=discord.Color.green() if enabled else discord.Color.orange(),
         )
-        main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
-        main.add_field(name="Slot 1", value="✅ filled" if slot1_filled else "❌ empty", inline=True)
-        main.add_field(name="Solved Total", value=str(solved_total), inline=True)
+        main.add_field(name="System", value=clamp_embed_value("🟢 ON" if enabled else "🟠 OFF"), inline=True)
+        main.add_field(name="Slot 1", value=clamp_embed_value("✅ filled" if slot1_filled else "❌ empty"), inline=True)
+        main.add_field(name="Solved Total", value=clamp_embed_value(str(solved_total)), inline=True)
 
         for slot in range(1, MAX_RIDDLE_SLOTS + 1):
             row = self.slot_map.get(slot)
@@ -2211,14 +2256,15 @@ class RiddleAdminPanelView(View):
             has_r = "✅" if is_http_url(row.get("image_url")) else "❌"
             has_s = "✅" if is_http_url(row.get("solution_url")) else "❌"
 
+            val = f"XP: {xp}\nMentions: {mention_count}\nImages: {has_r}/{has_s}\n{text_preview}"
             main.add_field(
                 name=f"Slot {slot} • Riddle #{r_no}",
-                value=f"XP: {xp}\nMentions: {mention_count}\nImages: {has_r}/{has_s}\n{text_preview}",
+                value=clamp_embed_value(val),
                 inline=False,
             )
 
         if self.last_info:
-            main.add_field(name="Status", value=self.last_info, inline=False)
+            main.add_field(name="Status", value=clamp_embed_value(self.last_info), inline=False)
         main.set_footer(text=footer_text(guild))
 
         # selected slot preview
@@ -2237,7 +2283,7 @@ class RiddleAdminPanelView(View):
 
         preview = discord.Embed(
             title=f"🖼️ Slot {self.selected_slot} • Riddle #{r_no}",
-            description=f"ID: {rid}",
+            description=clamp_embed_description(f"ID: {rid}"),
             color=discord.Color.blurple(),
         )
         preview.add_field(name="Riddle Image", value="✅ set" if is_http_url(row.get("image_url")) else "❌ missing", inline=True)
@@ -2297,6 +2343,11 @@ class RiddleAdminPanelView(View):
             await interaction.response.send_message("❌ No permission.", ephemeral=True)
             return
 
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("delete_selected_slot: interaction expired before defer.")
+            return
+
         status, _ = await self.cog.repo.delete_slot_riddle(interaction.guild.id, self.selected_slot, interaction.user.id)
         if status == "not_found":
             self.last_info = f"ℹ️ Slot {self.selected_slot} already empty."
@@ -2312,7 +2363,6 @@ class RiddleAdminPanelView(View):
 
         await self.refresh_data()
         await self.safe_edit_panel()
-        await interaction.response.defer()
 
     async def toggle_system(self, interaction: Interaction, currently_enabled: bool):
         if interaction.guild is None:
@@ -2320,6 +2370,11 @@ class RiddleAdminPanelView(View):
             return
         if not isinstance(interaction.user, discord.Member) or not member_has_role(interaction.user, RIDDLE_MANAGER_ROLE_ID):
             await interaction.response.send_message("❌ No permission.", ephemeral=True)
+            return
+
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("toggle_system: interaction expired before defer.")
             return
 
         gid = interaction.guild.id
@@ -2341,7 +2396,6 @@ class RiddleAdminPanelView(View):
 
         await self.refresh_data()
         await self.safe_edit_panel()
-        await interaction.response.defer()
 
     async def post_now(self, interaction: Interaction):
         if interaction.guild is None:
@@ -2349,6 +2403,11 @@ class RiddleAdminPanelView(View):
             return
         if not isinstance(interaction.user, discord.Member) or not member_has_role(interaction.user, RIDDLE_MANAGER_ROLE_ID):
             await interaction.response.send_message("❌ No permission.", ephemeral=True)
+            return
+
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("post_now: interaction expired before defer.")
             return
 
         gid = interaction.guild.id
@@ -2364,7 +2423,6 @@ class RiddleAdminPanelView(View):
 
         await self.refresh_data()
         await self.safe_edit_panel()
-        await interaction.response.defer()
 
     async def close_active(self, interaction: Interaction):
         if interaction.guild is None:
@@ -2374,13 +2432,17 @@ class RiddleAdminPanelView(View):
             await interaction.response.send_message("❌ No permission.", ephemeral=True)
             return
 
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("close_active: interaction expired before defer.")
+            return
+
         gid = interaction.guild.id
         riddle = await self.cog.repo.close_slot1_unsolved(gid, interaction.user.id)
         if not riddle:
             self.last_info = "⚠️ No open riddle in slot 1."
             await self.refresh_data()
             await self.safe_edit_panel()
-            await interaction.response.defer()
             return
 
         await self.cog.cleanup_vote_messages_for_riddle(to_int(riddle["id"], 0))
@@ -2400,9 +2462,9 @@ class RiddleAdminPanelView(View):
             description="Nobody solved the riddle in time.",
             color=discord.Color.red(),
         )
-        embed.add_field(name="🧩 Riddle", value=riddle.get("text") or "*Unknown*", inline=False)
-        embed.add_field(name="✅ Correct Solution", value=solution_display, inline=False)
-        embed.add_field(name="🏆 XP Reward", value=str(max(0, to_int(riddle.get("xp"), 0))), inline=False)
+        embed.add_field(name="🧩 Riddle", value=clamp_embed_value(riddle.get("text") or "*Unknown*"), inline=False)
+        embed.add_field(name="✅ Correct Solution", value=clamp_embed_value(solution_display), inline=False)
+        embed.add_field(name="🏆 XP Reward", value=clamp_embed_value(str(max(0, to_int(riddle.get("xp"), 0)))), inline=False)
         if is_http_url(solution_url):
             embed.set_image(url=solution_url)
         embed.set_footer(text=footer_text(interaction.guild))
@@ -2424,13 +2486,15 @@ class RiddleAdminPanelView(View):
         self.last_info = "✅ Closed."
         await self.refresh_data()
         await self.safe_edit_panel()
-        await interaction.response.defer()
 
     async def refresh(self, interaction: Interaction):
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("refresh panel: interaction expired before defer.")
+            return
         await self.refresh_data()
         self.last_info = "Refreshed."
         await self.safe_edit_panel()
-        await interaction.response.defer()
 
     async def on_timeout(self):
         for c in self.children:
@@ -2497,7 +2561,11 @@ class ChampionsBulkEditModal(Modal):
         if interaction.guild is None:
             await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
-        await interaction.response.defer()
+
+        ok = await safe_defer(interaction)
+        if not ok:
+            logger.warning("ChampionsBulkEditModal: interaction expired before defer.")
+            return
 
         try:
             rows = self.parse_rows(self.payload.value or "")
@@ -2544,17 +2612,17 @@ class ChampionsAdminView(View):
             description="Bulk edit rows as `user_id,solved,xp`",
             color=discord.Color.blurple(),
         )
-        e.add_field(name="Users", value=str(total_users), inline=True)
-        e.add_field(name="Total Solved", value=str(total_solved), inline=True)
-        e.add_field(name="Total XP", value=str(total_xp), inline=True)
+        e.add_field(name="Users", value=clamp_embed_value(str(total_users)), inline=True)
+        e.add_field(name="Total Solved", value=clamp_embed_value(str(total_solved)), inline=True)
+        e.add_field(name="Total XP", value=clamp_embed_value(str(total_xp)), inline=True)
 
         if self.entries:
             preview = [f"{i}. <@{uid}> • 🧩 {solved} • 🧠 {xp}" for i, (uid, solved, xp) in enumerate(self.entries[:12], start=1)]
-            e.add_field(name="Preview", value="\n".join(preview), inline=False)
+            e.add_field(name="Preview", value=clamp_embed_value("\n".join(preview)), inline=False)
         else:
             e.add_field(name="Preview", value="No entries.", inline=False)
 
-        e.add_field(name="Status", value=self.last_info, inline=False)
+        e.add_field(name="Status", value=clamp_embed_value(self.last_info), inline=False)
         e.set_footer(text=footer_text(guild))
         return e
 
@@ -2652,7 +2720,7 @@ class ChampionsView(View):
 
         e = discord.Embed(
             title=f"🏆 Riddle Champions • Total solved: {self.total_solved}",
-            description=f"Page {self.page + 1}/{self.max_page + 1}",
+            description=clamp_embed_description(f"Page {self.page + 1}/{self.max_page + 1}"),
             color=discord.Color.gold(),
         )
 
@@ -2672,7 +2740,7 @@ class ChampionsView(View):
             for i, (uid, solved, percent, xp) in enumerate(rows, start=start + 1):
                 e.add_field(
                     name=f"🎖️ {i}. {self._name(uid)}",
-                    value=f"🧩 {solved} | 📊 {percent:.1f}% | 🧠 {xp} XP",
+                    value=clamp_embed_value(f"🧩 {solved} | 📊 {percent:.1f}% | 🧠 {xp} XP"),
                     inline=False,
                 )
 
@@ -2731,3 +2799,4 @@ async def teardown(bot: commands.Bot):
     if _repo is not None:
         await _repo.close()
         _repo = None
+        
