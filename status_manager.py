@@ -13,38 +13,38 @@ class StatusManager(commands.Cog):
     def cog_unload(self):
         self.status_loop.cancel()
 
-    # 🌞 Status pools by time of day (Activity style: "Is ...")
+    # 🌞 Status pools by time of day
     status_morning = [
-        "☕ Is drinking coffee with wholesome morning goons...",
-        "🕊️ Is listening to soft moans and birdsong...",
-        "🌄 Is enjoying the sunrise over the Goon Hut...",
-        "🌄 Is watching the sunrise over Goonsville...",
-        "🌄 Is wishing everyone a Goon Morning...",
-        "☕ Is drinking her steamy goon-morning coffee...",
-        "🚬 Is smoking her goon-morning joint...",
-        "🚬 Is smoking her goon-morning cigarette...",
-        "🐔 Is looking at your morning woody...",
+        "☕ Drinking coffee with wholesome morning goons...",
+        "🕊️ Listening to soft moans and birdsong...",
+        "🌄 Enjoying the sunrise over the Goon Hut...",
+        "🌄 Watching the sunrise over Goonsville...",
+        "🌄 Wishing everyone a Goon Morning...",
+        "☕ Drinking her steamy goon-morning coffee...",
+        "🚬 Smoking her goon-morning joint...",
+        "🚬 Smoking her goon-morning cigarette...",
+        "🐔 Admiring your morning woody...",
     ]
 
     status_day = [
-        "🏟️ Is playing the daily Goon Games...",
-        "🌞 Is catching some Goon-Mommies...",
-        "🐸 Is having fun with her dildo...",
-        "🔫 Is enforcing Piper’s law...",
-        "🌬️ Is smoking weed at high noon...",
-        "🎧 Is listening to steamy PMV beats...",
-        "🦅 Is watching over horny degenerates like a hawk...",
+        "🏟️ Playing the daily Goon Games...",
+        "🌞 Catching some Goon-Mommies...",
+        "🐸 Having fun with her dildo...",
+        "🔫 Enforcing Piper's law...",
+        "🌬️ Smoking weed at high noon...",
+        "🎧 Listening to steamy PMV beats...",
+        "🦅 Watching over horny degenerates like a hawk...",
     ]
 
     status_night = [
-        "💦 Is drifting through slippery thoughts in the dark...",
-        "🔫 Is playing Russian roulette with a Goon-Mommy...",
-        "😺 Is caressing her Cum-Kitty...",
-        "👀 Is watching your shameful late-night rituals...",
-        "📼 Is listening to forbidden late-night audio...",
-        "♣️ Is playing strip poker with the Hut crew...",
-        "🌄 Is basking in the good-night screen glow...",
-        "🌇 Is watching the sunset over the Goon Hut...",
+        "💦 Drifting through slippery thoughts in the dark...",
+        "🔫 Playing Russian roulette with a Goon-Mommy...",
+        "😺 Caressing her Cum-Kitty...",
+        "👀 Watching your shameful late-night rituals...",
+        "📼 Listening to forbidden late-night audio...",
+        "♣️ Playing strip poker with the Hut crew...",
+        "🌄 Basking in the good-night screen glow...",
+        "🌇 Watching the sunset over the Goon Hut...",
     ]
 
     def get_status_by_time(self):
