@@ -1616,19 +1616,294 @@ class RiddleCog(commands.Cog):
 # =========================================================
 # PLAY UI
 # =========================================================
+# =========================================================
+# PLAY UI (compact)
+# =========================================================
+async def _edit_vote_result_message(
+    msg: discord.Message,
+    *,
+    ok: bool,
+    moderator_mention: str,
+):
+    try:
+        if msg.embeds:
+            d = msg.embeds[0].to_dict()
+            fields = d.get("fields", [])
+            drop = {"✅ Result", "❌ Result"}
+            d["fields"] = [f for f in fields if f.get("name") not in drop]
+            e = discord.Embed.from_dict(d)
+        else:
+            e = discord.Embed(title="📜 Solution Vote")
+
+        if ok:
+            e.color = discord.Color.green()
+            e.add_field(name="✅ Result", value=f"Approved by {moderator_mention}", inline=False)
+        else:
+            e.color = discord.Color.red()
+            e.add_field(name="❌ Result", value=f"Rejected by {moderator_mention}", inline=False)
+
+        await msg.edit(embed=e, view=None)
+    except Exception:
+        pass
+
+
+class SubmitSolutionModal(Modal):
+    def __init__(self, cog: "RiddleCog", riddle_id: int):
+        super().__init__(title="Submit your solution")
+        self.cog = cog
+        self.riddle_id = riddle_id
+
+        self.answer = TextInput(
+            label="Your Answer",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=4000,
+            placeholder="Type your solution here...",
+        )
+        self.add_item(self.answer)
+
+    async def on_submit(self, interaction: Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        riddle = await self.cog.repo.get_open_riddle_by_id(interaction.guild.id, self.riddle_id)
+        if not riddle:
+            await interaction.followup.send("⚠️ This riddle is no longer active.", ephemeral=True)
+            return
+
+        ans = clean_value(str(self.answer.value or ""))
+        if not ans:
+            await interaction.followup.send("❌ Answer cannot be empty.", ephemeral=True)
+            return
+
+        submission_id = await self.cog.repo.create_submission_pending(
+            guild_id=interaction.guild.id,
+            riddle_id=to_int(riddle["id"], 0),
+            user_id=interaction.user.id,
+            answer=ans,
+        )
+        if not submission_id:
+            await interaction.followup.send("❌ Could not save your submission.", ephemeral=True)
+            return
+
+        vote_channel = await self.cog.resolve_channel(VOTE_CHANNEL_ID)
+        if vote_channel is None or not hasattr(vote_channel, "send"):
+            await self.cog.repo.delete_submission(submission_id)
+            await interaction.followup.send("❌ Vote channel not available.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📜 New Solution Submitted",
+            description=riddle.get("text") or "*No riddle text*",
+            color=discord.Color.gold(),
+        )
+        embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+        embed.add_field(name="🧠 User Answer", value=ans, inline=False)
+        embed.add_field(name="✅ Correct Solution", value=riddle.get("solution") or "*Not set*", inline=False)
+        embed.add_field(name="🏆 XP Reward", value=str(max(0, to_int(riddle.get("xp"), 0))), inline=False)
+        embed.add_field(name="🆔 User ID", value=str(interaction.user.id), inline=False)
+        embed.set_footer(text=footer_text(interaction.guild))
+
+        try:
+            vote_msg = await vote_channel.send(embed=embed, view=VoteButtons(self.cog))
+            ok = await self.cog.repo.set_submission_vote_message(submission_id, vote_msg.id)
+            if not ok:
+                await self.cog.repo.delete_submission(submission_id)
+                try:
+                    await vote_msg.delete()
+                except Exception:
+                    pass
+                await interaction.followup.send("❌ Could not link vote message.", ephemeral=True)
+                return
+        except Exception:
+            await self.cog.repo.delete_submission(submission_id)
+            await interaction.followup.send("❌ Failed to post submission for voting.", ephemeral=True)
+            return
+
+        await interaction.followup.send("✅ Your solution was submitted for review.", ephemeral=True)
+
+
+class SubmitButton(discord.ui.Button):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(
+            label="🧠 Submit Solution",
+            style=discord.ButtonStyle.primary,
+            custom_id=SUBMIT_BUTTON_ID,
+        )
+        self.cog = cog
+
+    async def callback(self, interaction: Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
+            return
+
+        if isinstance(interaction.user, discord.Member) and not member_has_role(interaction.user, RIDDLE_ROLE_ID):
+            await interaction.response.send_message(f"❌ You need <@&{RIDDLE_ROLE_ID}> to submit.", ephemeral=True)
+            return
+
+        riddle = None
+        if interaction.message is not None:
+            riddle = await self.cog.repo.get_open_riddle_by_message(interaction.guild.id, interaction.message.id)
+        if not riddle:
+            riddle = await self.cog.repo.get_open_slot1(interaction.guild.id)
+        if not riddle:
+            await interaction.response.send_message("⚠️ No active riddle right now.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(SubmitSolutionModal(self.cog, to_int(riddle["id"], 0)))
+
+
+class _VoteBaseButton(discord.ui.Button):
+    def __init__(self, cog: "RiddleCog", *, approve: bool, label: str, style: discord.ButtonStyle, custom_id: str):
+        super().__init__(label=label, style=style, custom_id=custom_id)
+        self.cog = cog
+        self.approve = approve
+
+    async def callback(self, interaction: Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member) or not member_has_role(interaction.user, RIDDLE_MANAGER_ROLE_ID):
+            await interaction.response.send_message("❌ No permission.", ephemeral=True)
+            return
+        if interaction.message is None:
+            await interaction.response.send_message("❌ Message context missing.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        if self.approve:
+            status, ctx = await self.cog.repo.approve_submission(interaction.message.id, interaction.user.id)
+        else:
+            status, ctx = await self.cog.repo.reject_submission(interaction.message.id, interaction.user.id)
+
+        if status == "not_found":
+            await interaction.followup.send("⚠️ Submission not found.", ephemeral=True)
+            return
+        if status == "already_done":
+            await interaction.followup.send("ℹ️ This submission is already processed.", ephemeral=True)
+            return
+        if status == "riddle_closed":
+            try:
+                await interaction.message.edit(view=None)
+            except Exception:
+                pass
+            await interaction.followup.send("⚠️ Riddle already closed.", ephemeral=True)
+            return
+        if status != "ok" or not ctx:
+            await interaction.followup.send("❌ Vote action failed.", ephemeral=True)
+            return
+
+        await _edit_vote_result_message(
+            interaction.message,
+            ok=self.approve,
+            moderator_mention=interaction.user.mention,
+        )
+
+        if not self.approve:
+            await interaction.followup.send("✅ Submission rejected.", ephemeral=True)
+            return
+
+        # Approve flow
+        await self.cog.cleanup_vote_messages_for_riddle(
+            to_int(ctx.get("riddle_id"), 0),
+            exclude_submission_id=to_int(ctx.get("submission_id"), 0),
+        )
+
+        solver_mention, solver_name, _ = await self.cog.resolve_user_label(
+            interaction.guild,
+            to_int(ctx.get("submitter_id"), 0),
+        )
+
+        await self.cog.update_original_post_solved(ctx, solver_mention)
+
+        # Public solved post
+        riddle_channel = await self.cog.resolve_channel(RIDDLE_CHANNEL_ID)
+        if riddle_channel and hasattr(riddle_channel, "send"):
+            clean_solution, link = extract_link(ctx.get("correct_solution") or "")
+            solution_display = clean_solution or "*None*"
+            if link:
+                solution_display += f"\n🔗 [🧠**MORE**]({link})"
+
+            s_img = ctx.get("solution_url")
+            if not is_http_url(s_img):
+                s_img = DEFAULT_IMAGE_URL
+
+            solved_embed = discord.Embed(
+                title="✅ Riddle Solved",
+                description=f"Solved by {solver_mention}",
+                color=discord.Color.green(),
+            )
+            solved_embed.add_field(name="🧩 Riddle", value=ctx.get("riddle_text") or "*Unknown*", inline=False)
+            solved_embed.add_field(name="✅ Solution", value=solution_display, inline=False)
+            solved_embed.add_field(name="🏆 XP Reward", value=str(max(0, to_int(ctx.get("xp_gain"), 0))), inline=False)
+            if is_http_url(s_img):
+                solved_embed.set_image(url=s_img)
+            solved_embed.set_footer(text=footer_text(interaction.guild))
+
+            mention_ids = parse_csv_role_ids(ctx.get("mention_role_ids"))
+            mentions = unique_role_mentions(interaction.guild, RIDDLE_ROLE_ID, *mention_ids)
+
+            await riddle_channel.send(
+                content=" ".join(dict.fromkeys([m for m in mentions if m])) or None,
+                embed=solved_embed,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+
+        # XP notify
+        xp_channel = await self.cog.resolve_channel(XP_NOTIFY_CHANNEL_ID)
+        if xp_channel and hasattr(xp_channel, "send"):
+            xp_gain = max(0, to_int(ctx.get("xp_gain"), 0))
+            cmd1, cmd2 = build_xpadd_commands(solver_mention, solver_name, xp_gain)
+            await xp_channel.send(f"🏆 XP Reward prepared for {solver_mention}\n`{cmd1}`\n`{cmd2}`")
+
+        gid = interaction.guild.id
+        await self.cog.repo.shift_open_slots_left(gid)
+        if await self.cog.repo.is_enabled(gid):
+            await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
+        else:
+            await self.cog.remove_active_riddle_posts(gid)
+
+        await interaction.followup.send("✅ Submission approved.", ephemeral=True)
+
+
+class VoteSuccessButton(_VoteBaseButton):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(
+            cog,
+            approve=True,
+            label="✅ Correct",
+            style=discord.ButtonStyle.success,
+            custom_id=VOTE_UP_BUTTON_ID,
+        )
+
+
+class VoteFailButton(_VoteBaseButton):
+    def __init__(self, cog: "RiddleCog"):
+        super().__init__(
+            cog,
+            approve=False,
+            label="❌ Wrong",
+            style=discord.ButtonStyle.danger,
+            custom_id=VOTE_DOWN_BUTTON_ID,
+        )
+
+
 class SubmitButtonView(LoggedPersistentView):
-    def __init__(self, cog: RiddleCog):
+    def __init__(self, cog: "RiddleCog"):
         super().__init__(timeout=None)
         self.add_item(SubmitButton(cog))
 
 
 class VoteButtons(LoggedPersistentView):
-    def __init__(self, cog: RiddleCog):
+    def __init__(self, cog: "RiddleCog"):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
-
-
+        
 # =========================================================
 # ADMIN PANEL UI
 # =========================================================
