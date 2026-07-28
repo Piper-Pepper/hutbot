@@ -40,7 +40,6 @@ VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 720
 VIDEO_MAX_CONSECUTIVE_5XX = 8
 VIDEO_5XX_WINDOW_SECONDS = 180
 
-# Post styling
 SERVER_ANIM_ICON = "<a:01pepper_icon:1377636862847619213>"
 VIDEO_POST_REACTIONS = [
     "1️⃣",
@@ -50,19 +49,17 @@ VIDEO_POST_REACTIONS = [
     "<:011pump:1346549688836296787>",
 ]
 
-# simple model rename map
 VIDEO_MODEL_RENAMES = {
     "wan-2-7-enhanced-image-to-video": "WAN27-Enh",
 }
 
-# tiers
 TIER_RULES: dict[int, dict[str, int]] = {
-    1: {"role_id": 1377051179615522926, "level": 4, "video_budget_sec": 10},
-    2: {"role_id": 1375147276413964408, "level": 11, "video_budget_sec": 15},
-    3: {"role_id": 1376592697606930593, "level": 21, "video_budget_sec": 20},
-    4: {"role_id": 1381791848875430069, "level": 33, "video_budget_sec": 25},
-    5: {"role_id": 1375666588404940830, "level": 43, "video_budget_sec": 30},
-    6: {"role_id": 1375584380914896978, "level": 69, "video_budget_sec": 40},
+    1: {"role_id": 1377051179615522926, "level": 3, "video_budget_sec": 10},
+    2: {"role_id": 1375147276413964408, "level": 11, "video_budget_sec": 20},
+    3: {"role_id": 1376592697606930593, "level": 21, "video_budget_sec": 30},
+    4: {"role_id": 1381791848875430069, "level": 33, "video_budget_sec": 35},
+    5: {"role_id": 1375666588404940830, "level": 43, "video_budget_sec": 40},
+    6: {"role_id": 1375584380914896978, "level": 69, "video_budget_sec": 50},
     7: {"role_id": 1346414581643219029, "level": 99, "video_budget_sec": 300},
 }
 DEFAULT_VIDEO_BUDGET_SEC = 0
@@ -71,7 +68,7 @@ VIDEO_QUOTA_FILE = os.getenv("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
 VIDEO_WINDOW_SECONDS = 24 * 60 * 60
 
 # =================================================
-# QUOTA STORE
+# QUOTA STORE (24h rolling)
 # =================================================
 class RollingQuotaStore:
     def __init__(self, file_path: str, window_seconds: int = VIDEO_WINDOW_SECONDS):
@@ -401,7 +398,7 @@ class VeniceVideoCog(commands.Cog):
                 msg = await interaction.original_response()
         await self._track_ephemeral(interaction, msg)
 
-    # ---------- tier ----------
+    # ---------- tiers ----------
     def _tier_desc(self) -> list[tuple[int, dict[str, int]]]:
         return sorted(TIER_RULES.items(), key=lambda x: x[0], reverse=True)
 
@@ -451,6 +448,9 @@ class VeniceVideoCog(commands.Cog):
         percent: int,
         elapsed_sec: int,
         stage_text: str,
+        quota_used: int,
+        quota_limit: int,
+        quota_remaining: int,
     ) -> discord.Embed:
         bar = _progress_bar(percent)
         preview = _codeblock_safe(_trim(prompt, 420))
@@ -463,9 +463,14 @@ class VeniceVideoCog(commands.Cog):
         embed.add_field(name="Prompt", value=f"```{preview}```", inline=False)
         embed.add_field(name="Progress", value=f"`{bar} {percent}%`", inline=False)
         embed.add_field(name="Timing", value=f"• Elapsed: `{elapsed_sec}s`\n• Status: {stage_text}", inline=False)
+        embed.add_field(
+            name="Quota (24h)",
+            value=f"• Used: `{quota_used}/{quota_limit}s`\n• Remaining: `{quota_remaining}s`",
+            inline=False,
+        )
         return embed
 
-    def _build_result_embed(self, prompt: str, aspect: str, seconds: int, guild_icon_url: Optional[str]) -> discord.Embed:
+    def _build_result_embed(self, prompt: str, seconds: int, guild_icon_url: Optional[str]) -> discord.Embed:
         model_label = _video_model_label(VENICE_VIDEO_I2V_MODEL)
         preview = _codeblock_safe(_trim(prompt, 1500))
         embed = discord.Embed(
@@ -474,7 +479,7 @@ class VeniceVideoCog(commands.Cog):
         )
         embed.add_field(name="Prompt", value=f"```{preview}```", inline=False)
         embed.set_footer(
-            text=f"🎞️ {model_label} • 📺 {VENICE_VIDEO_RESOLUTION} • 📐 {aspect} • ⏱️ {seconds}s",
+            text=f"🎞️ {model_label} • 📺 {VENICE_VIDEO_RESOLUTION} • ⏱️ {seconds}s",
             icon_url=guild_icon_url,
         )
         return embed
@@ -565,12 +570,7 @@ class VeniceVideoCog(commands.Cog):
         return None, None
 
     # ---------- provider ----------
-    async def _queue_i2v(
-        self,
-        image_url: str,
-        prompt: str,
-        seconds: int,
-    ) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str], str]:
+    async def _queue_i2v(self, image_url: str, prompt: str, seconds: int) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str], str]:
         if not VENICE_VIDEO_QUEUE_URL:
             return None, None, "VENICE_VIDEO_QUEUE_URL is missing.", "noid"
         if not VENICE_API_KEY:
@@ -644,6 +644,9 @@ class VeniceVideoCog(commands.Cog):
         seconds: int,
         queue_download_url: Optional[str] = None,
         request_id: str = "unknown",
+        quota_used: int = 0,
+        quota_limit: int = 0,
+        quota_remaining: int = 0,
     ) -> tuple[Optional[bytes], Optional[str], Optional[str]]:
         if not VENICE_VIDEO_RETRIEVE_URL:
             return None, None, "VENICE_VIDEO_RETRIEVE_URL is missing."
@@ -699,7 +702,11 @@ class VeniceVideoCog(commands.Cog):
                             p = max(last_percent, 12)
                             await self._safe_edit_progress(
                                 progress_message,
-                                self._build_progress_embed(user, prompt, seconds, p, elapsed_sec, f"Provider error {response.status} (retry {total_5xx})...")
+                                self._build_progress_embed(
+                                    user, prompt, seconds, p, elapsed_sec,
+                                    f"Provider error {response.status} (retry {total_5xx})...",
+                                    quota_used, quota_limit, quota_remaining
+                                )
                             )
                             last_percent = p
 
@@ -772,7 +779,11 @@ class VeniceVideoCog(commands.Cog):
                         p = max(last_percent, 98)
                         await self._safe_edit_progress(
                             progress_message,
-                            self._build_progress_embed(user, prompt, seconds, p, elapsed_sec, "Finalizing file delivery...")
+                            self._build_progress_embed(
+                                user, prompt, seconds, p, elapsed_sec,
+                                "Finalizing file delivery...",
+                                quota_used, quota_limit, quota_remaining
+                            )
                         )
                         last_percent = p
 
@@ -789,7 +800,11 @@ class VeniceVideoCog(commands.Cog):
                     if percent != last_percent:
                         await self._safe_edit_progress(
                             progress_message,
-                            self._build_progress_embed(user, prompt, seconds, percent, elapsed_sec, "Rendering...")
+                            self._build_progress_embed(
+                                user, prompt, seconds, percent, elapsed_sec,
+                                "Rendering...",
+                                quota_used, quota_limit, quota_remaining
+                            )
                         )
                         last_percent = percent
 
@@ -800,14 +815,14 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None, "Generation timed out."
 
-    # ---------- public api for image cog ----------
+    # ---------- public api (called by image cog) ----------
     async def animate_image_to_video(
         self,
         interaction: discord.Interaction,
         image_url: str,
         image_bytes: Optional[bytes],
         prompt: str,
-        aspect: str,
+        aspect: str,  # kept for compatibility, not shown in output
         seconds: int,
         target_channel: discord.abc.Messageable,
     ) -> bool:
@@ -887,6 +902,9 @@ class VeniceVideoCog(commands.Cog):
                     percent=5,
                     elapsed_sec=0,
                     stage_text="Sending queue request...",
+                    quota_used=int(state_q["used"]),
+                    quota_limit=int(state_q["limit"]),
+                    quota_remaining=int(state_q["remaining"]),
                 )
             )
             keep_ids.add(progress_message.id)
@@ -915,6 +933,9 @@ class VeniceVideoCog(commands.Cog):
                     percent=8,
                     elapsed_sec=1,
                     stage_text="Queue accepted. Rendering started.",
+                    quota_used=int(state_q["used"]),
+                    quota_limit=int(state_q["limit"]),
+                    quota_remaining=int(state_q["remaining"]),
                 )
             )
 
@@ -926,6 +947,9 @@ class VeniceVideoCog(commands.Cog):
                 seconds=seconds,
                 queue_download_url=queue_download_url,
                 request_id=request_id,
+                quota_used=int(state_q["used"]),
+                quota_limit=int(state_q["limit"]),
+                quota_remaining=int(state_q["remaining"]),
             )
 
             if not media_data:
@@ -946,7 +970,7 @@ class VeniceVideoCog(commands.Cog):
                 await self._ephemeral(interaction, "❌ Video too large for Discord upload limit.")
                 return False
 
-            result_embed = self._build_result_embed(prompt=prompt, aspect=aspect, seconds=seconds, guild_icon_url=guild_icon_url)
+            result_embed = self._build_result_embed(prompt=prompt, seconds=seconds, guild_icon_url=guild_icon_url)
             file = discord.File(io.BytesIO(media_data), filename="AI_video.mp4")
 
             video_post = await target_channel.send(
@@ -969,8 +993,6 @@ class VeniceVideoCog(commands.Cog):
                 f"Remaining today: **{info['remaining']}s** of **{info['limit']}s** "
                 f"(resets in **{_seconds_human(info['reset_in'])}**)."
             )
-
-            await self._repost_image_starter(target_channel)
             return True
 
         except discord.Forbidden:
@@ -990,6 +1012,7 @@ class VeniceVideoCog(commands.Cog):
 
             if isinstance(target_channel, (discord.TextChannel, discord.Thread)):
                 await self._cleanup_progress_leaks(target_channel, keep_ids=keep_ids, limit=25)
+                await self._repost_image_starter(target_channel)
 
             asyncio.create_task(self._cleanup_user_ephemerals(interaction, delay=8))
 
