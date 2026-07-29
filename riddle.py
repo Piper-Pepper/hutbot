@@ -1931,41 +1931,72 @@ class RiddleAdminPanelView(View):
         self.add_item(PanelButton(self, "🔄 Refresh", "refresh", 2, style=discord.ButtonStyle.secondary))
 
     async def build_embeds(self, guild: Optional[discord.Guild]) -> list[discord.Embed]:
-        enabled = bool(to_int(self.state.get("is_enabled"), 0))
-        main = discord.Embed(
-            title="🗂️ Riddle Control Center",
-            description="Ping order fixed: Base role + up to 3 extra roles",
-            color=discord.Color.green() if enabled else discord.Color.orange(),
-        )
-        main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
-        main.add_field(name="Selected Slot", value=str(self.selected_slot), inline=True)
+    enabled = bool(to_int(self.state.get("is_enabled"), 0))
+    main = discord.Embed(
+        title="🗂️ Riddle Control Center",
+        description="Ping order fixed: Base role + up to 3 extra roles",
+        color=discord.Color.green() if enabled else discord.Color.orange(),
+    )
+    main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
+    main.add_field(name="Selected Slot", value=str(self.selected_slot), inline=True)
 
-        for slot in range(1, MAX_RIDDLE_SLOTS + 1):
-            row = self.slot_map.get(slot)
-            if not row:
-                main.add_field(name=f"Slot {slot}", value="`EMPTY`", inline=False)
-                continue
-            rno = to_int(row.get("riddle_no"), to_int(row.get("id"), 0))
-            extras = parse_csv_role_ids(row.get("mention_role_ids"))
-            txt = truncate_text(row.get("text") or "", 90)
-            main.add_field(name=f"Slot {slot} • Riddle #{rno}", value=f"XP: {to_int(row.get('xp'), 0)}\nExtra roles: {len(extras)}\n{txt}", inline=False)
-
-        main.add_field(name="Status", value=clamp_embed_value(self.last_info), inline=False)
-
-        row = self.slot_map.get(self.selected_slot)
+    for slot in range(1, MAX_RIDDLE_SLOTS + 1):
+        row = self.slot_map.get(slot)
         if not row:
-            return [main]
+            main.add_field(name=f"Slot {slot}", value="`EMPTY`", inline=False)
+            continue
+        rno = to_int(row.get("riddle_no"), to_int(row.get("id"), 0))
+        extras = parse_csv_role_ids(row.get("mention_role_ids"))
+        txt = truncate_text(row.get("text") or "", 90)
+        main.add_field(
+            name=f"Slot {slot} • Riddle #{rno}",
+            value=f"XP: {to_int(row.get('xp'), 0)}\nExtra roles: {len(extras)}\n{txt}",
+            inline=False,
+        )
 
-        preview = discord.Embed(title=f"Slot {self.selected_slot} Preview", color=discord.Color.blurple())
-        extras = []
-        if guild:
-            for rid in parse_csv_role_ids(row.get("mention_role_ids"))[:MAX_EXTRA_PING_ROLES]:
-                role = guild.get_role(rid)
-                if role:
-                    extras.append(role.name)
-        preview.add_field(name="Ping Roles", value=f"Base: <@&{RIDDLE_ROLE_ID}>\nExtra: {', '.join(extras) if extras else '-'}", inline=False)
+    main.add_field(name="Status", value=clamp_embed_value(self.last_info), inline=False)
 
-        return [main, preview]
+    row = self.slot_map.get(self.selected_slot)
+    if not row:
+        return [main]
+
+    # Meta-Preview
+    preview = discord.Embed(title=f"Slot {self.selected_slot} Preview", color=discord.Color.blurple())
+    extras = []
+    if guild:
+        for rid in parse_csv_role_ids(row.get("mention_role_ids"))[:MAX_EXTRA_PING_ROLES]:
+            role = guild.get_role(rid)
+            if role:
+                extras.append(role.name)
+    preview.add_field(
+        name="Ping Roles",
+        value=f"Base: <@&{RIDDLE_ROLE_ID}>\nExtra: {', '.join(extras) if extras else '-'}",
+        inline=False,
+    )
+
+    riddle_url = clean_value(row.get("image_url"))
+    solution_url = clean_value(row.get("solution_url"))
+
+    preview.add_field(name="Riddle Image URL", value=clamp_embed_value(riddle_url or "not set"), inline=False)
+    preview.add_field(name="Solution Image URL", value=clamp_embed_value(solution_url or "not set"), inline=False)
+
+    # Thumbnail-Preview Riddle
+    riddle_thumb = discord.Embed(title="🖼️ Riddle Image (thumbnail)", color=discord.Color.blurple())
+    if is_http_url(riddle_url):
+        riddle_thumb.set_thumbnail(url=riddle_url)
+        riddle_thumb.description = "Current riddle image"
+    else:
+        riddle_thumb.description = "No riddle image set."
+
+    # Thumbnail-Preview Solution
+    solution_thumb = discord.Embed(title="🧠 Solution Image (thumbnail)", color=discord.Color.blurple())
+    if is_http_url(solution_url):
+        solution_thumb.set_thumbnail(url=solution_url)
+        solution_thumb.description = "Current solution image"
+    else:
+        solution_thumb.description = "No solution image set."
+
+    return [main, preview, riddle_thumb, solution_thumb]
 
     async def safe_edit_panel(self):
         if not self.message:
