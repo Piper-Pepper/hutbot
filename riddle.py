@@ -1,3 +1,6 @@
+# =========================
+# riddle.py (Teil 1/3)
+# =========================
 from __future__ import annotations
 
 import os
@@ -717,6 +720,35 @@ class RiddleRepo:
         )
         return rc > 0
 
+    async def refresh_active_slot_flag(self, guild_id: int):
+        if self.db is None:
+            return
+        now = now_iso_utc()
+        async with self.lock:
+            await self.db.execute("BEGIN IMMEDIATE")
+            try:
+                await self.db.execute(
+                    "UPDATE riddles SET is_active=0, updated_at=? WHERE guild_id=? AND status='open'",
+                    (now, guild_id),
+                )
+                await self.db.execute(
+                    """
+                    UPDATE riddles
+                    SET is_active=1, updated_at=?
+                    WHERE id IN (
+                        SELECT id
+                        FROM riddles
+                        WHERE guild_id=? AND status='open' AND slot_no=1
+                        LIMIT 1
+                    )
+                    """,
+                    (now, guild_id),
+                )
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                raise
+
     async def shift_open_slots_left(self, guild_id: int):
         if self.db is None:
             return
@@ -1156,6 +1188,9 @@ class RiddleRepo:
     async def clear_user_stats(self, guild_id: int):
         await self._exec("DELETE FROM user_stats WHERE guild_id=?", (guild_id,))
 
+# =========================
+# riddle.py (Teil 2/3)
+# =========================
 # =========================================================
 # COG
 # =========================================================
@@ -1345,7 +1380,7 @@ class RiddleCog(commands.Cog):
             return "error"
 
     async def enforce_enabled_state(self, guild_id: int, *, allow_ping: bool, force_repost: bool = False) -> str:
-        await self.repo.shift_open_slots_left(guild_id)
+        await self.repo.refresh_active_slot_flag(guild_id)
 
         enabled = await self.repo.is_enabled(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
@@ -1495,7 +1530,7 @@ class RiddleCog(commands.Cog):
 
         for gid in await self.repo.list_all_guild_ids():
             await self.repo.ensure_guild_state(gid)
-            await self.repo.shift_open_slots_left(gid)
+            await self.repo.refresh_active_slot_flag(gid)
             await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
 
         await self.repost_pending_votes()
@@ -1516,7 +1551,7 @@ class RiddleCog(commands.Cog):
                 guild_ids = await self.repo.list_all_guild_ids()
                 for gid in guild_ids:
                     await self.repo.ensure_guild_state(gid)
-                    await self.repo.shift_open_slots_left(gid)
+                    await self.repo.refresh_active_slot_flag(gid)
                     if await self.repo.is_enabled(gid):
                         await self.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
                     else:
@@ -1539,7 +1574,7 @@ class RiddleCog(commands.Cog):
 
         gid = interaction.guild.id
         await self.repo.ensure_guild_state(gid)
-        await self.repo.shift_open_slots_left(gid)
+        await self.repo.refresh_active_slot_flag(gid)
 
         panel = RiddleAdminPanelView(self, interaction.user.id, gid)
         await panel.refresh_data()
@@ -1919,6 +1954,8 @@ class VoteButtons(LoggedPersistentView):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
+
+
 # =========================================================
 # ADMIN PANEL UI
 # =========================================================
@@ -1954,14 +1991,9 @@ class SlotSelect(Select):
         )
 
     async def callback(self, interaction: Interaction):
-        ok = await safe_defer(interaction)
-        if not ok:
-            logger.warning("SlotSelect: interaction expired before defer.")
-            return
-
         self.panel.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, to_int(self.values[0], 1)))
-        await self.panel.refresh_data()
-        await self.panel.safe_edit_panel()
+        self.panel.last_info = f"Slot {self.panel.selected_slot} gewählt."
+        await self.panel.safe_edit_panel(interaction=interaction)
 
 
 class EditContentButton(discord.ui.Button):
@@ -2100,7 +2132,7 @@ class RiddleContentModal(Modal):
             self.panel.last_info = "❌ Save failed."
         else:
             await self.panel.cog.repo.ensure_guild_state(interaction.guild.id)
-            await self.panel.cog.repo.shift_open_slots_left(interaction.guild.id)
+            await self.panel.cog.repo.refresh_active_slot_flag(interaction.guild.id)
             if await self.panel.cog.repo.is_enabled(interaction.guild.id):
                 await self.panel.cog.enforce_enabled_state(interaction.guild.id, allow_ping=False, force_repost=False)
             self.panel.last_info = f"✅ Slot {self.slot_no} content saved."
@@ -2172,8 +2204,9 @@ class RiddleImagesModal(Modal):
 
         await self.panel.refresh_data()
         await self.panel.safe_edit_panel()
-
-
+# =========================
+# riddle.py (Teil 3/3)
+# =========================
 class RiddleAdminPanelView(View):
     def __init__(self, cog: RiddleCog, owner_id: int, guild_id: int):
         super().__init__(timeout=900)
@@ -2223,6 +2256,7 @@ class RiddleAdminPanelView(View):
         main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
         main.add_field(name="Slot 1", value="✅ filled" if slot1_filled else "❌ empty", inline=True)
         main.add_field(name="Solved Total", value=str(solved_total), inline=True)
+        main.add_field(name="Selected Slot", value=str(self.selected_slot), inline=True)
 
         for slot in range(1, MAX_RIDDLE_SLOTS + 1):
             row = self.slot_map.get(slot)
@@ -2260,30 +2294,45 @@ class RiddleAdminPanelView(View):
         r_no = to_int(row.get("riddle_no"), to_int(row.get("id"), 0))
         rid = to_int(row.get("id"), 0)
 
-        preview = discord.Embed(
+        meta = discord.Embed(
             title=f"🖼️ Slot {self.selected_slot} • Riddle #{r_no}",
             description=f"ID: {rid}",
             color=discord.Color.blurple(),
         )
-        preview.add_field(name="Riddle Image", value="✅ set" if is_http_url(row.get("image_url")) else "❌ missing", inline=True)
-        preview.add_field(name="Solution Image", value="✅ set" if is_http_url(row.get("solution_url")) else "❌ missing", inline=True)
+        meta.add_field(name="Riddle Image", value="✅ set" if is_http_url(row.get("image_url")) else "❌ missing", inline=True)
+        meta.add_field(name="Solution Image", value="✅ set" if is_http_url(row.get("solution_url")) else "❌ missing", inline=True)
+        meta.set_footer(text=footer_text(guild))
 
+        riddle_img = discord.Embed(title="Riddle Image", color=discord.Color.blurple())
         if is_http_url(row.get("image_url")):
-            preview.set_image(url=row.get("image_url"))
+            riddle_img.set_image(url=row.get("image_url"))
+        else:
+            riddle_img.description = "❌ Kein Riddle-Bild gesetzt."
+        riddle_img.set_footer(text=footer_text(guild))
+
+        solution_img = discord.Embed(title="Solution Image", color=discord.Color.blurple())
         if is_http_url(row.get("solution_url")):
-            preview.set_thumbnail(url=row.get("solution_url"))
+            solution_img.set_image(url=row.get("solution_url"))
+        else:
+            solution_img.description = "❌ Kein Solution-Bild gesetzt."
+        solution_img.set_footer(text=footer_text(guild))
 
-        preview.set_footer(text=footer_text(guild))
-        return [main, preview]
+        return [main, meta, riddle_img, solution_img]
 
-    async def safe_edit_panel(self):
-        if self.message is None:
-            return
-        guild = self.cog.bot.get_guild(self.guild_id)
+    async def safe_edit_panel(self, interaction: Optional[Interaction] = None):
+        guild = interaction.guild if interaction and interaction.guild else self.cog.bot.get_guild(self.guild_id)
+        await self.refresh_data()
         await self.rebuild_items()
         embeds = await self.build_embeds(guild)
         try:
-            await self.message.edit(embeds=embeds, view=self)
+            if interaction and not interaction.response.is_done():
+                await interaction.response.edit_message(embeds=embeds, view=self)
+                return
+            if interaction and interaction.message:
+                await interaction.message.edit(embeds=embeds, view=self)
+                return
+            if self.message:
+                await self.message.edit(embeds=embeds, view=self)
         except Exception as e:
             logger.exception("safe_edit_panel failed: %s", e)
 
@@ -2359,13 +2408,13 @@ class RiddleAdminPanelView(View):
 
         gid = interaction.guild.id
         await self.cog.repo.ensure_guild_state(gid)
+        await self.cog.repo.refresh_active_slot_flag(gid)
 
         if currently_enabled:
             await self.cog.repo.set_enabled(gid, False)
             await self.cog.remove_active_riddle_posts(gid)
             self.last_info = "✅ System OFF."
         else:
-            await self.cog.repo.shift_open_slots_left(gid)
             slot1 = await self.cog.repo.get_open_slot1(gid)
             if not slot1:
                 self.last_info = "⚠️ Slot 1 is empty."
@@ -2392,7 +2441,8 @@ class RiddleAdminPanelView(View):
 
         gid = interaction.guild.id
         await self.cog.repo.ensure_guild_state(gid)
-        await self.cog.repo.shift_open_slots_left(gid)
+        await self.cog.repo.refresh_active_slot_flag(gid)
+
         slot1 = await self.cog.repo.get_open_slot1(gid)
         if not slot1:
             self.last_info = "⚠️ Slot 1 empty. Nothing to post."
@@ -2468,13 +2518,8 @@ class RiddleAdminPanelView(View):
         await self.safe_edit_panel()
 
     async def refresh(self, interaction: Interaction):
-        ok = await safe_defer(interaction)
-        if not ok:
-            logger.warning("refresh panel: interaction expired before defer.")
-            return
-        await self.refresh_data()
         self.last_info = "Refreshed."
-        await self.safe_edit_panel()
+        await self.safe_edit_panel(interaction=interaction)
 
     async def on_timeout(self):
         for c in self.children:
