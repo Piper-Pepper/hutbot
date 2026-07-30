@@ -1,4 +1,4 @@
-# riddle_core.py
+# riddle_core.py  (Teil 1/3)
 from __future__ import annotations
 
 import os
@@ -262,7 +262,6 @@ async def send_access_denied(interaction: Interaction):
     else:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
 # =============================================================================
 # DB REPO
 # =============================================================================
@@ -378,10 +377,22 @@ class RiddleRepo:
             solved_total_filtered INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS riddle_wrong_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            riddle_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wrong_riddle ON riddle_wrong_posts(riddle_id);
+        CREATE INDEX IF NOT EXISTS idx_wrong_guild ON riddle_wrong_posts(guild_id);
         """
         async with self.lock:
             await self.db.executescript(schema)
-            # migration from older schema
+            # migration from older schema (in case an old DB exists)
             await self._add_col_if_missing("riddles", "solved_post_channel_id", "solved_post_channel_id INTEGER")
             await self._add_col_if_missing("riddles", "solved_post_message_id", "solved_post_message_id INTEGER")
             await self.db.commit()
@@ -612,7 +623,7 @@ class RiddleRepo:
         )
         return rc > 0
 
-    # -- slot geometry -----------------------------------------------------
+# -- slot geometry -----------------------------------------------------
     async def sync_open_slot_numbers(self, guild_id: int, solved_base: int):
         """Two-phase renumber to avoid transient unique collisions."""
         if self.db is None:
@@ -801,6 +812,27 @@ class RiddleRepo:
             (guild_id,),
         )
 
+    # -- wrong posts (public channel messages) -----------------------------
+    async def add_wrong_post(self, guild_id: int, riddle_id: int,
+                             channel_id: int, message_id: int):
+        await self._exec(
+            "INSERT INTO riddle_wrong_posts (guild_id, riddle_id, channel_id, message_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (guild_id, riddle_id, channel_id, message_id, now_iso_utc()),
+        )
+
+    async def list_wrong_posts_for_riddle(self, riddle_id: int) -> list[dict]:
+        return await self._all(
+            "SELECT channel_id, message_id FROM riddle_wrong_posts WHERE riddle_id=?",
+            (riddle_id,),
+        )
+
+    async def clear_wrong_posts_for_riddle(self, riddle_id: int):
+        await self._exec(
+            "DELETE FROM riddle_wrong_posts WHERE riddle_id=?",
+            (riddle_id,),
+        )
+
     # -- submissions -------------------------------------------------------
     async def create_submission_pending(self, guild_id: int, riddle_id: int, user_id: int, answer: str) -> Optional[int]:
         _, lid = await self._exec(
@@ -880,7 +912,20 @@ class RiddleRepo:
                 await self.db.rollback()
                 raise
 
-# -- voting transactions ----------------------------------------------
+    async def apply_solve_xp(self, guild_id: int, user_id: int, xp_gain: int):
+        """Called AFTER approve_submission if solver is not excluded."""
+        xp_gain = max(0, to_int(xp_gain, 0))
+        await self._exec(
+            """
+            INSERT INTO user_stats (guild_id, user_id, solved_riddles, xp)
+            VALUES (?, ?, 1, ?)
+            ON CONFLICT(guild_id, user_id)
+            DO UPDATE SET solved_riddles = solved_riddles + 1, xp = xp + excluded.xp
+            """,
+            (guild_id, user_id, xp_gain),
+        )
+
+    # -- voting transactions ----------------------------------------------
     async def approve_submission(self, vote_message_id: int, moderator_id: int) -> tuple[str, Optional[dict]]:
         if self.db is None:
             return "not_found", None
@@ -989,19 +1034,6 @@ class RiddleRepo:
             except Exception:
                 await self.db.rollback()
                 raise
-
-    async def apply_solve_xp(self, guild_id: int, user_id: int, xp_gain: int):
-        """Called AFTER approve_submission if solver is not excluded."""
-        xp_gain = max(0, to_int(xp_gain, 0))
-        await self._exec(
-            """
-            INSERT INTO user_stats (guild_id, user_id, solved_riddles, xp)
-            VALUES (?, ?, 1, ?)
-            ON CONFLICT(guild_id, user_id)
-            DO UPDATE SET solved_riddles = solved_riddles + 1, xp = xp + excluded.xp
-            """,
-            (guild_id, user_id, xp_gain),
-        )
 
     async def reject_submission(self, vote_message_id: int, moderator_id: int) -> tuple[str, Optional[dict]]:
         if self.db is None:

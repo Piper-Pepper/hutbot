@@ -238,6 +238,25 @@ class RiddleCog(commands.Cog):
             except Exception:
                 pass
 
+    async def cleanup_wrong_posts_for_riddle(self, riddle_id: int):
+        """Delete all previously posted 'wrong answer' messages for this riddle so
+        that only the solved post + edited original remain visible."""
+        rows = await self.repo.list_wrong_posts_for_riddle(riddle_id)
+        for row in rows:
+            cid = safe_int(row.get("channel_id"), None)
+            mid = safe_int(row.get("message_id"), None)
+            if not cid or not mid:
+                continue
+            ch = await self.resolve_channel(cid)
+            if ch is None or not hasattr(ch, "fetch_message"):
+                continue
+            try:
+                msg = await ch.fetch_message(mid)
+                await msg.delete()
+            except Exception:
+                pass
+        await self.repo.clear_wrong_posts_for_riddle(riddle_id)
+
     async def remove_active_riddle_posts(self, guild_id: int):
         rows = await self.repo.list_open_post_refs(guild_id)
         for row in rows:
@@ -273,6 +292,7 @@ class RiddleCog(commands.Cog):
             )
         except Exception:
             pass
+
 # ==========================================================================
     # POSTING: active riddle in Slot 1
     # ==========================================================================
@@ -360,7 +380,6 @@ class RiddleCog(commands.Cog):
         if vote_channel is None or not hasattr(vote_channel, "send"):
             return
 
-        # import here to avoid top-level cross reference
         from riddle_ui import build_vote_embed
 
         for row in rows:
@@ -368,12 +387,11 @@ class RiddleCog(commands.Cog):
             uid = to_int(row.get("user_id"), 0)
             _, uname, uavatar = await self.resolve_user_label(guild, uid)
 
-            # bundle the row so build_vote_embed sees the fields it expects
             riddle_view = {
                 "text": row.get("riddle_text"),
                 "solution": row.get("solution"),
                 "xp": row.get("xp"),
-                "image_url": None,  # not carried in pending_open_submissions; harmless
+                "image_url": None,
             }
             embed = build_vote_embed(guild, riddle_view, uid, uname, uavatar, row.get("answer") or "")
             try:
@@ -390,12 +408,13 @@ class RiddleCog(commands.Cog):
     ):
         """
         After repo.approve_submission() ran:
-          1) edit original riddle post -> solved state, solution as spoiler, no big image, no submit btn
-          2) post NEW solved post -> riddle image as thumbnail, solution image as big image, XP field, MORE link
-          3) cleanup other pending vote messages for this riddle
-          4) apply XP/stats only if solver not excluded
-          5) normalize slots + publish new slot 1 (if enabled)
-          6) XP award hint
+          1)  edit original riddle post -> SOLVED state (solution as spoiler, no big image, no submit btn)
+          1b) DELETE all previously posted 'wrong answer' messages for this riddle
+          2)  post NEW solved post -> riddle image as THUMBNAIL, solution image as BIG image, XP, MORE link
+          3)  cleanup other pending vote messages for this riddle
+          4)  apply XP/stats only if solver not excluded
+          5)  normalize slots + publish new slot 1 (if enabled)
+          6)  XP award hint
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -406,7 +425,6 @@ class RiddleCog(commands.Cog):
 
         # Reload the riddle so we have the latest image URLs / mentions / etc.
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
-        # Fallback merge with the ctx snapshot in case row is missing fields
         for k in ("text", "solution", "xp", "image_url", "solution_url",
                   "riddle_no", "posted_channel_id", "posted_message_id",
                   "mention_role_ids"):
@@ -415,7 +433,7 @@ class RiddleCog(commands.Cog):
 
         solver_mention, solver_name, solver_avatar = await self.resolve_user_label(guild, solver_id)
 
-        # ---- 1) edit original post ----
+        # ---- 1) edit the original riddle post ----
         original = await self.fetch_message_safe(
             riddle_row.get("posted_channel_id"), riddle_row.get("posted_message_id"),
         )
@@ -425,7 +443,7 @@ class RiddleCog(commands.Cog):
                     guild, riddle_row, solver_mention, solved_at,
                 )
                 await original.edit(
-                    content=None,       # drop the old ping content
+                    content=None,       # drop the ping content
                     embed=solved_embed,
                     view=None,          # remove submit button
                     allowed_mentions=discord.AllowedMentions.none(),
@@ -433,16 +451,20 @@ class RiddleCog(commands.Cog):
             except Exception:
                 logger.exception("Failed to edit original riddle post to solved state")
 
-        # ---- 2) new solved post in the riddle channel ----
+        # ---- 1b) DELETE all previously posted wrong-answer messages ----
+        # Result: under the edited original, the next thing in the channel will be
+        # our new solved post (no clutter from prior wrong attempts).
+        await self.cleanup_wrong_posts_for_riddle(rid)
+
+        # ---- 2) new solved post ----
         ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
         if ch is not None and hasattr(ch, "send"):
             try:
                 solved_post_embed = build_new_solved_post_embed(
                     guild, riddle_row, solver_mention, solver_name, solver_avatar,
                 )
-                # Ping only the solver (small congratulatory ping); no role mass ping here.
                 new_msg = await ch.send(
-                    content=solver_mention,
+                    content=solver_mention,     # congratulate the solver (single user ping)
                     embed=solved_post_embed,
                     allowed_mentions=discord.AllowedMentions(
                         users=True, roles=False, everyone=False,
@@ -452,7 +474,7 @@ class RiddleCog(commands.Cog):
             except Exception:
                 logger.exception("Failed to post new solved message")
 
-        # ---- 3) cleanup other pending vote messages for this riddle ----
+        # ---- 3) cleanup other pending vote messages ----
         await self.cleanup_vote_messages_for_riddle(rid, exclude_submission_id=sid)
 
         # ---- 4) XP / stats only if solver not excluded ----
@@ -460,12 +482,11 @@ class RiddleCog(commands.Cog):
             await self.repo.apply_solve_xp(gid, solver_id, xp_gain)
             await self.repo.inc_cached_solved_total(gid, 1)
         else:
-            # solver was excluded -> nothing to add; rebuild cache to stay honest
             await self.rebuild_cached_solved_total_for_guild(gid)
 
         # ---- 5) normalize + move next riddle into Slot 1 ----
         await self.normalize_after_structure_change(gid)
-        # clear the reference to the just-solved riddle so slot1 publish doesn't touch it
+        # clear stale references so the next slot1 publish doesn't try to edit a solved msg
         await self.repo.clear_all_open_post_refs(gid)
 
         if await self.repo.is_enabled(gid):
@@ -483,7 +504,8 @@ class RiddleCog(commands.Cog):
     ):
         """
         Riddle stays OPEN. Post a public wrong-answer message in the riddle channel
-        that pings the base role + the submitter.
+        that pings the base role + the submitter. Message-ID is stored so we can
+        cleanup all these wrong posts once the riddle gets solved.
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -513,13 +535,15 @@ class RiddleCog(commands.Cog):
         )
 
         try:
-            await ch.send(
+            sent = await ch.send(
                 content=content,
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(
                     roles=True, users=True, everyone=False,
                 ),
             )
+            # Remember so we can delete all wrong posts once this riddle gets solved
+            await self.repo.add_wrong_post(gid, rid, sent.channel.id, sent.id)
         except Exception:
             logger.exception("Failed to post wrong-answer message")
 
