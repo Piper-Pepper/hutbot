@@ -47,40 +47,7 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict) -> d
     return e
 
 
-def build_solved_edit_embed(
-    guild: Optional[discord.Guild], riddle: dict, solver_mention: str, solved_at_iso: str,
-) -> discord.Embed:
-    """Edited original: SOLVED state, solution as SPOILER, no big solution image."""
-    r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
-    xp = max(0, to_int(riddle.get("xp"), 0))
-    e = discord.Embed(
-        title=f"🧩 Riddle No.{r_no} — ✅ SOLVED",
-        description=clamp_embed_description((riddle.get("text") or "*No riddle text set.*").strip()),
-        color=discord.Color.green(),
-    )
-    if guild:
-        if guild.icon:
-            e.set_author(name=guild.name, icon_url=guild.icon.url)
-        else:
-            e.set_author(name=guild.name)
-    e.add_field(name="🥇 Solved by", value=solver_mention, inline=True)
-    e.add_field(name="🕒 Solved at", value=f"`{solved_at_iso}`", inline=True)
-    e.add_field(name="🏆 Award", value=f"{xp} XP", inline=True)
-    sol = (riddle.get("solution") or "").strip()
-    if sol:
-        cleaned, _ = extract_first_url(sol)
-        shown = cleaned if cleaned else sol
-        e.add_field(name="🔓 Solution", value=clamp_embed_value(f"||{shown}||"), inline=False)
-    img = riddle.get("image_url")
-    if not is_http_url(img):
-        img = DEFAULT_IMAGE_URL
-    if is_http_url(img):
-        e.set_image(url=img)
-    e.set_footer(text=footer_text(guild))
-    return e
-
-
-def build_new_solved_post_embed(
+def build_fresh_solved_post_embed(
     guild: Optional[discord.Guild],
     riddle: dict,
     solver_mention: str,
@@ -89,20 +56,21 @@ def build_new_solved_post_embed(
     submitted_answer: str,
 ) -> discord.Embed:
     """
-    Standalone solved post:
-      - riddle text truncated at 80 chars
+    Big 'refreshed' solved post that REPLACES the deleted original riddle post.
       - riddle image as THUMBNAIL
       - solution image as BIG IMAGE
-      - user-submitted (winning) answer field
+      - solution text with clickable [🔗 MORE](url) hyperlink label
+      - riddle text truncated at 150 chars
+      - winning (user-submitted) answer
       - Award/XP field
-      - optional MORE link extracted from solution text
+      - NO pings on this post
     """
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     sol_text_raw = (riddle.get("solution") or "").strip()
     sol_text, more_url = extract_first_url(sol_text_raw)
 
-    riddle_text = truncate_text(riddle.get("text") or "*No text*", 80)
+    riddle_text = truncate_text(riddle.get("text") or "*No text*", 150)
 
     e = discord.Embed(
         title=f"🎉 Riddle No.{r_no} — Solved!",
@@ -117,7 +85,6 @@ def build_new_solved_post_embed(
     else:
         e.set_author(name=solver_display_name)
 
-    # user's winning answer (as submitted)
     if submitted_answer and submitted_answer.strip():
         e.add_field(
             name="🧠 Winning Answer",
@@ -125,21 +92,60 @@ def build_new_solved_post_embed(
             inline=False,
         )
 
-    # official solution text
-    if sol_text:
-        e.add_field(name="✅ Correct Solution", value=clamp_embed_value(sol_text), inline=False)
+    if sol_text or more_url:
+        parts: list[str] = []
+        if sol_text:
+            parts.append(sol_text)
+        if more_url:
+            parts.append(f"[🔗 MORE]({more_url})")
+        e.add_field(name="✅ Solution", value=clamp_embed_value("\n\n".join(parts)), inline=False)
 
     e.add_field(name="🏆 Award", value=f"{xp} XP", inline=True)
-    if more_url:
-        e.add_field(name="🔗 MORE", value=more_url, inline=True)
 
     r_img = riddle.get("image_url")
     if is_http_url(r_img):
         e.set_thumbnail(url=r_img)
-
     s_img = riddle.get("solution_url")
     if is_http_url(s_img):
         e.set_image(url=s_img)
+
+    e.set_footer(text=footer_text(guild))
+    return e
+
+
+def build_solved_ping_post_embed(
+    guild: Optional[discord.Guild],
+    riddle: dict,
+    solver_mention: str,
+    solver_avatar_url: Optional[str],
+) -> discord.Embed:
+    """
+    Small compact ping/announcement post: 'Riddle No.XY solved' + solution + XP.
+    Content ping (base + extras + winner) is set by the cog on the outgoing message.
+    """
+    r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
+    xp = max(0, to_int(riddle.get("xp"), 0))
+    sol_text_raw = (riddle.get("solution") or "").strip()
+    sol_text, more_url = extract_first_url(sol_text_raw)
+
+    e = discord.Embed(
+        title=f"🧩 Riddle No.{r_no} — Solved!",
+        description=f"Congratulations {solver_mention}! 🎉",
+        color=discord.Color.green(),
+    )
+
+    if sol_text or more_url:
+        parts: list[str] = []
+        if sol_text:
+            parts.append(sol_text)
+        if more_url:
+            parts.append(f"[🔗 MORE]({more_url})")
+        e.add_field(name="✅ Solution", value=clamp_embed_value("\n\n".join(parts)), inline=False)
+
+    e.add_field(name="🏆 XP", value=f"{xp}", inline=True)
+
+    if solver_avatar_url:
+        e.set_thumbnail(url=solver_avatar_url)
 
     e.set_footer(text=footer_text(guild))
     return e
@@ -153,7 +159,6 @@ def build_wrong_post_embed(
     submitter_avatar_url: Optional[str],
     submitted_answer: str,
 ) -> discord.Embed:
-    """Public wrong-answer post. Riddle stays open. Only the submitter is pinged (done in cog)."""
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     e = discord.Embed(
@@ -198,24 +203,6 @@ def build_vote_embed(
     r_img = riddle.get("image_url")
     if is_http_url(r_img):
         e.set_thumbnail(url=r_img)
-    e.set_footer(text=footer_text(guild))
-    return e
-
-
-def build_xp_hint_embed(
-    guild: Optional[discord.Guild], solver_mention: str, xp_gain: int,
-    cmd_name: str, cmd_mention: str, avatar_url: Optional[str],
-) -> discord.Embed:
-    e = discord.Embed(
-        title="🏆 XP Award Hint",
-        description=clamp_embed_description(f"Approved solution by {solver_mention}"),
-        color=discord.Color.blue(),
-    )
-    e.add_field(name="XP", value=str(max(0, xp_gain)), inline=True)
-    e.add_field(name="By name", value=f"`{cmd_name}`", inline=False)
-    e.add_field(name="By mention", value=f"`{cmd_mention}`", inline=False)
-    if avatar_url:
-        e.set_thumbnail(url=avatar_url)
     e.set_footer(text=footer_text(guild))
     return e
 
@@ -276,10 +263,8 @@ class SubmitSolutionModal(Modal):
         super().__init__(title="Submit your solution")
         self.cog = cog
         self.riddle_id = riddle_id
-        self.answer = TextInput(
-            label="Your Answer", style=discord.TextStyle.paragraph,
-            required=True, max_length=4000,
-        )
+        self.answer = TextInput(label="Your Answer", style=discord.TextStyle.paragraph,
+                                required=True, max_length=4000)
         self.add_item(self.answer)
 
     async def on_submit(self, interaction: Interaction):
@@ -598,8 +583,8 @@ class PingRolesPickerView(View):
 # =============================================================================
 class SubmitButton(discord.ui.Button):
     def __init__(self, cog: "RiddleCog"):
-        super().__init__(label="🧠 Submit Solution",
-                         style=discord.ButtonStyle.primary, custom_id=SUBMIT_BUTTON_ID)
+        super().__init__(label="🧠 Submit Solution", style=discord.ButtonStyle.primary,
+                         custom_id=SUBMIT_BUTTON_ID)
         self.cog = cog
     async def callback(self, interaction: Interaction):
         if interaction.guild is None:

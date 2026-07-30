@@ -9,23 +9,22 @@ from discord import app_commands, Interaction, Role
 from discord.ext import commands
 
 from riddle_core import (
-    RIDDLE_CHANNEL_ID, VOTE_CHANNEL_ID, XP_NOTIFY_CHANNEL_ID,
+    RIDDLE_CHANNEL_ID, VOTE_CHANNEL_ID,
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID,
     EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, EXTRA_EXCLUDED_ROLE_IDS_CSV,
     DEFAULT_IMAGE_URL, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES, AUTO_SCAN_SECONDS,
     SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
-    build_xpadd_commands, footer_text,
+    footer_text,
     riddle_manager_required, send_access_denied, MissingRiddleManagerRole,
     RiddleRepo,
 )
 
 from riddle_ui import (
     build_active_riddle_embed,
-    build_solved_edit_embed,
-    build_new_solved_post_embed,
+    build_fresh_solved_post_embed,
+    build_solved_ping_post_embed,
     build_wrong_post_embed,
-    build_xp_hint_embed,
     build_xp_reminder_embed,
     SubmitButtonView,
     VoteButtons,
@@ -243,23 +242,9 @@ class RiddleCog(commands.Cog):
                 pass
         await self.repo.clear_all_open_post_refs(guild_id)
 
-    async def post_xp_award_hint(self, guild: Optional[discord.Guild], user_id: int, xp_gain: int):
-        if XP_NOTIFY_CHANNEL_ID <= 0 or xp_gain <= 0:
-            return
-        ch = await self.resolve_channel(XP_NOTIFY_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "send"):
-            return
-        mention, name, avatar = await self.resolve_user_label(guild, user_id)
-        cmd_name, cmd_mention = build_xpadd_commands(mention, name, xp_gain)
-        embed = build_xp_hint_embed(guild, mention, xp_gain, cmd_name, cmd_mention, avatar)
-        try:
-            await ch.send(embed=embed,
-                          allowed_mentions=discord.AllowedMentions(roles=False, users=False, everyone=False))
-        except Exception:
-            pass
-
     async def post_xp_reminder_to_vote_channel(self, guild: Optional[discord.Guild],
                                                user_id: int, xp_gain: int, riddle_no: int):
+        """Post an '/xp app <xp> <user>' reminder into the VOTE channel after a solve."""
         if VOTE_CHANNEL_ID <= 0 or xp_gain <= 0:
             return
         ch = await self.resolve_channel(VOTE_CHANNEL_ID)
@@ -362,29 +347,23 @@ class RiddleCog(commands.Cog):
     # ==========================================================================
     async def finalize_correct(self, guild: discord.Guild, ctx: dict, moderator: discord.Member):
         """
-        Order of operations after repo.approve_submission() ran:
-          1)  edit original riddle post -> SOLVED state (solution as SPOILER, no big img, no submit btn)
-          1b) DELETE all previously posted 'wrong answer' messages for this riddle
-          2)  post NEW solved post pinging Base + Extras + Winner. Solved post:
-              - riddle image as THUMBNAIL
-              - solution image as BIG IMAGE
-              - riddle text truncated at 80 chars
-              - shows the user's submitted (winning) answer
-          3)  cleanup other pending vote messages for this riddle
-          4)  apply XP + solved-count only if solver not excluded
-          5)  normalize slots + AUTO-STOP the system (turn OFF)
-          6)  XP reminder posted to VOTE channel (clickable /xp app command)
-          7)  optional XP award hint posted to XP_NOTIFY_CHANNEL_ID (if configured)
+        1)  DELETE the original riddle post entirely (not edit)
+        2)  DELETE all previously posted wrong-answer messages
+        3)  Post FRESH BIG solved post (riddle thumb + solution big image + [🔗 MORE] link, NO pings)
+        4)  Post SMALL ping post with Base + Extras + Winner mention
+        5)  Cleanup other pending vote messages for this riddle
+        6)  Apply XP + solved-count if solver not excluded
+        7)  Normalize + AUTO-STOP the system
+        8)  XP reminder posted to VOTE channel
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
         sid = to_int(ctx.get("submission_id"), 0)
         solver_id = to_int(ctx.get("solver_user_id"), 0)
         xp_gain = max(0, to_int(ctx.get("xp_gain"), 0))
-        solved_at = str(ctx.get("solved_at") or "")
         submitted_answer = str(ctx.get("answer") or "")
 
-        # Reload the riddle so we have the freshest state (images / mentions).
+        # Reload the riddle so we have the freshest fields (images / mentions).
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "solution", "xp", "image_url", "solution_url",
                   "riddle_no", "posted_channel_id", "posted_message_id",
@@ -394,85 +373,84 @@ class RiddleCog(commands.Cog):
 
         solver_mention, solver_name, solver_avatar = await self.resolve_user_label(guild, solver_id)
 
-        # ---- 1) edit the original riddle post ----
+        # ---- 1) DELETE the original riddle post ----
         original = await self.fetch_message_safe(
             riddle_row.get("posted_channel_id"), riddle_row.get("posted_message_id"),
         )
         if original:
             try:
-                solved_embed = build_solved_edit_embed(guild, riddle_row, solver_mention, solved_at)
-                await original.edit(
-                    content=None,
-                    embed=solved_embed,
-                    view=None,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+                await original.delete()
             except Exception:
-                logger.exception("Failed to edit original riddle post to solved state")
+                logger.exception("Failed to delete original riddle post")
 
-        # ---- 1b) DELETE all previously posted wrong-answer messages ----
+        # ---- 2) DELETE all wrong-answer posts for this riddle ----
         await self.cleanup_wrong_posts_for_riddle(rid)
 
-        # ---- 2) NEW solved post — pings BASE + EXTRAS + WINNER ----
+        # ---- 3) Post the FRESH BIG solved post (no pings on this post) ----
         ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
         if ch is not None and hasattr(ch, "send"):
             try:
-                role_ping_str = self.build_ping_content(guild, riddle_row.get("mention_role_ids"))
-                content_parts = [p for p in (role_ping_str, solver_mention) if p]
-                solved_content = " ".join(content_parts) if content_parts else None
-
-                solved_post_embed = build_new_solved_post_embed(
+                fresh_embed = build_fresh_solved_post_embed(
                     guild, riddle_row,
                     solver_mention, solver_name, solver_avatar,
                     submitted_answer,
                 )
-                new_msg = await ch.send(
-                    content=solved_content,
-                    embed=solved_post_embed,
+                fresh_msg = await ch.send(
+                    embed=fresh_embed,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                await self.repo.set_solved_post_ref(rid, fresh_msg.channel.id, fresh_msg.id)
+            except Exception:
+                logger.exception("Failed to post fresh solved message")
+
+            # ---- 4) Post the SMALL ping/announcement (Base + Extras + Winner) ----
+            try:
+                role_ping_str = self.build_ping_content(guild, riddle_row.get("mention_role_ids"))
+                content_parts = [p for p in (role_ping_str, solver_mention) if p]
+                ping_content = " ".join(content_parts) if content_parts else None
+
+                ping_embed = build_solved_ping_post_embed(
+                    guild, riddle_row, solver_mention, solver_avatar,
+                )
+                await ch.send(
+                    content=ping_content,
+                    embed=ping_embed,
                     allowed_mentions=discord.AllowedMentions(
                         users=True, roles=True, everyone=False,
                     ),
                 )
-                await self.repo.set_solved_post_ref(rid, new_msg.channel.id, new_msg.id)
             except Exception:
-                logger.exception("Failed to post new solved message")
+                logger.exception("Failed to post ping message")
 
-        # ---- 3) cleanup other pending vote messages for this riddle ----
+        # ---- 5) Cleanup other pending vote messages for this riddle ----
         await self.cleanup_vote_messages_for_riddle(rid, exclude_submission_id=sid)
 
-        # ---- 4) XP + solved-count only if solver is NOT excluded ----
+        # ---- 6) XP + solved-count only if solver is NOT excluded ----
         if solver_id > 0 and not await self.user_is_excluded(guild, solver_id):
             await self.repo.apply_solve_xp(gid, solver_id, xp_gain)
             await self.repo.inc_cached_solved_total(gid, 1)
         else:
             await self.rebuild_cached_solved_total_for_guild(gid)
 
-        # ---- 5) normalize + AUTO-STOP the system ----
+        # ---- 7) Normalize + AUTO-STOP ----
         await self.normalize_after_structure_change(gid)
         await self.repo.clear_all_open_post_refs(gid)
-        # Auto turn OFF the system after every solve. Managers must manually turn ON again.
         await self.repo.set_enabled(gid, False)
-        # Ensure no lingering active riddle post remains for the (now) new Slot 1
         await self.remove_active_riddle_posts(gid)
 
-        # ---- 6) XP reminder in the VOTE channel ----
+        # ---- 8) XP reminder in the VOTE channel ----
         if solver_id > 0 and xp_gain > 0 and not await self.user_is_excluded(guild, solver_id):
             await self.post_xp_reminder_to_vote_channel(
                 guild, solver_id, xp_gain, to_int(riddle_row.get("riddle_no"), 0),
             )
-
-        # ---- 7) optional legacy XP hint channel ----
-        if solver_id > 0 and xp_gain > 0 and not await self.user_is_excluded(guild, solver_id):
-            await self.post_xp_award_hint(guild, solver_id, xp_gain)
 
     # ==========================================================================
     # WRONG FLOW  (👎 Wrong)
     # ==========================================================================
     async def finalize_wrong(self, guild: discord.Guild, ctx: dict, moderator: discord.Member):
         """
-        Riddle stays OPEN. Public wrong-answer message in the riddle channel.
-        ONLY the submitter is pinged (no base role, no extras).
-        Message-ID is stored so all wrong posts get deleted when the riddle is solved.
+        Riddle stays OPEN. Post a public wrong-answer message in the riddle channel.
+        Only the submitter is pinged. Message-ID stored for cleanup at solve time.
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -489,7 +467,7 @@ class RiddleCog(commands.Cog):
         if ch is None or not hasattr(ch, "send"):
             return
 
-        # ONLY submitter is pinged (no base role, no extras)
+        # ONLY the submitter is pinged
         content = submitter_mention if submitter_mention else None
 
         embed = build_wrong_post_embed(
@@ -500,13 +478,9 @@ class RiddleCog(commands.Cog):
 
         try:
             sent = await ch.send(
-                content=content,
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions(
-                    users=True, roles=False, everyone=False,
-                ),
+                content=content, embed=embed,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
             )
-            # Remember so we can delete all wrong posts once this riddle gets solved
             await self.repo.add_wrong_post(gid, rid, sent.channel.id, sent.id)
         except Exception:
             logger.exception("Failed to post wrong-answer message")
