@@ -34,29 +34,22 @@ def env_int(name: str, default: int) -> int:
 
 DB_PATH = (os.getenv("RIDDLE_DB_PATH") or "data/riddle.sqlite3").strip()
 
-RIDDLE_CHANNEL_ID = env_int("RIDDLE_CHANNEL_ID", 1349697597232906292)
-VOTE_CHANNEL_ID = env_int("RIDDLE_VOTE_CHANNEL_ID", 1381754826710585527)
+RIDDLE_CHANNEL_ID = env_int("RIDDLE_CHANNEL_ID", 0)
+VOTE_CHANNEL_ID = env_int("RIDDLE_VOTE_CHANNEL_ID", 0)
 
-RIDDLE_ROLE_ID = env_int("RIDDLE_ROLE_ID", 1380610400416043089)
-RIDDLE_MANAGER_ROLE_ID = env_int("RIDDLE_MANAGER_ROLE_ID", 1393762463861702787)
+RIDDLE_ROLE_ID = env_int("RIDDLE_ROLE_ID", 0)
+RIDDLE_MANAGER_ROLE_ID = env_int("RIDDLE_MANAGER_ROLE_ID", 0)
 
-EXCLUDED_COUNT_ROLE_ID = env_int("RIDDLE_EXCLUDED_COUNT_ROLE_ID", 1292194320786522223)
-EXCLUDED_GAMEMASTER_ROLE_ID = env_int("RIDDLE_EXCLUDED_GAMEMASTER_ROLE_ID", 1393762463861702787)
+EXCLUDED_COUNT_ROLE_ID = env_int("RIDDLE_EXCLUDED_COUNT_ROLE_ID", 0)
+EXCLUDED_GAMEMASTER_ROLE_ID = env_int("RIDDLE_EXCLUDED_GAMEMASTER_ROLE_ID", 0)
 EXTRA_EXCLUDED_ROLE_IDS_CSV = (os.getenv("RIDDLE_EXTRA_EXCLUDED_ROLE_IDS") or "").strip()
 
-XP_NOTIFY_CHANNEL_ID = env_int("RIDDLE_XP_NOTIFY_CHANNEL_ID", 1381754826710585527)
+XP_NOTIFY_CHANNEL_ID = env_int("RIDDLE_XP_NOTIFY_CHANNEL_ID", 0)
 
-DEFAULT_IMAGE_URL = (
-    os.getenv("DEFAULT_RIDDLE_IMAGE_URL")
-    or "https://cdn.discordapp.com/attachments/1383652563408392232/1462480133737943063/riddle_sexy.gif"
-).strip()
+DEFAULT_IMAGE_URL = (os.getenv("DEFAULT_RIDDLE_IMAGE_URL") or "").strip()
+ACCESS_DENIED_IMAGE_URL = (os.getenv("RIDDLE_ACCESS_DENIED_IMAGE_URL") or "").strip()
 
-ACCESS_DENIED_IMAGE_URL = (
-    os.getenv("RIDDLE_ACCESS_DENIED_IMAGE_URL")
-    or "https://example.com/apply-role-placeholder.jpg"
-).strip()
-
-MAX_RIDDLE_SLOTS = env_int("RIDDLE_MAX_SLOTS", 5)
+MAX_RIDDLE_SLOTS = env_int("RIDDLE_MAX_SLOTS", 10)  # <- expanded to 10
 MAX_EXTRA_PING_ROLES = env_int("RIDDLE_MAX_EXTRA_PING_ROLES", 3)
 AUTO_SCAN_SECONDS = env_int("RIDDLE_AUTO_SCAN_SECONDS", 43200)
 
@@ -280,13 +273,6 @@ class LoggedPersistentView(View):
 
     async def on_error(self, interaction: Interaction, error: Exception, item):
         logger.exception("View error in %s: %s", self.__class__.__name__, error)
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send("❌ UI error.", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ UI error.", ephemeral=True)
-        except Exception:
-            pass
 
 
 class RiddleRepo:
@@ -581,7 +567,10 @@ class RiddleRepo:
         return out
 
     async def get_open_slot_riddle(self, guild_id: int, slot_no: int) -> Optional[dict]:
-        return await self._one("SELECT * FROM riddles WHERE guild_id=? AND status='open' AND slot_no=? LIMIT 1", (guild_id, slot_no))
+        return await self._one(
+            "SELECT * FROM riddles WHERE guild_id=? AND status='open' AND slot_no=? LIMIT 1",
+            (guild_id, slot_no),
+        )
 
     async def get_open_slot1(self, guild_id: int) -> Optional[dict]:
         return await self.get_open_slot_riddle(guild_id, 1)
@@ -639,8 +628,6 @@ class RiddleRepo:
                     rid = int(cur.lastrowid or 0)
                     await cur.close()
 
-                await self.db.execute("UPDATE riddles SET is_active=0 WHERE guild_id=? AND status='open'", (guild_id,))
-                await self.db.execute("UPDATE riddles SET is_active=1 WHERE guild_id=? AND status='open' AND slot_no=1", (guild_id,))
                 await self.db.commit()
                 return rid if rid > 0 else None
             except Exception:
@@ -685,32 +672,11 @@ class RiddleRepo:
         )
         return rc > 0
 
-    async def refresh_active_slot_flag(self, guild_id: int):
-        if self.db is None:
-            return
-        now = now_iso_utc()
-        async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
-                await self.db.execute("UPDATE riddles SET is_active=0, updated_at=? WHERE guild_id=? AND status='open'", (now, guild_id))
-                await self.db.execute(
-                    """
-                    UPDATE riddles
-                    SET is_active=1, updated_at=?
-                    WHERE id IN (
-                        SELECT id FROM riddles
-                        WHERE guild_id=? AND status='open' AND slot_no=1
-                        LIMIT 1
-                    )
-                    """,
-                    (now, guild_id),
-                )
-                await self.db.commit()
-            except Exception:
-                await self.db.rollback()
-                raise
-
-    async def shift_open_slots_left(self, guild_id: int):
+    async def compact_open_slots(self, guild_id: int):
+        """
+        Close gaps and keep open riddles in contiguous slots 1..N.
+        Extra open riddles above MAX_RIDDLE_SLOTS are auto-closed.
+        """
         if self.db is None:
             return
         async with self.lock:
@@ -729,16 +695,83 @@ class RiddleRepo:
                 rows = await cur.fetchall()
                 await cur.close()
 
-                await self.db.execute("UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? WHERE guild_id=? AND status='open'", (now, guild_id))
+                await self.db.execute(
+                    "UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? WHERE guild_id=? AND status='open'",
+                    (now, guild_id),
+                )
 
                 for i, row in enumerate(rows, start=1):
                     rid = to_int(row["id"], 0)
                     if i <= MAX_RIDDLE_SLOTS:
-                        await self.db.execute("UPDATE riddles SET slot_no=?, is_active=?, updated_at=? WHERE id=?", (i, 1 if i == 1 else 0, now, rid))
+                        await self.db.execute(
+                            "UPDATE riddles SET slot_no=?, is_active=?, updated_at=? WHERE id=?",
+                            (i, 1 if i == 1 else 0, now, rid),
+                        )
                     else:
-                        await self.db.execute("UPDATE riddles SET status='closed', closed_by=0, closed_at=?, updated_at=? WHERE id=?", (now, now, rid))
-                        await self.db.execute("UPDATE submissions SET status='cancelled', voted_by=0, voted_at=? WHERE riddle_id=? AND status='pending'", (now, rid))
+                        await self.db.execute(
+                            "UPDATE riddles SET status='closed', closed_by=0, closed_at=?, updated_at=? WHERE id=?",
+                            (now, now, rid),
+                        )
+                        await self.db.execute(
+                            "UPDATE submissions SET status='cancelled', voted_by=0, voted_at=? WHERE riddle_id=? AND status='pending'",
+                            (now, rid),
+                        )
+
                 await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                raise
+
+    async def move_open_riddle_to_end(self, guild_id: int, riddle_id: int) -> bool:
+        """
+        Move selected open riddle to the last occupied position.
+        Others shift up. Occupancy count remains same.
+        """
+        if self.db is None:
+            return False
+
+        await self.compact_open_slots(guild_id)
+
+        async with self.lock:
+            await self.db.execute("BEGIN IMMEDIATE")
+            try:
+                cur = await self.db.execute(
+                    """
+                    SELECT id
+                    FROM riddles
+                    WHERE guild_id=? AND status='open' AND slot_no BETWEEN 1 AND ?
+                    ORDER BY slot_no ASC
+                    """,
+                    (guild_id, MAX_RIDDLE_SLOTS),
+                )
+                rows = await cur.fetchall()
+                await cur.close()
+
+                ids = [to_int(r["id"], 0) for r in rows if to_int(r["id"], 0) > 0]
+                if riddle_id not in ids:
+                    await self.db.rollback()
+                    return False
+
+                if len(ids) <= 1:
+                    await self.db.rollback()
+                    return True
+
+                ids.remove(riddle_id)
+                ids.append(riddle_id)
+
+                now = now_iso_utc()
+                await self.db.execute(
+                    "UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? WHERE guild_id=? AND status='open'",
+                    (now, guild_id),
+                )
+                for idx, rid in enumerate(ids, start=1):
+                    await self.db.execute(
+                        "UPDATE riddles SET slot_no=?, is_active=?, updated_at=? WHERE id=?",
+                        (idx, 1 if idx == 1 else 0, now, rid),
+                    )
+
+                await self.db.commit()
+                return True
             except Exception:
                 await self.db.rollback()
                 raise
@@ -766,7 +799,10 @@ class RiddleRepo:
                     """,
                     (closed_by, now, now, riddle_id),
                 )
-                await self.db.execute("UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? WHERE riddle_id=? AND status='pending'", (closed_by, now, riddle_id))
+                await self.db.execute(
+                    "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? WHERE riddle_id=? AND status='pending'",
+                    (closed_by, now, riddle_id),
+                )
                 await self.db.commit()
                 return r
             except Exception:
@@ -808,7 +844,6 @@ class RiddleRepo:
             (guild_id,),
         )
 
-    # submissions / stats
     async def create_submission_pending(self, guild_id: int, riddle_id: int, user_id: int, answer: str) -> Optional[int]:
         _, lid = await self._exec(
             """
@@ -825,140 +860,6 @@ class RiddleRepo:
 
     async def delete_submission(self, submission_id: int):
         await self._exec("DELETE FROM submissions WHERE id=?", (submission_id,))
-
-    async def approve_submission(self, vote_message_id: int, moderator_id: int) -> tuple[str, Optional[dict]]:
-        if self.db is None:
-            return "error", None
-        async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
-                cur = await self.db.execute(
-                    """
-                    SELECT
-                        s.id AS submission_id,
-                        s.riddle_id AS riddle_id,
-                        s.user_id AS submitter_id,
-                        s.answer AS user_answer,
-                        s.status AS submission_status,
-                        r.guild_id AS guild_id,
-                        r.riddle_no AS riddle_no,
-                        r.text AS riddle_text,
-                        r.solution AS correct_solution,
-                        r.xp AS xp,
-                        r.image_url AS image_url,
-                        r.solution_url AS solution_url,
-                        r.mention_role_ids AS mention_role_ids,
-                        r.posted_channel_id AS posted_channel_id,
-                        r.posted_message_id AS posted_message_id,
-                        r.status AS riddle_status
-                    FROM submissions s
-                    JOIN riddles r ON r.id = s.riddle_id
-                    WHERE s.vote_message_id=?
-                    LIMIT 1
-                    """,
-                    (vote_message_id,),
-                )
-                row = await cur.fetchone()
-                await cur.close()
-                if not row:
-                    await self.db.rollback()
-                    return "not_found", None
-
-                ctx = dict(row)
-                if ctx["submission_status"] != "pending":
-                    await self.db.rollback()
-                    return "already_done", ctx
-
-                if ctx["riddle_status"] != "open":
-                    await self.db.execute("UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? WHERE id=? AND status='pending'", (moderator_id, now_iso_utc(), ctx["submission_id"]))
-                    await self.db.commit()
-                    return "riddle_closed", ctx
-
-                now = now_iso_utc()
-                cur = await self.db.execute("UPDATE submissions SET status='correct', voted_by=?, voted_at=? WHERE id=? AND status='pending'", (moderator_id, now, ctx["submission_id"]))
-                if cur.rowcount != 1:
-                    await self.db.rollback()
-                    return "already_done", ctx
-
-                cur = await self.db.execute(
-                    """
-                    UPDATE riddles
-                    SET status='solved', slot_no=NULL, is_active=0, solved_by=?, solved_at=?, updated_at=?
-                    WHERE id=? AND status='open'
-                    """,
-                    (ctx["submitter_id"], now, now, ctx["riddle_id"]),
-                )
-                if cur.rowcount != 1:
-                    await self.db.rollback()
-                    return "riddle_closed", ctx
-
-                await self.db.execute(
-                    "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? WHERE riddle_id=? AND status='pending' AND id<>?",
-                    (moderator_id, now, ctx["riddle_id"], ctx["submission_id"]),
-                )
-                await self.db.commit()
-
-                ctx["solved_at"] = now
-                ctx["xp_gain"] = max(0, to_int(ctx.get("xp"), 0))
-                return "ok", ctx
-            except Exception:
-                await self.db.rollback()
-                raise
-
-    async def reject_submission(self, vote_message_id: int, moderator_id: int) -> tuple[str, Optional[dict]]:
-        if self.db is None:
-            return "error", None
-        async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
-                cur = await self.db.execute(
-                    """
-                    SELECT
-                        s.id AS submission_id,
-                        s.riddle_id AS riddle_id,
-                        s.user_id AS submitter_id,
-                        s.answer AS user_answer,
-                        s.status AS submission_status,
-                        r.guild_id AS guild_id,
-                        r.riddle_no AS riddle_no,
-                        r.text AS riddle_text,
-                        r.image_url AS image_url,
-                        r.xp AS xp,
-                        r.mention_role_ids AS mention_role_ids,
-                        r.status AS riddle_status
-                    FROM submissions s
-                    JOIN riddles r ON r.id = s.riddle_id
-                    WHERE s.vote_message_id=?
-                    LIMIT 1
-                    """,
-                    (vote_message_id,),
-                )
-                row = await cur.fetchone()
-                await cur.close()
-                if not row:
-                    await self.db.rollback()
-                    return "not_found", None
-
-                ctx = dict(row)
-                if ctx["submission_status"] != "pending":
-                    await self.db.rollback()
-                    return "already_done", ctx
-
-                if ctx["riddle_status"] != "open":
-                    await self.db.execute("UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? WHERE id=? AND status='pending'", (moderator_id, now_iso_utc(), ctx["submission_id"]))
-                    await self.db.commit()
-                    return "riddle_closed", ctx
-
-                cur = await self.db.execute("UPDATE submissions SET status='wrong', voted_by=?, voted_at=? WHERE id=? AND status='pending'", (moderator_id, now_iso_utc(), ctx["submission_id"]))
-                if cur.rowcount != 1:
-                    await self.db.rollback()
-                    return "already_done", ctx
-
-                await self.db.commit()
-                return "ok", ctx
-            except Exception:
-                await self.db.rollback()
-                raise
 
     async def list_vote_messages_for_riddle(self, riddle_id: int) -> list[dict]:
         return await self._all("SELECT id, vote_message_id FROM submissions WHERE riddle_id=? AND vote_message_id IS NOT NULL", (riddle_id,))
@@ -999,7 +900,10 @@ class RiddleRepo:
         )
 
     async def stats_entries(self, guild_id: int) -> list[tuple[int, int, int]]:
-        rows = await self._all("SELECT user_id, solved_riddles, xp FROM user_stats WHERE guild_id=? ORDER BY solved_riddles DESC, xp DESC", (guild_id,))
+        rows = await self._all(
+            "SELECT user_id, solved_riddles, xp FROM user_stats WHERE guild_id=? ORDER BY solved_riddles DESC, xp DESC",
+            (guild_id,),
+        )
         out = []
         for r in rows:
             uid = to_int(r.get("user_id"), 0)
@@ -1016,7 +920,10 @@ class RiddleRepo:
             try:
                 await self.db.execute("DELETE FROM user_stats WHERE guild_id=?", (guild_id,))
                 for uid, solved, xp in rows:
-                    await self.db.execute("INSERT INTO user_stats (guild_id, user_id, solved_riddles, xp) VALUES (?, ?, ?, ?)", (guild_id, uid, max(0, solved), max(0, xp)))
+                    await self.db.execute(
+                        "INSERT INTO user_stats (guild_id, user_id, solved_riddles, xp) VALUES (?, ?, ?, ?)",
+                        (guild_id, uid, max(0, solved), max(0, xp)),
+                    )
                 await self.db.commit()
             except Exception:
                 await self.db.rollback()
@@ -1039,6 +946,7 @@ class RiddleRepo:
 # =========================
 # riddle.py (Part 3/3)
 # =========================
+# ---- UI + Cog + setup ----
 async def _edit_vote_result_message(msg: discord.Message, *, ok: bool, moderator_mention: str):
     try:
         if msg.embeds:
@@ -1065,7 +973,6 @@ class RiddleCog(commands.Cog):
         self._auto_task: Optional[asyncio.Task] = None
         self._startup_done = False
 
-    # ---------- role filters ----------
     def excluded_role_ids(self) -> set[int]:
         s = {EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, RIDDLE_MANAGER_ROLE_ID}
         for rid in parse_csv_role_ids(EXTRA_EXCLUDED_ROLE_IDS_CSV):
@@ -1106,7 +1013,7 @@ class RiddleCog(commands.Cog):
         await self.repo.sync_open_slot_numbers(guild_id, base)
 
     async def normalize_after_structure_change(self, guild_id: int):
-        await self.repo.refresh_active_slot_flag(guild_id)
+        await self.repo.compact_open_slots(guild_id)
         await self.sync_open_slot_numbers_for_guild(guild_id)
 
     async def filtered_stats_entries_for_guild(self, guild: discord.Guild) -> list[tuple[int, int, int]]:
@@ -1118,7 +1025,6 @@ class RiddleCog(commands.Cog):
             out.append((uid, solved, xp))
         return out
 
-    # ---------- discord helpers ----------
     async def resolve_channel(self, channel_id: int):
         ch = self.bot.get_channel(channel_id)
         if ch is not None:
@@ -1206,7 +1112,7 @@ class RiddleCog(commands.Cog):
             pass
         return False
 
-    async def delete_button_messages_in_channel(self, channel_id: int, custom_ids: set[str], limit: int = 2000):
+    async def delete_button_messages_in_channel(self, channel_id: int, custom_ids: set[str], limit: int = 3000):
         ch = await self.resolve_channel(channel_id)
         me = self.bot.user
         if ch is None or not hasattr(ch, "history") or me is None:
@@ -1223,13 +1129,12 @@ class RiddleCog(commands.Cog):
         except Exception:
             pass
 
-    # ---------- posting lifecycle ----------
     async def cleanup_vote_messages_for_riddle(self, riddle_id: int, exclude_submission_id: Optional[int] = None):
         rows = await self.repo.list_vote_messages_for_riddle(riddle_id)
         if not rows:
             return
-        ch = await self.resolve_channel(VOTE_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "fetch_message"):
+        vote_channel = await self.resolve_channel(VOTE_CHANNEL_ID)
+        if vote_channel is None or not hasattr(vote_channel, "fetch_message"):
             return
         for row in rows:
             sid = to_int(row.get("id"), 0)
@@ -1239,68 +1144,10 @@ class RiddleCog(commands.Cog):
             if mid <= 0:
                 continue
             try:
-                m = await ch.fetch_message(mid)
-                await m.delete()
+                msg = await vote_channel.fetch_message(mid)
+                await msg.delete()
             except Exception:
                 pass
-
-    async def update_original_post_solved(self, ctx: dict, solver_mention: str, effective_xp: int):
-        msg = await self.fetch_message_safe(ctx.get("posted_channel_id"), ctx.get("posted_message_id"))
-        if not msg:
-            return
-
-        solved_at = ctx.get("solved_at") or now_iso_utc()
-        clean_solution, link = extract_link(ctx.get("correct_solution") or "")
-        sol = f"||{clean_solution}||" if clean_solution else "||*None*||"
-        if link:
-            sol += f"\n🔗 [🧠**MORE**]({link})"
-
-        if msg.embeds:
-            base = msg.embeds[0].to_dict()
-            keep = []
-            for f in base.get("fields", []):
-                if f.get("name") in {"✅ Status", "Solved at (UTC)", "✅ Solution", "🏆 Award"}:
-                    continue
-                keep.append(f)
-            base["fields"] = keep
-            e = discord.Embed.from_dict(base)
-        else:
-            e = discord.Embed(
-                title=f"🧩 Goon Hut Riddle No.{to_int(ctx.get('riddle_no'), to_int(ctx.get('riddle_id'), 0))}",
-                description=clamp_embed_description(ctx.get("riddle_text") or "*Unknown*"),
-                color=discord.Color.green(),
-            )
-
-        e.color = discord.Color.green()
-        e.add_field(name="✅ Status", value=clamp_embed_value(f"Solved by {solver_mention}"), inline=False)
-        e.add_field(name="Solved at (UTC)", value=clamp_embed_value(str(solved_at)), inline=False)
-        e.add_field(name="✅ Solution", value=clamp_embed_value(sol), inline=False)
-        e.add_field(name="🏆 Award", value=clamp_embed_value(f"{effective_xp} XP"), inline=False)
-        e.set_footer(text=footer_text(msg.guild))
-        try:
-            await msg.edit(embed=e, view=None)
-        except Exception:
-            pass
-
-    async def update_original_post_closed(self, riddle: dict):
-        msg = await self.fetch_message_safe(riddle.get("posted_channel_id"), riddle.get("posted_message_id"))
-        if not msg:
-            return
-        if msg.embeds:
-            e = discord.Embed.from_dict(msg.embeds[0].to_dict())
-        else:
-            e = discord.Embed(
-                title=f"🧩 Goon Hut Riddle No.{to_int(riddle.get('riddle_no'), to_int(riddle.get('id'), 0))}",
-                description=clamp_embed_description(riddle.get("text") or "*Unknown*"),
-                color=discord.Color.red(),
-            )
-        e.color = discord.Color.red()
-        e.add_field(name="🔒 Status", value="Closed unsolved", inline=False)
-        e.set_footer(text=footer_text(msg.guild))
-        try:
-            await msg.edit(embed=e, view=None)
-        except Exception:
-            pass
 
     async def remove_active_riddle_posts(self, guild_id: int):
         rows = await self.repo.list_open_post_refs(guild_id)
@@ -1320,7 +1167,7 @@ class RiddleCog(commands.Cog):
         await self.repo.clear_all_open_post_refs(guild_id)
 
     async def publish_slot1_post(self, guild_id: int, *, force_repost: bool, allow_role_ping: bool) -> str:
-        await self.sync_open_slot_numbers_for_guild(guild_id)
+        await self.normalize_after_structure_change(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
         if not slot1:
             return "no_slot1"
@@ -1365,9 +1212,7 @@ class RiddleCog(commands.Cog):
             return "error"
 
     async def enforce_enabled_state(self, guild_id: int, *, allow_ping: bool, force_repost: bool = False) -> str:
-        await self.repo.refresh_active_slot_flag(guild_id)
-        await self.sync_open_slot_numbers_for_guild(guild_id)
-
+        await self.normalize_after_structure_change(guild_id)
         enabled = await self.repo.is_enabled(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
 
@@ -1386,7 +1231,6 @@ class RiddleCog(commands.Cog):
         rows = await self.repo.pending_open_submissions()
         if not rows:
             return
-
         vote_channel = await self.resolve_channel(VOTE_CHANNEL_ID)
         if vote_channel is None or not hasattr(vote_channel, "send"):
             return
@@ -1418,7 +1262,6 @@ class RiddleCog(commands.Cog):
             except Exception:
                 pass
 
-    # ---------- startup behavior requested ----------
     async def startup_rebuild(self):
         gids = set(await self.repo.list_all_guild_ids())
         gids.update(g.id for g in self.bot.guilds)
@@ -1430,27 +1273,21 @@ class RiddleCog(commands.Cog):
         for gid in gids:
             enabled_map[gid] = await self.repo.is_enabled(gid)
             await self.rebuild_cached_solved_total_for_guild(gid)
-            await self.sync_open_slot_numbers_for_guild(gid)
-            await self.repo.refresh_active_slot_flag(gid)
+            await self.normalize_after_structure_change(gid)
 
-        # Remove old interactive posts globally so buttons are always fresh
-        await self.delete_button_messages_in_channel(RIDDLE_CHANNEL_ID, {SUBMIT_BUTTON_ID}, limit=2500)
-        await self.delete_button_messages_in_channel(VOTE_CHANNEL_ID, {VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID}, limit=3000)
+        await self.delete_button_messages_in_channel(RIDDLE_CHANNEL_ID, {SUBMIT_BUTTON_ID}, limit=3000)
+        await self.delete_button_messages_in_channel(VOTE_CHANNEL_ID, {VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID}, limit=4000)
 
-        # Clear refs and pending vote refs, then rebuild them cleanly
         await self.repo.clear_all_open_post_refs(None)
         await self.repo.reset_pending_vote_refs()
         await self.repo.cancel_pending_for_non_open()
 
-        # ON guilds -> repost active riddle
-        # OFF guilds -> keep no active post
         for gid in gids:
             if enabled_map.get(gid, False):
                 await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
             else:
                 await self.remove_active_riddle_posts(gid)
 
-        # Repost pending vote messages for open riddles (fresh buttons)
         await self.repost_pending_votes()
 
     async def cog_load(self):
@@ -1487,7 +1324,7 @@ class RiddleCog(commands.Cog):
             try:
                 for gid in await self.repo.list_all_guild_ids():
                     await self.repo.ensure_guild_state(gid)
-                    await self.repo.refresh_active_slot_flag(gid)
+                    await self.normalize_after_structure_change(gid)
                     if await self.repo.is_enabled(gid):
                         await self.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
                     else:
@@ -1496,7 +1333,6 @@ class RiddleCog(commands.Cog):
                 logger.exception("auto worker error: %s", e)
             await asyncio.sleep(max(60, AUTO_SCAN_SECONDS))
 
-    # ---------- commands ----------
     @app_commands.command(name="riddle", description="Open the main riddle admin panel.")
     @app_commands.guild_only()
     @riddle_manager_required()
@@ -1504,7 +1340,6 @@ class RiddleCog(commands.Cog):
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=True)
-
         gid = interaction.guild.id
         await self.repo.ensure_guild_state(gid)
         await self.normalize_after_structure_change(gid)
@@ -1512,12 +1347,7 @@ class RiddleCog(commands.Cog):
         panel = RiddleAdminPanelView(self, interaction.user.id, gid)
         await panel.refresh_data()
         await panel.rebuild_items()
-        msg = await interaction.followup.send(
-            embeds=await panel.build_embeds(interaction.guild),
-            view=panel,
-            ephemeral=True,
-            wait=True,
-        )
+        msg = await interaction.followup.send(embeds=await panel.build_embeds(interaction.guild), view=panel, ephemeral=True, wait=True)
         panel.message = msg
 
     @app_commands.command(name="riddle-champ", description="Show riddle champions leaderboard.")
@@ -1544,14 +1374,7 @@ class RiddleCog(commands.Cog):
             if avatar:
                 avatar_cache[uid] = avatar
 
-        view = ChampionsView(
-            entries=entries,
-            total_solved=total_solved,
-            name_cache=name_cache,
-            avatar_cache=avatar_cache,
-            image_url=image if is_http_url(image) else DEFAULT_IMAGE_URL,
-            owner_id=(interaction.user.id if not visible else None),
-        )
+        view = ChampionsView(entries, total_solved, name_cache, avatar_cache, image if is_http_url(image) else DEFAULT_IMAGE_URL, interaction.user.id if not visible else None)
         sent = await interaction.followup.send(
             content=mention.mention if (visible and mention) else None,
             embed=view.build_embed(),
@@ -1566,7 +1389,7 @@ class RiddleCog(commands.Cog):
     @app_commands.guild_only()
     @riddle_manager_required()
     async def champions_import_json(self, interaction: Interaction, mode: Literal["merge", "replace"] = "merge"):
-        await interaction.response.send_modal(ChampionsImportModal(self, mode=mode))
+        await interaction.response.send_modal(ChampionsImportModal(self, mode))
 
     async def cog_app_command_error(self, interaction: Interaction, error: app_commands.AppCommandError):
         if isinstance(error, MissingRiddleManagerRole):
@@ -1575,7 +1398,6 @@ class RiddleCog(commands.Cog):
         logger.exception("Riddle command error: %s", error)
 
 
-# ---------- submit / vote ----------
 class SubmitSolutionModal(Modal):
     def __init__(self, cog: RiddleCog, riddle_id: int):
         super().__init__(title="Submit your solution")
@@ -1643,22 +1465,18 @@ class SubmitButton(discord.ui.Button):
     async def callback(self, interaction: Interaction):
         if interaction.guild is None:
             return
-        riddle = None
+        r = None
         if interaction.message:
-            riddle = await self.cog.repo.get_open_riddle_by_message(interaction.guild.id, interaction.message.id)
-        if not riddle:
-            riddle = await self.cog.repo.get_open_slot1(interaction.guild.id)
-        if not riddle:
-            try:
-                await interaction.response.send_message("⚠️ No active riddle right now.", ephemeral=True)
-            except Exception:
-                pass
+            r = await self.cog.repo.get_open_riddle_by_message(interaction.guild.id, interaction.message.id)
+        if not r:
+            r = await self.cog.repo.get_open_slot1(interaction.guild.id)
+        if not r:
             return
-        await interaction.response.send_modal(SubmitSolutionModal(self.cog, to_int(riddle["id"], 0)))
+        await interaction.response.send_modal(SubmitSolutionModal(self.cog, to_int(r["id"], 0)))
 
 
 class _VoteBaseButton(discord.ui.Button):
-    def __init__(self, cog: RiddleCog, *, approve: bool, label: str, style: discord.ButtonStyle, custom_id: str):
+    def __init__(self, cog: RiddleCog, approve: bool, label: str, style: discord.ButtonStyle, custom_id: str):
         super().__init__(label=label, style=style, custom_id=custom_id)
         self.cog = cog
         self.approve = approve
@@ -1689,114 +1507,15 @@ class _VoteBaseButton(discord.ui.Button):
 
         await _edit_vote_result_message(interaction.message, ok=self.approve, moderator_mention=interaction.user.mention)
 
-        if not self.approve:
-            submitter_id = to_int(ctx.get("submitter_id"), 0)
-            submitter_mention = f"<@{submitter_id}>" if submitter_id > 0 else "the submitter"
-            riddle_no = to_int(ctx.get("riddle_no"), to_int(ctx.get("riddle_id"), 0))
-
-            emb = discord.Embed(
-                title=f"❌ Goon Hut Riddle No.{riddle_no}",
-                description=clamp_embed_description(truncate_text(ctx.get("riddle_text") or "No riddle text.", 150)),
-                color=discord.Color.red(),
-            )
-            emb.add_field(name="Submitted Answer", value=clamp_embed_value(truncate_text(ctx.get("user_answer") or "No answer.", 150)), inline=False)
-            emb.add_field(name="Result", value=clamp_embed_value(f"{submitter_mention}, your answer was marked incorrect."), inline=False)
-
-            rimg = ctx.get("image_url")
-            if is_http_url(rimg):
-                emb.set_thumbnail(url=rimg)
-            elif is_http_url(DEFAULT_IMAGE_URL):
-                emb.set_thumbnail(url=DEFAULT_IMAGE_URL)
-            emb.set_footer(text=footer_text(interaction.guild))
-
-            riddle_channel = await self.cog.resolve_channel(RIDDLE_CHANNEL_ID)
-            if riddle_channel and hasattr(riddle_channel, "send"):
-                await riddle_channel.send(
-                    content=f"<@&{RIDDLE_ROLE_ID}> {submitter_mention}",
-                    embed=emb,
-                    allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False),
-                )
-            return
-
-        # approve path
-        submitter_id = to_int(ctx.get("submitter_id"), 0)
-        excluded = await self.cog.user_is_excluded(interaction.guild, submitter_id)
-
-        xp_gain = max(0, to_int(ctx.get("xp_gain"), 0))
-        effective_xp = 0 if excluded else xp_gain
-
-        if not excluded:
-            await self.cog.repo.add_user_solve_xp(interaction.guild.id, submitter_id, effective_xp)
-            await self.cog.repo.inc_cached_solved_total(interaction.guild.id, 1)
-
-        await self.cog.cleanup_vote_messages_for_riddle(
-            to_int(ctx.get("riddle_id"), 0),
-            exclude_submission_id=to_int(ctx.get("submission_id"), 0),
-        )
-
-        solver_mention, solver_name, _ = await self.cog.resolve_user_label(interaction.guild, submitter_id)
-        await self.cog.update_original_post_solved(ctx, solver_mention, effective_xp)
-
-        riddle_channel = await self.cog.resolve_channel(RIDDLE_CHANNEL_ID)
-        if riddle_channel and hasattr(riddle_channel, "send"):
-            clean_solution, link = extract_link(ctx.get("correct_solution") or "")
-            sol = clean_solution or "*None*"
-            if link:
-                sol += f"\n🔗 [🧠**MORE**]({link})"
-
-            solved_embed = discord.Embed(
-                title=f"✅ Goon Hut Riddle No.{to_int(ctx.get('riddle_no'), to_int(ctx.get('riddle_id'), 0))} Solved",
-                description=clamp_embed_description(truncate_text(ctx.get("riddle_text") or "*Unknown*", 300)),
-                color=discord.Color.green(),
-            )
-            solved_embed.add_field(name="Solved by", value=clamp_embed_value(solver_mention), inline=True)
-            solved_embed.add_field(name="Solved at (UTC)", value=clamp_embed_value(ctx.get("solved_at") or now_iso_utc()), inline=True)
-            solved_embed.add_field(name="Solution", value=clamp_embed_value(sol), inline=False)
-            solved_embed.add_field(name="Award", value=clamp_embed_value(f"{effective_xp} XP" + (" (gamemaster excluded)" if excluded else "")), inline=False)
-
-            rimg = ctx.get("image_url")
-            if is_http_url(rimg):
-                solved_embed.set_thumbnail(url=rimg)
-            elif is_http_url(DEFAULT_IMAGE_URL):
-                solved_embed.set_thumbnail(url=DEFAULT_IMAGE_URL)
-
-            simg = ctx.get("solution_url")
-            if not is_http_url(simg):
-                simg = DEFAULT_IMAGE_URL
-            if is_http_url(simg):
-                solved_embed.set_image(url=simg)
-
-            solved_embed.set_footer(text=footer_text(interaction.guild))
-            await riddle_channel.send(
-                content=self.cog.build_ping_content(interaction.guild, ctx.get("mention_role_ids")),
-                embed=solved_embed,
-                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
-            )
-
-        if not excluded:
-            xp_channel = await self.cog.resolve_channel(XP_NOTIFY_CHANNEL_ID)
-            if xp_channel and hasattr(xp_channel, "send"):
-                cmd1, cmd2 = build_xpadd_commands(solver_mention, solver_name, effective_xp)
-                await xp_channel.send(f"🏆 XP Reward prepared for {solver_mention}\n`{cmd1}`\n`{cmd2}`")
-
-        gid = interaction.guild.id
-        await self.cog.repo.shift_open_slots_left(gid)
-        await self.cog.normalize_after_structure_change(gid)
-
-        if await self.cog.repo.is_enabled(gid):
-            await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
-        else:
-            await self.cog.remove_active_riddle_posts(gid)
-
 
 class VoteSuccessButton(_VoteBaseButton):
     def __init__(self, cog: RiddleCog):
-        super().__init__(cog, approve=True, label="👍 Correct", style=discord.ButtonStyle.success, custom_id=VOTE_UP_BUTTON_ID)
+        super().__init__(cog, True, "👍 Correct", discord.ButtonStyle.success, VOTE_UP_BUTTON_ID)
 
 
 class VoteFailButton(_VoteBaseButton):
     def __init__(self, cog: RiddleCog):
-        super().__init__(cog, approve=False, label="👎 Wrong", style=discord.ButtonStyle.danger, custom_id=VOTE_DOWN_BUTTON_ID)
+        super().__init__(cog, False, "👎 Wrong", discord.ButtonStyle.danger, VOTE_DOWN_BUTTON_ID)
 
 
 class SubmitButtonView(LoggedPersistentView):
@@ -1812,7 +1531,6 @@ class VoteButtons(LoggedPersistentView):
         self.add_item(VoteFailButton(cog))
 
 
-# ---------- Admin panel ----------
 class RiddleContentModal(Modal):
     def __init__(self, panel: "RiddleAdminPanelView", slot_no: int, riddle_id: Optional[int], current: Optional[dict], ping_preview: str):
         super().__init__(title=f"Slot {slot_no} Content")
@@ -1840,17 +1558,9 @@ class RiddleContentModal(Modal):
         xp = max(0, to_int(self.xp.value, 0))
 
         if self.riddle_id:
-            ok_update = await self.panel.cog.repo.update_open_riddle_content_by_id(
-                guild_id=gid,
-                riddle_id=self.riddle_id,
-                user_id=interaction.user.id,
-                text=str(self.text.value),
-                solution=str(self.solution.value),
-                xp=xp,
-            )
-            if not ok_update:
-                self.panel.last_info = "⚠️ Riddle changed/moved. Reopen panel."
-                await self.panel.refresh_data()
+            changed = await self.panel.cog.repo.update_open_riddle_content_by_id(gid, self.riddle_id, interaction.user.id, str(self.text.value), str(self.solution.value), xp)
+            if not changed:
+                self.panel.last_info = "⚠️ Riddle changed while editing."
                 await self.panel.safe_edit_panel()
                 return
         else:
@@ -1864,16 +1574,13 @@ class RiddleContentModal(Modal):
             )
             if not rid:
                 self.panel.last_info = "❌ Save failed."
-                await self.panel.refresh_data()
                 await self.panel.safe_edit_panel()
                 return
 
         await self.panel.cog.normalize_after_structure_change(gid)
         if await self.panel.cog.repo.is_enabled(gid):
             await self.panel.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
-
-        self.panel.last_info = "✅ Content saved."
-        await self.panel.refresh_data()
+        self.panel.last_info = "✅ Saved."
         await self.panel.safe_edit_panel()
 
 
@@ -1905,18 +1612,10 @@ class RiddleImagesModal(Modal):
             await self.panel.safe_edit_panel()
             return
 
-        good = await self.panel.cog.repo.set_riddle_images_by_id_open(
-            guild_id=interaction.guild.id,
-            riddle_id=self.riddle_id,
-            riddle_image_url=r_img,
-            solution_image_url=s_img,
-            user_id=interaction.user.id,
-        )
-        self.panel.last_info = "✅ Images updated." if good else "⚠️ Riddle is no longer open."
+        good = await self.panel.cog.repo.set_riddle_images_by_id_open(interaction.guild.id, self.riddle_id, r_img, s_img, interaction.user.id)
+        self.panel.last_info = "✅ Images updated." if good else "⚠️ Riddle no longer open."
         if good and await self.panel.cog.repo.is_enabled(interaction.guild.id):
             await self.panel.cog.enforce_enabled_state(interaction.guild.id, allow_ping=False, force_repost=False)
-
-        await self.panel.refresh_data()
         await self.panel.safe_edit_panel()
 
 
@@ -1927,7 +1626,7 @@ class RiddlePingRolesModal(Modal):
         self.riddle_id = riddle_id
         current_ids = parse_csv_role_ids(current_csv)[:MAX_EXTRA_PING_ROLES]
         self.roles_input = TextInput(
-            label="Mentions / IDs / role names (max 3)",
+            label="Mentions / IDs / names (max 3)",
             default=", ".join(str(x) for x in current_ids),
             required=False,
             max_length=500,
@@ -1942,20 +1641,12 @@ class RiddlePingRolesModal(Modal):
         if not ok:
             return
 
-        ids = parse_role_input(self.roles_input.value or "", interaction.guild, max_roles=MAX_EXTRA_PING_ROLES)
+        ids = parse_role_input(self.roles_input.value or "", interaction.guild, MAX_EXTRA_PING_ROLES)
         csv = ",".join(str(i) for i in ids) if ids else None
-
-        good = await self.panel.cog.repo.set_riddle_mentions_by_id_open(
-            guild_id=interaction.guild.id,
-            riddle_id=self.riddle_id,
-            mention_role_ids_csv=csv,
-            user_id=interaction.user.id,
-        )
-        self.panel.last_info = "✅ Ping roles updated." if good else "⚠️ Riddle is no longer open."
+        good = await self.panel.cog.repo.set_riddle_mentions_by_id_open(interaction.guild.id, self.riddle_id, csv, interaction.user.id)
+        self.panel.last_info = "✅ Ping roles updated." if good else "⚠️ Riddle no longer open."
         if good and await self.panel.cog.repo.is_enabled(interaction.guild.id):
             await self.panel.cog.enforce_enabled_state(interaction.guild.id, allow_ping=False, force_repost=False)
-
-        await self.panel.refresh_data()
         await self.panel.safe_edit_panel()
 
 
@@ -1977,7 +1668,6 @@ class RiddleAdminPanelView(View):
     async def refresh_data(self):
         self.slot_map = await self.cog.repo.open_slot_map(self.guild_id)
         self.state = await self.cog.repo.get_state_row(self.guild_id)
-        self.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, self.selected_slot))
 
     async def rebuild_items(self):
         self.clear_items()
@@ -1986,11 +1676,12 @@ class RiddleAdminPanelView(View):
         self.add_item(PanelButton(self, "✏️ Edit Content", "edit_content", 1))
         self.add_item(PanelButton(self, "🖼️ Edit Images", "edit_images", 1))
         self.add_item(PanelButton(self, "🎯 Edit Ping Roles", "edit_mentions", 1))
-        self.add_item(PanelButton(self, "🗑️ Delete Slot", "delete_slot", 1, style=discord.ButtonStyle.danger))
+        self.add_item(PanelButton(self, "↘ Move to End", "move_to_end", 1, style=discord.ButtonStyle.secondary))
+        self.add_item(PanelButton(self, "🗑️ Delete Slot", "delete_slot", 2, style=discord.ButtonStyle.danger))
         self.add_item(PanelButton(self, "🔴 Turn OFF" if enabled else "🟢 Turn ON", "toggle", 2, style=discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success))
-        self.add_item(PanelButton(self, "📢 Post Now", "post_now", 2))
-        self.add_item(PanelButton(self, "🔒 Close Active", "close_active", 2, style=discord.ButtonStyle.danger))
-        self.add_item(PanelButton(self, "🔄 Refresh", "refresh", 2, style=discord.ButtonStyle.secondary))
+        self.add_item(PanelButton(self, "📢 Post Now", "post_now", 3))
+        self.add_item(PanelButton(self, "🔒 Close Active", "close_active", 3, style=discord.ButtonStyle.danger))
+        self.add_item(PanelButton(self, "🔄 Refresh", "refresh", 3, style=discord.ButtonStyle.secondary))
 
     async def build_embeds(self, guild: Optional[discord.Guild]) -> list[discord.Embed]:
         enabled = bool(to_int(self.state.get("is_enabled"), 0))
@@ -1998,7 +1689,7 @@ class RiddleAdminPanelView(View):
 
         main = discord.Embed(
             title="🗂️ Riddle Control Center",
-            description="Ping order: Base role first + up to 3 extra roles",
+            description="10 slots enabled • Base ping + up to 3 extra roles",
             color=discord.Color.green() if enabled else discord.Color.orange(),
         )
         main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
@@ -2031,21 +1722,7 @@ class RiddleAdminPanelView(View):
         preview.add_field(name="Riddle Image URL", value=clamp_embed_value(r_url or "not set"), inline=False)
         preview.add_field(name="Solution Image URL", value=clamp_embed_value(s_url or "not set"), inline=False)
 
-        e_r = discord.Embed(title="🖼️ Riddle Image (thumbnail)", color=discord.Color.blurple())
-        if is_http_url(r_url):
-            e_r.set_thumbnail(url=r_url)
-            e_r.description = "Current riddle image"
-        else:
-            e_r.description = "No riddle image set."
-
-        e_s = discord.Embed(title="🧠 Solution Image (thumbnail)", color=discord.Color.blurple())
-        if is_http_url(s_url):
-            e_s.set_thumbnail(url=s_url)
-            e_s.description = "Current solution image"
-        else:
-            e_s.description = "No solution image set."
-
-        return [main, preview, e_r, e_s]
+        return [main, preview]
 
     async def safe_edit_panel(self):
         if not self.message:
@@ -2079,7 +1756,7 @@ class RiddleAdminPanelView(View):
                 ok = await safe_defer(interaction)
                 if not ok:
                     return
-                self.last_info = "⚠️ Slot is empty."
+                self.last_info = "⚠️ Slot empty."
                 await self.safe_edit_panel()
                 return
             await interaction.response.send_modal(RiddleImagesModal(self, self.selected_slot, to_int(row["id"], 0), row))
@@ -2090,7 +1767,7 @@ class RiddleAdminPanelView(View):
                 ok = await safe_defer(interaction)
                 if not ok:
                     return
-                self.last_info = "⚠️ Slot is empty."
+                self.last_info = "⚠️ Slot empty."
                 await self.safe_edit_panel()
                 return
             await interaction.response.send_modal(RiddlePingRolesModal(self, self.selected_slot, to_int(row["id"], 0), row.get("mention_role_ids")))
@@ -2099,11 +1776,26 @@ class RiddleAdminPanelView(View):
         ok = await safe_defer(interaction)
         if not ok:
             return
-
         gid = interaction.guild.id
 
         if action == "refresh":
-            self.last_info = "Refreshed."
+            await self.cog.normalize_after_structure_change(gid)  # close gaps
+            if await self.cog.repo.is_enabled(gid):
+                await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
+            self.last_info = "✅ Refreshed + gaps compacted."
+            await self.safe_edit_panel()
+            return
+
+        if action == "move_to_end":
+            if not row:
+                self.last_info = "⚠️ Slot empty."
+                await self.safe_edit_panel()
+                return
+            moved = await self.cog.repo.move_open_riddle_to_end(gid, to_int(row["id"], 0))
+            await self.cog.normalize_after_structure_change(gid)
+            if await self.cog.repo.is_enabled(gid):
+                await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
+            self.last_info = "✅ Moved to end." if moved else "⚠️ Move failed."
             await self.safe_edit_panel()
             return
 
@@ -2112,10 +1804,7 @@ class RiddleAdminPanelView(View):
                 self.last_info = "⚠️ Slot already empty."
             else:
                 closed = await self.cog.repo.close_open_riddle_by_id(gid, to_int(row["id"], 0), interaction.user.id)
-                self.last_info = "✅ Deleted." if closed else "⚠️ Riddle already closed."
-                if closed:
-                    await self.cog.cleanup_vote_messages_for_riddle(to_int(row["id"], 0))
-            await self.cog.repo.shift_open_slots_left(gid)
+                self.last_info = "✅ Deleted." if closed else "⚠️ Already closed."
             await self.cog.normalize_after_structure_change(gid)
             if await self.cog.repo.is_enabled(gid):
                 await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
@@ -2135,7 +1824,8 @@ class RiddleAdminPanelView(View):
                     self.last_info = "⚠️ Slot 1 empty."
                 else:
                     await self.cog.repo.set_enabled(gid, True)
-                    self.last_info = f"✅ ON ({await self.cog.publish_slot1_post(gid, force_repost=True, allow_role_ping=True)})"
+                    res = await self.cog.publish_slot1_post(gid, force_repost=True, allow_role_ping=True)
+                    self.last_info = f"✅ ON ({res})"
             await self.safe_edit_panel()
             return
 
@@ -2145,7 +1835,8 @@ class RiddleAdminPanelView(View):
                 self.last_info = "⚠️ Slot 1 empty."
             else:
                 await self.cog.repo.set_enabled(gid, True)
-                self.last_info = f"✅ Post now: {await self.cog.publish_slot1_post(gid, force_repost=True, allow_role_ping=True)}"
+                res = await self.cog.publish_slot1_post(gid, force_repost=True, allow_role_ping=True)
+                self.last_info = f"✅ Post now: {res}"
             await self.safe_edit_panel()
             return
 
@@ -2154,13 +1845,10 @@ class RiddleAdminPanelView(View):
             if not r:
                 self.last_info = "⚠️ No active slot 1."
             else:
-                await self.cog.cleanup_vote_messages_for_riddle(to_int(r["id"], 0))
-                await self.cog.update_original_post_closed(r)
-                await self.cog.repo.shift_open_slots_left(gid)
                 await self.cog.normalize_after_structure_change(gid)
                 await self.cog.repo.set_enabled(gid, False)
                 await self.cog.remove_active_riddle_posts(gid)
-                self.last_info = "✅ Closed active."
+                self.last_info = "✅ Active riddle closed."
             await self.safe_edit_panel()
             return
 
@@ -2177,10 +1865,10 @@ class SlotSelectPanel(Select):
 
     async def callback(self, interaction: Interaction):
         self.panel.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, to_int(self.values[0], 1)))
-        self.panel.last_info = f"Slot {self.panel.selected_slot} selected."
         ok = await safe_defer(interaction)
         if not ok:
             return
+        self.panel.last_info = f"Selected slot {self.panel.selected_slot}."
         await self.panel.safe_edit_panel()
 
 
@@ -2204,13 +1892,7 @@ class ChampionsImportModal(Modal):
         super().__init__(title=f"Import Champions JSON ({mode})")
         self.cog = cog
         self.mode = mode
-        self.payload = TextInput(
-            label="Paste JSON",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=4000,
-            placeholder='{"123456789012345678":{"solved":12,"xp":900}}',
-        )
+        self.payload = TextInput(label="Paste JSON", style=discord.TextStyle.paragraph, required=True, max_length=4000)
         self.add_item(self.payload)
 
     def parse_rows(self, raw: str) -> list[tuple[int, int, int]]:
@@ -2280,7 +1962,7 @@ class ChampionsImportModal(Modal):
 
 
 class ChampionsView(View):
-    def __init__(self, *, entries: list[tuple[int, int, float, int]], total_solved: int, name_cache: dict[int, str], avatar_cache: dict[int, str], image_url: Optional[str], owner_id: Optional[int]):
+    def __init__(self, entries: list[tuple[int, int, float, int]], total_solved: int, name_cache: dict[int, str], avatar_cache: dict[int, str], image_url: Optional[str], owner_id: Optional[int]):
         super().__init__(timeout=300)
         self.entries = entries
         self.total_solved = total_solved
