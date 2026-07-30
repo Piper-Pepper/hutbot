@@ -1,4 +1,4 @@
-# riddle_core.py  (Teil 1/3)
+# riddle_core.py  (Teil 1/2)
 from __future__ import annotations
 
 import os
@@ -67,14 +67,11 @@ URL_RE = re.compile(r"(https?://\S+)")
 def now_iso_utc() -> str:
     return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-
 def now_date_str() -> str:
     return dt.datetime.now().strftime("%Y/%m/%d")
 
-
 def footer_text(guild: Optional[discord.Guild]) -> str:
     return f"{guild.name if guild else 'Unknown Guild'} • {now_date_str()}"
-
 
 def clean_value(v: Optional[str]) -> Optional[str]:
     if v is None:
@@ -82,13 +79,11 @@ def clean_value(v: Optional[str]) -> Optional[str]:
     vv = v.strip()
     return vv if vv else None
 
-
 def to_int(v: Any, default: int = 0) -> int:
     try:
         return int(v)
     except (TypeError, ValueError):
         return default
-
 
 def safe_int(v: Any, default: Optional[int] = None) -> Optional[int]:
     try:
@@ -96,29 +91,23 @@ def safe_int(v: Any, default: Optional[int] = None) -> Optional[int]:
     except (TypeError, ValueError):
         return default
 
-
 def is_http_url(url: Optional[str]) -> bool:
     return bool(url and isinstance(url, str) and url.startswith(("http://", "https://")))
-
 
 def truncate_text(text: str, max_len: int = 180) -> str:
     if text and len(text) > max_len:
         return text[:max_len] + "…"
     return text or ""
 
-
 def clamp_embed_value(text: Optional[str], limit: int = 1024) -> str:
     t = (text or "").strip()
     return t if len(t) <= limit else t[: limit - 1] + "…"
-
 
 def clamp_embed_description(text: Optional[str], limit: int = 4096) -> str:
     t = (text or "").strip()
     return t if len(t) <= limit else t[: limit - 1] + "…"
 
-
 def extract_first_url(text: str) -> tuple[str, Optional[str]]:
-    """Return (text_without_url, first_url_or_None)."""
     text = text or ""
     m = URL_RE.search(text)
     if not m:
@@ -126,7 +115,6 @@ def extract_first_url(text: str) -> tuple[str, Optional[str]]:
     link = m.group(1)
     cleaned = URL_RE.sub("", text, count=1).strip()
     return cleaned, link
-
 
 def parse_csv_role_ids(s: Optional[str]) -> list[int]:
     if not s:
@@ -147,12 +135,10 @@ def parse_csv_role_ids(s: Optional[str]) -> list[int]:
         out.append(rid)
     return out
 
-
 def parse_role_input(raw: str, guild: discord.Guild, max_roles: int = MAX_EXTRA_PING_ROLES) -> list[int]:
     if not raw:
         return []
     candidates: list[int] = []
-
     for m in ROLE_MENTION_RE.findall(raw):
         try:
             candidates.append(int(m))
@@ -163,7 +149,6 @@ def parse_role_input(raw: str, guild: discord.Guild, max_roles: int = MAX_EXTRA_
             candidates.append(int(m))
         except ValueError:
             pass
-
     tokens = [t.strip().lstrip("@") for t in re.split(r"[,;\n]+", raw) if t.strip()]
     for token in tokens:
         if re.fullmatch(r"\d{17,22}", token):
@@ -180,7 +165,6 @@ def parse_role_input(raw: str, guild: discord.Guild, max_roles: int = MAX_EXTRA_
         contains = [r for r in guild.roles if not r.is_default() and tl in r.name.lower()]
         if contains:
             candidates.append(contains[0].id)
-
     out: list[int] = []
     seen: set[int] = set()
     for rid in candidates:
@@ -197,7 +181,6 @@ def parse_role_input(raw: str, guild: discord.Guild, max_roles: int = MAX_EXTRA_
             break
     return out
 
-
 def unique_role_mentions(guild: Optional[discord.Guild], *role_ids: Optional[int]) -> list[str]:
     if guild is None:
         return []
@@ -213,12 +196,10 @@ def unique_role_mentions(guild: Optional[discord.Guild], *role_ids: Optional[int
             out.append(role.mention)
     return out
 
-
 def build_xpadd_commands(member_mention: str, member_name: str, xp_amount: int) -> tuple[str, str]:
     xp = max(0, to_int(xp_amount, 0))
     safe_name = (member_name or "UnknownUser").replace('"', "").strip() or "UnknownUser"
     return f'/xpadd "{safe_name}" {xp}', f"/xpadd {member_mention} {xp}"
-
 
 async def safe_defer(interaction: Interaction, *, ephemeral: bool = False, thinking: bool = False) -> bool:
     if interaction.response.is_done():
@@ -228,7 +209,6 @@ async def safe_defer(interaction: Interaction, *, ephemeral: bool = False, think
         return True
     except (discord.NotFound, discord.HTTPException):
         return False
-
 
 def member_has_role(member: discord.abc.User, role_id: int) -> bool:
     return isinstance(member, discord.Member) and any(r.id == role_id for r in member.roles)
@@ -262,6 +242,7 @@ async def send_access_denied(interaction: Interaction):
     else:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # =============================================================================
 # DB REPO
 # =============================================================================
@@ -270,7 +251,6 @@ class RiddleRepo:
         self.db: Optional[aiosqlite.Connection] = None
         self.lock = asyncio.Lock()
 
-    # -- lifecycle ---------------------------------------------------------
     async def start(self):
         Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
         self.db = await aiosqlite.connect(DB_PATH)
@@ -327,18 +307,12 @@ class RiddleRepo:
             closed_by INTEGER,
             closed_at TEXT
         );
-
         CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_slot_open
-        ON riddles(guild_id, slot_no)
-        WHERE status='open' AND slot_no IS NOT NULL;
-
+        ON riddles(guild_id, slot_no) WHERE status='open' AND slot_no IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_active_one
-        ON riddles(guild_id)
-        WHERE status='open' AND is_active=1;
-
+        ON riddles(guild_id) WHERE status='open' AND is_active=1;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_posted_msg
-        ON riddles(posted_message_id)
-        WHERE posted_message_id IS NOT NULL;
+        ON riddles(posted_message_id) WHERE posted_message_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -353,10 +327,8 @@ class RiddleRepo:
             voted_at TEXT,
             FOREIGN KEY(riddle_id) REFERENCES riddles(id) ON DELETE CASCADE
         );
-
         CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_vote_msg
-        ON submissions(vote_message_id)
-        WHERE vote_message_id IS NOT NULL;
+        ON submissions(vote_message_id) WHERE vote_message_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS user_stats (
             guild_id INTEGER NOT NULL,
@@ -386,18 +358,15 @@ class RiddleRepo:
             message_id INTEGER NOT NULL,
             created_at TEXT NOT NULL
         );
-
         CREATE INDEX IF NOT EXISTS idx_wrong_riddle ON riddle_wrong_posts(riddle_id);
         CREATE INDEX IF NOT EXISTS idx_wrong_guild ON riddle_wrong_posts(guild_id);
         """
         async with self.lock:
             await self.db.executescript(schema)
-            # migration from older schema (in case an old DB exists)
             await self._add_col_if_missing("riddles", "solved_post_channel_id", "solved_post_channel_id INTEGER")
             await self._add_col_if_missing("riddles", "solved_post_message_id", "solved_post_message_id INTEGER")
             await self.db.commit()
 
-    # -- low level ---------------------------------------------------------
     async def _one(self, query: str, params: tuple = ()) -> Optional[dict]:
         if self.db is None:
             return None
@@ -427,7 +396,7 @@ class RiddleRepo:
             await cur.close()
         return rc, lid
 
-    # -- guild state / cache ----------------------------------------------
+# -- guild state / cache ----------------------------------------------
     async def ensure_guild_state(self, guild_id: int):
         await self._exec(
             "INSERT INTO guild_riddle_state (guild_id, is_enabled, updated_at) VALUES (?, 0, ?) "
@@ -623,9 +592,8 @@ class RiddleRepo:
         )
         return rc > 0
 
-# -- slot geometry -----------------------------------------------------
+    # -- slot geometry -----------------------------------------------------
     async def sync_open_slot_numbers(self, guild_id: int, solved_base: int):
-        """Two-phase renumber to avoid transient unique collisions."""
         if self.db is None:
             return
         base = max(0, to_int(solved_base, 0))
@@ -662,7 +630,6 @@ class RiddleRepo:
                 )
                 rows = await cur.fetchall()
                 await cur.close()
-
                 await self.db.execute(
                     "UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? "
                     "WHERE guild_id=? AND status='open'",
@@ -704,7 +671,6 @@ class RiddleRepo:
                 )
                 rows = await cur.fetchall()
                 await cur.close()
-
                 ids = [to_int(r["id"], 0) for r in rows if to_int(r["id"], 0) > 0]
                 if riddle_id not in ids:
                     await self.db.rollback()
@@ -712,10 +678,8 @@ class RiddleRepo:
                 if len(ids) <= 1:
                     await self.db.rollback()
                     return True
-
                 ids.remove(riddle_id)
                 ids.append(riddle_id)
-
                 now = now_iso_utc()
                 await self.db.execute(
                     "UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? "
@@ -813,8 +777,7 @@ class RiddleRepo:
         )
 
     # -- wrong posts (public channel messages) -----------------------------
-    async def add_wrong_post(self, guild_id: int, riddle_id: int,
-                             channel_id: int, message_id: int):
+    async def add_wrong_post(self, guild_id: int, riddle_id: int, channel_id: int, message_id: int):
         await self._exec(
             "INSERT INTO riddle_wrong_posts (guild_id, riddle_id, channel_id, message_id, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -828,10 +791,7 @@ class RiddleRepo:
         )
 
     async def clear_wrong_posts_for_riddle(self, riddle_id: int):
-        await self._exec(
-            "DELETE FROM riddle_wrong_posts WHERE riddle_id=?",
-            (riddle_id,),
-        )
+        await self._exec("DELETE FROM riddle_wrong_posts WHERE riddle_id=?", (riddle_id,))
 
     # -- submissions -------------------------------------------------------
     async def create_submission_pending(self, guild_id: int, riddle_id: int, user_id: int, answer: str) -> Optional[int]:
@@ -843,9 +803,7 @@ class RiddleRepo:
         return lid if lid > 0 else None
 
     async def set_submission_vote_message(self, submission_id: int, vote_message_id: int) -> bool:
-        rc, _ = await self._exec(
-            "UPDATE submissions SET vote_message_id=? WHERE id=?", (vote_message_id, submission_id)
-        )
+        rc, _ = await self._exec("UPDATE submissions SET vote_message_id=? WHERE id=?", (vote_message_id, submission_id))
         return rc > 0
 
     async def delete_submission(self, submission_id: int):
@@ -913,7 +871,6 @@ class RiddleRepo:
                 raise
 
     async def apply_solve_xp(self, guild_id: int, user_id: int, xp_gain: int):
-        """Called AFTER approve_submission if solver is not excluded."""
         xp_gain = max(0, to_int(xp_gain, 0))
         await self._exec(
             """
@@ -992,14 +949,12 @@ class RiddleRepo:
                     await self.db.rollback()
                     return "already_done", data
 
-                # cancel any other pending submissions for this riddle
                 await self.db.execute(
                     "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? "
                     "WHERE riddle_id=? AND status='pending' AND id<>?",
                     (moderator_id, now, rid, sid),
                 )
 
-                # mark riddle solved
                 cur = await self.db.execute(
                     "UPDATE riddles SET status='solved', slot_no=NULL, is_active=0, "
                     "solved_by=?, solved_at=?, updated_at=? WHERE id=? AND status='open'",
@@ -1014,13 +969,9 @@ class RiddleRepo:
                 await self.db.commit()
 
                 ctx = {
-                    "submission_id": sid,
-                    "guild_id": gid,
-                    "riddle_id": rid,
-                    "solver_user_id": solver_uid,
-                    "xp_gain": xp_gain,
-                    "answer": data.get("answer"),
-                    "solution": data.get("solution"),
+                    "submission_id": sid, "guild_id": gid, "riddle_id": rid,
+                    "solver_user_id": solver_uid, "xp_gain": xp_gain,
+                    "answer": data.get("answer"), "solution": data.get("solution"),
                     "riddle_text": data.get("riddle_text"),
                     "mention_role_ids": data.get("mention_role_ids"),
                     "image_url": data.get("image_url"),
