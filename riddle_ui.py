@@ -90,7 +90,7 @@ def build_new_solved_post_embed(
 ) -> discord.Embed:
     """
     Standalone solved post:
-      - riddle text truncated at 150 chars
+      - riddle text truncated at 80 chars
       - riddle image as THUMBNAIL
       - solution image as BIG IMAGE
       - user-submitted (winning) answer field
@@ -102,7 +102,7 @@ def build_new_solved_post_embed(
     sol_text_raw = (riddle.get("solution") or "").strip()
     sol_text, more_url = extract_first_url(sol_text_raw)
 
-    riddle_text = truncate_text(riddle.get("text") or "*No text*", 150)
+    riddle_text = truncate_text(riddle.get("text") or "*No text*", 80)
 
     e = discord.Embed(
         title=f"🎉 Riddle No.{r_no} — Solved!",

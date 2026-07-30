@@ -368,7 +368,7 @@ class RiddleCog(commands.Cog):
           2)  post NEW solved post pinging Base + Extras + Winner. Solved post:
               - riddle image as THUMBNAIL
               - solution image as BIG IMAGE
-              - riddle text truncated at 150 chars
+              - riddle text truncated at 80 chars
               - shows the user's submitted (winning) answer
           3)  cleanup other pending vote messages for this riddle
           4)  apply XP + solved-count only if solver not excluded
