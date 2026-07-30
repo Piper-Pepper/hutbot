@@ -66,7 +66,6 @@ NSFW_CHANNELS = [
     1415769966573260970,
     1416267309399670917,
     1416267383160442901,
-    1416468498305126522,
     1346843244067160074,
     1477717109873049822,
 ]
@@ -84,15 +83,15 @@ RECENT_SCAN_LIMIT = 12
 # TIERS / LIMITS
 # =================================================
 TIER_RULES: dict[int, dict[str, int]] = {
-    1: {"role_id": 1377051179615522926, "level": 4, "image_limit": 5, "video_budget_sec": 10},
-    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 10, "video_budget_sec": 15},
-    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 15, "video_budget_sec": 20},
-    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 20, "video_budget_sec": 25},
-    5: {"role_id": 1375666588404940830, "level": 43, "image_limit": 30, "video_budget_sec": 30},
-    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69, "video_budget_sec": 40},
+    1: {"role_id": 1377051179615522926, "level": 3, "image_limit": 10, "video_budget_sec": 10},
+    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 15, "video_budget_sec": 20},
+    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 20, "video_budget_sec": 30},
+    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 25, "video_budget_sec": 35},
+    5: {"role_id": 1375666588404940830, "level": 43, "image_limit": 30, "video_budget_sec": 40},
+    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69, "video_budget_sec": 50},
     7: {"role_id": 1346414581643219029, "level": 99, "image_limit": 300, "video_budget_sec": 300},
 }
-DEFAULT_IMAGE_LIMIT_24H = 2
+DEFAULT_IMAGE_LIMIT_24H = 5
 RESOLUTION_MIN_TIER = {"1K": 0, "2K": 1, "4K": 2}
 
 MAX_VIDEO_RENDER_SECONDS = 15

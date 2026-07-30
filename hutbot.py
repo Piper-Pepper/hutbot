@@ -80,6 +80,7 @@ async def main():
             "reset",
             "hutvote",
             "riddle",
+            "venice_face_cog",
             "hutthreadvote",
         ]
 
