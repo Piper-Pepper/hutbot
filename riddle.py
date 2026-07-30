@@ -1,4 +1,4 @@
-# riddle.py  (Teil 1/3)
+# riddle.py  (Teil 1/2)
 from __future__ import annotations
 
 import asyncio
@@ -9,35 +9,14 @@ from discord import app_commands, Interaction, Role
 from discord.ext import commands
 
 from riddle_core import (
-    # config
-    RIDDLE_CHANNEL_ID,
-    VOTE_CHANNEL_ID,
-    XP_NOTIFY_CHANNEL_ID,
-    RIDDLE_ROLE_ID,
-    RIDDLE_MANAGER_ROLE_ID,
-    EXCLUDED_COUNT_ROLE_ID,
-    EXCLUDED_GAMEMASTER_ROLE_ID,
-    EXTRA_EXCLUDED_ROLE_IDS_CSV,
-    DEFAULT_IMAGE_URL,
-    MAX_RIDDLE_SLOTS,
-    MAX_EXTRA_PING_ROLES,
-    AUTO_SCAN_SECONDS,
-    SUBMIT_BUTTON_ID,
-    VOTE_UP_BUTTON_ID,
-    VOTE_DOWN_BUTTON_ID,
-    # utils
-    logger,
-    to_int,
-    safe_int,
-    is_http_url,
-    unique_role_mentions,
-    parse_csv_role_ids,
-    build_xpadd_commands,
-    footer_text,
-    riddle_manager_required,
-    send_access_denied,
-    MissingRiddleManagerRole,
-    # repo
+    RIDDLE_CHANNEL_ID, VOTE_CHANNEL_ID, XP_NOTIFY_CHANNEL_ID,
+    RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID,
+    EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, EXTRA_EXCLUDED_ROLE_IDS_CSV,
+    DEFAULT_IMAGE_URL, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES, AUTO_SCAN_SECONDS,
+    SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
+    logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
+    build_xpadd_commands, footer_text,
+    riddle_manager_required, send_access_denied, MissingRiddleManagerRole,
     RiddleRepo,
 )
 
@@ -47,6 +26,7 @@ from riddle_ui import (
     build_new_solved_post_embed,
     build_wrong_post_embed,
     build_xp_hint_embed,
+    build_xp_reminder_embed,
     SubmitButtonView,
     VoteButtons,
     RiddleAdminPanelView,
@@ -92,7 +72,6 @@ class RiddleCog(commands.Cog):
             total = sum(s for _, s, _ in rows)
             await self.repo.set_cached_solved_total(guild_id, total)
             return total
-
         total = 0
         for uid, solved, _xp in rows:
             if await self.user_is_excluded(guild, uid):
@@ -130,9 +109,7 @@ class RiddleCog(commands.Cog):
         except Exception:
             return None
 
-    async def fetch_message_safe(
-        self, channel_id: Optional[int], message_id: Optional[int]
-    ) -> Optional[discord.Message]:
+    async def fetch_message_safe(self, channel_id: Optional[int], message_id: Optional[int]) -> Optional[discord.Message]:
         cid = safe_int(channel_id, None)
         mid = safe_int(message_id, None)
         if not cid or not mid:
@@ -145,10 +122,7 @@ class RiddleCog(commands.Cog):
         except Exception:
             return None
 
-    async def resolve_user_label(
-        self, guild: Optional[discord.Guild], uid: int
-    ) -> tuple[str, str, Optional[str]]:
-        """Return (mention, display_string, avatar_url)."""
+    async def resolve_user_label(self, guild: Optional[discord.Guild], uid: int) -> tuple[str, str, Optional[str]]:
         mention = f"<@{uid}>"
         if guild:
             m = guild.get_member(uid)
@@ -170,11 +144,10 @@ class RiddleCog(commands.Cog):
         return mention, f"User {uid}", None
 
     # ==========================================================================
-    # ping content & channel cleanup helpers
+    # ping content helper
     # ==========================================================================
-    def build_ping_content(
-        self, guild: Optional[discord.Guild], mention_role_ids_csv: Optional[str]
-    ) -> Optional[str]:
+    def build_ping_content(self, guild: Optional[discord.Guild], mention_role_ids_csv: Optional[str]) -> Optional[str]:
+        """Base role + up to MAX_EXTRA_PING_ROLES extra roles as a mention string."""
         extra: list[int] = []
         for rid in parse_csv_role_ids(mention_role_ids_csv):
             if rid == RIDDLE_ROLE_ID:
@@ -186,6 +159,9 @@ class RiddleCog(commands.Cog):
         mentions = unique_role_mentions(guild, RIDDLE_ROLE_ID, *extra)
         return " ".join(dict.fromkeys(m for m in mentions if m)) or None
 
+    # ==========================================================================
+    # channel cleanup helpers
+    # ==========================================================================
     def _msg_has_custom_id(self, msg: discord.Message, custom_ids: set[str]) -> bool:
         try:
             for row in (msg.components or []):
@@ -196,10 +172,7 @@ class RiddleCog(commands.Cog):
             pass
         return False
 
-    async def delete_button_messages_in_channel(
-        self, channel_id: int, custom_ids: set[str], limit: int = 3000
-    ):
-        """Delete our own bot messages in the channel that carry these button ids."""
+    async def delete_button_messages_in_channel(self, channel_id: int, custom_ids: set[str], limit: int = 3000):
         ch = await self.resolve_channel(channel_id)
         me = self.bot.user
         if ch is None or not hasattr(ch, "history") or me is None:
@@ -216,9 +189,7 @@ class RiddleCog(commands.Cog):
         except Exception:
             pass
 
-    async def cleanup_vote_messages_for_riddle(
-        self, riddle_id: int, exclude_submission_id: Optional[int] = None
-    ):
+    async def cleanup_vote_messages_for_riddle(self, riddle_id: int, exclude_submission_id: Optional[int] = None):
         rows = await self.repo.list_vote_messages_for_riddle(riddle_id)
         if not rows:
             return
@@ -239,8 +210,6 @@ class RiddleCog(commands.Cog):
                 pass
 
     async def cleanup_wrong_posts_for_riddle(self, riddle_id: int):
-        """Delete all previously posted 'wrong answer' messages for this riddle so
-        that only the solved post + edited original remain visible."""
         rows = await self.repo.list_wrong_posts_for_riddle(riddle_id)
         for row in rows:
             cid = safe_int(row.get("channel_id"), None)
@@ -274,9 +243,7 @@ class RiddleCog(commands.Cog):
                 pass
         await self.repo.clear_all_open_post_refs(guild_id)
 
-    async def post_xp_award_hint(
-        self, guild: Optional[discord.Guild], user_id: int, xp_gain: int
-    ):
+    async def post_xp_award_hint(self, guild: Optional[discord.Guild], user_id: int, xp_gain: int):
         if XP_NOTIFY_CHANNEL_ID <= 0 or xp_gain <= 0:
             return
         ch = await self.resolve_channel(XP_NOTIFY_CHANNEL_ID)
@@ -286,24 +253,34 @@ class RiddleCog(commands.Cog):
         cmd_name, cmd_mention = build_xpadd_commands(mention, name, xp_gain)
         embed = build_xp_hint_embed(guild, mention, xp_gain, cmd_name, cmd_mention, avatar)
         try:
-            await ch.send(
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions(roles=False, users=False, everyone=False),
-            )
+            await ch.send(embed=embed,
+                          allowed_mentions=discord.AllowedMentions(roles=False, users=False, everyone=False))
         except Exception:
             pass
+
+    async def post_xp_reminder_to_vote_channel(self, guild: Optional[discord.Guild],
+                                               user_id: int, xp_gain: int, riddle_no: int):
+        if VOTE_CHANNEL_ID <= 0 or xp_gain <= 0:
+            return
+        ch = await self.resolve_channel(VOTE_CHANNEL_ID)
+        if ch is None or not hasattr(ch, "send"):
+            return
+        mention, name, avatar = await self.resolve_user_label(guild, user_id)
+        embed = build_xp_reminder_embed(guild, mention, name, avatar, xp_gain, riddle_no)
+        try:
+            await ch.send(embed=embed,
+                          allowed_mentions=discord.AllowedMentions(roles=False, users=False, everyone=False))
+        except Exception:
+            logger.exception("Failed to post XP reminder to vote channel")
 
 # ==========================================================================
     # POSTING: active riddle in Slot 1
     # ==========================================================================
-    async def publish_slot1_post(
-        self, guild_id: int, *, force_repost: bool, allow_role_ping: bool
-    ) -> str:
+    async def publish_slot1_post(self, guild_id: int, *, force_repost: bool, allow_role_ping: bool) -> str:
         await self.normalize_after_structure_change(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
         if not slot1:
             return "no_slot1"
-
         guild = self.bot.get_guild(guild_id)
         ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
         if ch is None or not hasattr(ch, "send"):
@@ -311,9 +288,7 @@ class RiddleCog(commands.Cog):
 
         embed = build_active_riddle_embed(guild, slot1)
         content = self.build_ping_content(guild, slot1.get("mention_role_ids"))
-        existing = await self.fetch_message_safe(
-            slot1.get("posted_channel_id"), slot1.get("posted_message_id")
-        )
+        existing = await self.fetch_message_safe(slot1.get("posted_channel_id"), slot1.get("posted_message_id"))
 
         try:
             if existing and force_repost:
@@ -322,23 +297,17 @@ class RiddleCog(commands.Cog):
                 except Exception:
                     pass
                 existing = None
-
             if existing:
                 await existing.edit(
-                    content=content,
-                    embed=embed,
-                    view=SubmitButtonView(self),
+                    content=content, embed=embed, view=SubmitButtonView(self),
                     allowed_mentions=discord.AllowedMentions(
                         roles=allow_role_ping, users=False, everyone=False,
                     ),
                 )
                 await self.repo.clear_other_open_post_refs(guild_id, to_int(slot1["id"], 0))
                 return "updated"
-
             msg = await ch.send(
-                content=content,
-                embed=embed,
-                view=SubmitButtonView(self),
+                content=content, embed=embed, view=SubmitButtonView(self),
                 allowed_mentions=discord.AllowedMentions(
                     roles=allow_role_ping, users=False, everyone=False,
                 ),
@@ -350,43 +319,31 @@ class RiddleCog(commands.Cog):
             logger.exception("publish_slot1_post failed")
             return "error"
 
-    async def enforce_enabled_state(
-        self, guild_id: int, *, allow_ping: bool, force_repost: bool = False
-    ) -> str:
+    async def enforce_enabled_state(self, guild_id: int, *, allow_ping: bool, force_repost: bool = False) -> str:
         await self.normalize_after_structure_change(guild_id)
         enabled = await self.repo.is_enabled(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
-
         if not enabled:
             await self.remove_active_riddle_posts(guild_id)
             return "disabled"
-
         if not slot1:
-            # System says ON but nothing to post -> forcibly turn OFF for consistency
             await self.repo.set_enabled(guild_id, False)
             await self.remove_active_riddle_posts(guild_id)
             return "enabled_but_no_slot1"
-
-        return await self.publish_slot1_post(
-            guild_id, force_repost=force_repost, allow_role_ping=allow_ping,
-        )
+        return await self.publish_slot1_post(guild_id, force_repost=force_repost, allow_role_ping=allow_ping)
 
     async def repost_pending_votes(self):
-        """After a restart, re-post vote messages for still-pending submissions."""
         rows = await self.repo.pending_open_submissions()
         if not rows:
             return
         vote_channel = await self.resolve_channel(VOTE_CHANNEL_ID)
         if vote_channel is None or not hasattr(vote_channel, "send"):
             return
-
         from riddle_ui import build_vote_embed
-
         for row in rows:
             guild = self.bot.get_guild(to_int(row.get("guild_id"), 0))
             uid = to_int(row.get("user_id"), 0)
             _, uname, uavatar = await self.resolve_user_label(guild, uid)
-
             riddle_view = {
                 "text": row.get("riddle_text"),
                 "solution": row.get("solution"),
@@ -403,18 +360,21 @@ class RiddleCog(commands.Cog):
     # ==========================================================================
     # SOLVED FLOW  (👍 Correct)
     # ==========================================================================
-    async def finalize_correct(
-        self, guild: discord.Guild, ctx: dict, moderator: discord.Member
-    ):
+    async def finalize_correct(self, guild: discord.Guild, ctx: dict, moderator: discord.Member):
         """
-        After repo.approve_submission() ran:
-          1)  edit original riddle post -> SOLVED state (solution as spoiler, no big image, no submit btn)
+        Order of operations after repo.approve_submission() ran:
+          1)  edit original riddle post -> SOLVED state (solution as SPOILER, no big img, no submit btn)
           1b) DELETE all previously posted 'wrong answer' messages for this riddle
-          2)  post NEW solved post -> riddle image as THUMBNAIL, solution image as BIG image, XP, MORE link
+          2)  post NEW solved post pinging Base + Extras + Winner. Solved post:
+              - riddle image as THUMBNAIL
+              - solution image as BIG IMAGE
+              - riddle text truncated at 150 chars
+              - shows the user's submitted (winning) answer
           3)  cleanup other pending vote messages for this riddle
-          4)  apply XP/stats only if solver not excluded
-          5)  normalize slots + publish new slot 1 (if enabled)
-          6)  XP award hint
+          4)  apply XP + solved-count only if solver not excluded
+          5)  normalize slots + AUTO-STOP the system (turn OFF)
+          6)  XP reminder posted to VOTE channel (clickable /xp app command)
+          7)  optional XP award hint posted to XP_NOTIFY_CHANNEL_ID (if configured)
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -422,8 +382,9 @@ class RiddleCog(commands.Cog):
         solver_id = to_int(ctx.get("solver_user_id"), 0)
         xp_gain = max(0, to_int(ctx.get("xp_gain"), 0))
         solved_at = str(ctx.get("solved_at") or "")
+        submitted_answer = str(ctx.get("answer") or "")
 
-        # Reload the riddle so we have the latest image URLs / mentions / etc.
+        # Reload the riddle so we have the freshest state (images / mentions).
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "solution", "xp", "image_url", "solution_url",
                   "riddle_no", "posted_channel_id", "posted_message_id",
@@ -439,73 +400,79 @@ class RiddleCog(commands.Cog):
         )
         if original:
             try:
-                solved_embed = build_solved_edit_embed(
-                    guild, riddle_row, solver_mention, solved_at,
-                )
+                solved_embed = build_solved_edit_embed(guild, riddle_row, solver_mention, solved_at)
                 await original.edit(
-                    content=None,       # drop the ping content
+                    content=None,
                     embed=solved_embed,
-                    view=None,          # remove submit button
+                    view=None,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except Exception:
                 logger.exception("Failed to edit original riddle post to solved state")
 
         # ---- 1b) DELETE all previously posted wrong-answer messages ----
-        # Result: under the edited original, the next thing in the channel will be
-        # our new solved post (no clutter from prior wrong attempts).
         await self.cleanup_wrong_posts_for_riddle(rid)
 
-        # ---- 2) new solved post ----
+        # ---- 2) NEW solved post — pings BASE + EXTRAS + WINNER ----
         ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
         if ch is not None and hasattr(ch, "send"):
             try:
+                role_ping_str = self.build_ping_content(guild, riddle_row.get("mention_role_ids"))
+                content_parts = [p for p in (role_ping_str, solver_mention) if p]
+                solved_content = " ".join(content_parts) if content_parts else None
+
                 solved_post_embed = build_new_solved_post_embed(
-                    guild, riddle_row, solver_mention, solver_name, solver_avatar,
+                    guild, riddle_row,
+                    solver_mention, solver_name, solver_avatar,
+                    submitted_answer,
                 )
                 new_msg = await ch.send(
-                    content=solver_mention,     # congratulate the solver (single user ping)
+                    content=solved_content,
                     embed=solved_post_embed,
                     allowed_mentions=discord.AllowedMentions(
-                        users=True, roles=False, everyone=False,
+                        users=True, roles=True, everyone=False,
                     ),
                 )
                 await self.repo.set_solved_post_ref(rid, new_msg.channel.id, new_msg.id)
             except Exception:
                 logger.exception("Failed to post new solved message")
 
-        # ---- 3) cleanup other pending vote messages ----
+        # ---- 3) cleanup other pending vote messages for this riddle ----
         await self.cleanup_vote_messages_for_riddle(rid, exclude_submission_id=sid)
 
-        # ---- 4) XP / stats only if solver not excluded ----
+        # ---- 4) XP + solved-count only if solver is NOT excluded ----
         if solver_id > 0 and not await self.user_is_excluded(guild, solver_id):
             await self.repo.apply_solve_xp(gid, solver_id, xp_gain)
             await self.repo.inc_cached_solved_total(gid, 1)
         else:
             await self.rebuild_cached_solved_total_for_guild(gid)
 
-        # ---- 5) normalize + move next riddle into Slot 1 ----
+        # ---- 5) normalize + AUTO-STOP the system ----
         await self.normalize_after_structure_change(gid)
-        # clear stale references so the next slot1 publish doesn't try to edit a solved msg
         await self.repo.clear_all_open_post_refs(gid)
+        # Auto turn OFF the system after every solve. Managers must manually turn ON again.
+        await self.repo.set_enabled(gid, False)
+        # Ensure no lingering active riddle post remains for the (now) new Slot 1
+        await self.remove_active_riddle_posts(gid)
 
-        if await self.repo.is_enabled(gid):
-            await self.enforce_enabled_state(gid, allow_ping=True, force_repost=True)
+        # ---- 6) XP reminder in the VOTE channel ----
+        if solver_id > 0 and xp_gain > 0 and not await self.user_is_excluded(guild, solver_id):
+            await self.post_xp_reminder_to_vote_channel(
+                guild, solver_id, xp_gain, to_int(riddle_row.get("riddle_no"), 0),
+            )
 
-        # ---- 6) XP hint ----
+        # ---- 7) optional legacy XP hint channel ----
         if solver_id > 0 and xp_gain > 0 and not await self.user_is_excluded(guild, solver_id):
             await self.post_xp_award_hint(guild, solver_id, xp_gain)
 
     # ==========================================================================
     # WRONG FLOW  (👎 Wrong)
     # ==========================================================================
-    async def finalize_wrong(
-        self, guild: discord.Guild, ctx: dict, moderator: discord.Member
-    ):
+    async def finalize_wrong(self, guild: discord.Guild, ctx: dict, moderator: discord.Member):
         """
-        Riddle stays OPEN. Post a public wrong-answer message in the riddle channel
-        that pings the base role + the submitter. Message-ID is stored so we can
-        cleanup all these wrong posts once the riddle gets solved.
+        Riddle stays OPEN. Public wrong-answer message in the riddle channel.
+        ONLY the submitter is pinged (no base role, no extras).
+        Message-ID is stored so all wrong posts get deleted when the riddle is solved.
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -516,17 +483,14 @@ class RiddleCog(commands.Cog):
             if not riddle_row.get(k):
                 riddle_row[k] = ctx.get(k)
 
-        submitter_mention, submitter_name, submitter_avatar = await self.resolve_user_label(
-            guild, submitter_id,
-        )
+        submitter_mention, submitter_name, submitter_avatar = await self.resolve_user_label(guild, submitter_id)
 
         ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
         if ch is None or not hasattr(ch, "send"):
             return
 
-        # ping content: base role + the submitter
-        base_ping = f"<@&{RIDDLE_ROLE_ID}>" if RIDDLE_ROLE_ID else ""
-        content = " ".join(x for x in (base_ping, submitter_mention) if x) or None
+        # ONLY submitter is pinged (no base role, no extras)
+        content = submitter_mention if submitter_mention else None
 
         embed = build_wrong_post_embed(
             guild, riddle_row,
@@ -539,7 +503,7 @@ class RiddleCog(commands.Cog):
                 content=content,
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(
-                    roles=True, users=True, everyone=False,
+                    users=True, roles=False, everyone=False,
                 ),
             )
             # Remember so we can delete all wrong posts once this riddle gets solved
@@ -563,28 +527,21 @@ class RiddleCog(commands.Cog):
             await self.rebuild_cached_solved_total_for_guild(gid)
             await self.normalize_after_structure_change(gid)
 
-        # Delete old bot messages that still carry our button custom_ids so we
-        # guarantee fresh, working buttons after restart.
-        await self.delete_button_messages_in_channel(
-            RIDDLE_CHANNEL_ID, {SUBMIT_BUTTON_ID}, limit=3000,
-        )
+        await self.delete_button_messages_in_channel(RIDDLE_CHANNEL_ID, {SUBMIT_BUTTON_ID}, limit=3000)
         await self.delete_button_messages_in_channel(
             VOTE_CHANNEL_ID, {VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID}, limit=4000,
         )
 
-        # Reset the message-id refs so we don't try to edit deleted messages
         await self.repo.clear_all_open_post_refs(None)
         await self.repo.reset_pending_vote_refs()
         await self.repo.cancel_pending_for_non_open()
 
-        # Re-post active slot1 for ON guilds, remove any leftover for OFF guilds
         for gid in gids:
             if enabled_map.get(gid, False):
                 await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
             else:
                 await self.remove_active_riddle_posts(gid)
 
-        # Repost still-pending vote messages so mods can still vote them
         await self.repost_pending_votes()
 
     # ==========================================================================
@@ -598,16 +555,13 @@ class RiddleCog(commands.Cog):
             except Exception:
                 logger.exception("startup_rebuild failed")
             self._startup_done = True
-
         while not self.bot.is_closed():
             try:
                 for gid in await self.repo.list_all_guild_ids():
                     await self.repo.ensure_guild_state(gid)
                     await self.normalize_after_structure_change(gid)
                     if await self.repo.is_enabled(gid):
-                        await self.enforce_enabled_state(
-                            gid, allow_ping=False, force_repost=False,
-                        )
+                        await self.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
                     else:
                         await self.remove_active_riddle_posts(gid)
             except Exception:
@@ -619,7 +573,6 @@ class RiddleCog(commands.Cog):
     # ==========================================================================
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        # If member's excluded-status changed, rebuild cache + resync slot numbers
         b = {r.id for r in before.roles}
         a = {r.id for r in after.roles}
         if b == a:
@@ -629,17 +582,14 @@ class RiddleCog(commands.Cog):
             await self.rebuild_cached_solved_total_for_guild(after.guild.id)
             await self.sync_open_slot_numbers_for_guild(after.guild.id)
 
-# ==========================================================================
-    # LIFECYCLE (persistent views + background worker)
+    # ==========================================================================
+    # LIFECYCLE
     # ==========================================================================
     async def cog_load(self):
-        # Register persistent views so buttons keep working across restarts
         self.bot.add_view(SubmitButtonView(self))
         self.bot.add_view(VoteButtons(self))
         if self._auto_task is None or self._auto_task.done():
-            self._auto_task = asyncio.create_task(
-                self._auto_worker(), name="riddle_auto_worker",
-            )
+            self._auto_task = asyncio.create_task(self._auto_worker(), name="riddle_auto_worker")
 
     def cog_unload(self):
         if self._auto_task and not self._auto_task.done():
@@ -658,15 +608,12 @@ class RiddleCog(commands.Cog):
         gid = interaction.guild.id
         await self.repo.ensure_guild_state(gid)
         await self.normalize_after_structure_change(gid)
-
         panel = RiddleAdminPanelView(self, interaction.user.id, gid)
         await panel.refresh_data()
         await panel.rebuild_items()
         msg = await interaction.followup.send(
             embeds=await panel.build_embeds(interaction.guild),
-            view=panel,
-            ephemeral=True,
-            wait=True,
+            view=panel, ephemeral=True, wait=True,
         )
         panel.message = msg
 
@@ -674,8 +621,7 @@ class RiddleCog(commands.Cog):
     @app_commands.guild_only()
     @riddle_manager_required()
     async def riddle_champ(
-        self,
-        interaction: Interaction,
+        self, interaction: Interaction,
         visible: Optional[bool] = False,
         image: Optional[str] = None,
         mention: Optional[Role] = None,
@@ -683,18 +629,15 @@ class RiddleCog(commands.Cog):
         if interaction.guild is None:
             return
         await interaction.response.defer(ephemeral=not visible, thinking=True)
-
         entries_raw = await self.filtered_stats_entries_for_guild(interaction.guild)
         total_solved = await self.repo.get_cached_solved_total(interaction.guild.id)
         if total_solved <= 0 and entries_raw:
             total_solved = sum(s for _, s, _ in entries_raw)
             await self.repo.set_cached_solved_total(interaction.guild.id, total_solved)
-
         entries = [
             (uid, solved, (solved / total_solved * 100.0 if total_solved else 0.0), xp)
             for uid, solved, xp in entries_raw
         ]
-
         name_cache: dict[int, str] = {}
         avatar_cache: dict[int, str] = {}
         for uid, _, _ in entries_raw:
@@ -702,24 +645,16 @@ class RiddleCog(commands.Cog):
             name_cache[uid] = name
             if avatar:
                 avatar_cache[uid] = avatar
-
         view = ChampionsView(
-            entries,
-            total_solved,
-            name_cache,
-            avatar_cache,
+            entries, total_solved, name_cache, avatar_cache,
             image if is_http_url(image) else DEFAULT_IMAGE_URL,
             interaction.user.id if not visible else None,
         )
         sent = await interaction.followup.send(
             content=mention.mention if (visible and mention) else None,
-            embed=view.build_embed(),
-            view=view,
-            ephemeral=not visible,
-            wait=True,
-            allowed_mentions=discord.AllowedMentions(
-                roles=True, users=False, everyone=False,
-            ),
+            embed=view.build_embed(), view=view,
+            ephemeral=not visible, wait=True,
+            allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
         view.message = sent
 
@@ -729,19 +664,14 @@ class RiddleCog(commands.Cog):
     )
     @app_commands.guild_only()
     @riddle_manager_required()
-    async def champions_import_json(
-        self,
-        interaction: Interaction,
-        mode: Literal["merge", "replace"] = "merge",
-    ):
+    async def champions_import_json(self, interaction: Interaction,
+                                    mode: Literal["merge", "replace"] = "merge"):
         await interaction.response.send_modal(ChampionsImportModal(self, mode))
 
     # ==========================================================================
     # APP-COMMAND ERROR HANDLER
     # ==========================================================================
-    async def cog_app_command_error(
-        self, interaction: Interaction, error: app_commands.AppCommandError
-    ):
+    async def cog_app_command_error(self, interaction: Interaction, error: app_commands.AppCommandError):
         if isinstance(error, MissingRiddleManagerRole):
             await send_access_denied(interaction)
             return
