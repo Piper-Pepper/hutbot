@@ -59,7 +59,7 @@ DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024
 FACE_CHANNEL_ID = 1416468498305126522
 
 # Public URL to the reference face image (cached)
-FACE_REFERENCE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1532219730218450965/piper_close_up-1_nude.jpg"
+FACE_REFERENCE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1532219730218450965/piper_close_up-1_nude.jpg?ex=6a6c0e52&is=6a6abcd2&hm=61096ebefe0fbc3d80dbb39d591cc55aefa042fb37997b4d6ecf669e64ed474e&"
 
 # Roles allowed to use this feature (user needs at least one)
 REQUIRED_ROLE_IDS: set[int] = {
