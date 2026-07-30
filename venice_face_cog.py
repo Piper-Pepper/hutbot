@@ -52,17 +52,16 @@ DISCORD_UPLOAD_LIMIT_FALLBACK_MB = _env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 
 DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
 
 # =================================================
-# >>>>>>>>>>>>>>>>>>>>  HIER ANPASSEN  <<<<<<<<<<<<<<<<<<<<
+# CONFIG - ADJUST HERE
 # =================================================
 
-# Channel in dem dieser Cog aktiv ist
+# Channel where this cog is active
 FACE_CHANNEL_ID = 1416468498305126522
 
-# URL zum Referenz-Gesichtsbild (öffentlich erreichbar). Wird gecacht.
-FACE_REFERENCE_URL = "hhttps://cdn.discordapp.com/attachments/1383652563408392232/1532219730218450965/piper_close_up-1_nude.jpg"
+# Public URL to the reference face image (cached)
+FACE_REFERENCE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1532219730218450965/piper_close_up-1_nude.jpg"
 
-# Rollen die diesen Cog benutzen dürfen (User braucht MINDESTENS EINE davon).
-# Default: Tier-2-Rolle. Höhere Tier-Rollen aus dem alten Bot einfach hinzufügen.
+# Roles allowed to use this feature (user needs at least one)
 REQUIRED_ROLE_IDS: set[int] = {
     1375147276413964408,   # Tier 2
     1376592697606930593,   # Tier 3
@@ -72,14 +71,18 @@ REQUIRED_ROLE_IDS: set[int] = {
     1346414581643219029,   # Tier 7
 }
 
-# Allgemeiner Hidden-Suffix - wird an JEDEN User-Prompt angehängt
+# Hidden suffix appended to every user prompt
 PROMPT_HIDDEN_SUFFIX = (
-    " photorealistic, sharp focus, cinematic lighting, high detail. Piper: 20years old Woman with pale skin, freckles, green eyes and red bangs. Her mouth has a slight overbite. She wears glowing green wireless headphones without cables. Her height is 155cm. 
-Her Skin is sweaty and wet."
-    "professional photography"
+    " photorealistic, sharp focus, cinematic lighting, high detail."
+    " Piper: 20years old woman with pale skin, freckles, green eyes and red bangs."
+    " Her mouth has a slight overbite."
+    " She wears glowing green wireless headphones without cables."
+    " Her height is 155cm."
+    " Her skin is sweaty and wet."
+    " professional photography."
 )
 
-# Face-Instruction - sagt dem Modell wie das Referenzbild zu nutzen ist
+# Face instruction suffix that enforces identity consistency
 FACE_INSTRUCTION_SUFFIX = (
     " IMPORTANT: The reference image provided shows a specific woman's face. "
     "Whenever a woman appears in the generated scene, she MUST have this exact face "
@@ -89,20 +92,20 @@ FACE_INSTRUCTION_SUFFIX = (
     "to the reference."
 )
 
-# Fixe Ausgabe-Parameter
+# Fixed output parameters
 FACE_ASPECT_RATIO = "auto"
 FACE_RESOLUTION = "1K"
 FACE_SAFE_MODE = False
 FACE_OUTPUT_FORMAT = "png"
 
 # =================================================
-# SHARED QUOTA (gleiches File wie Image-Cog!)
+# SHARED QUOTA (same file as image cog)
 # =================================================
 IMAGE_QUOTA_FILE = os.getenv("IMAGE_QUOTA_FILE", "goonhut_image_quota.json")
 IMAGE_WINDOW_SECONDS = 24 * 60 * 60
 
 # =================================================
-# TIER RULES (identisch zum Image-Cog, damit Limits konsistent bleiben)
+# TIER RULES (same as image cog for consistent limits)
 # =================================================
 TIER_RULES: dict[int, dict[str, int]] = {
     1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10},
@@ -116,41 +119,51 @@ TIER_RULES: dict[int, dict[str, int]] = {
 DEFAULT_IMAGE_LIMIT_24H = 5
 
 # =================================================
-# MODELLE (Reihenfolge = Anzeigereihenfolge; erstes = Default)
+# MODELS
+# Order in MODEL_ORDER = display order
+# If you add a model to MODELS later, it auto-appears as a button.
 # =================================================
 AB18_ICON = "🔞"
 MODELS: dict[str, dict[str, Any]] = {
     "qwen-edit-uncensored": {
         "label": f"🧠 Qwen Edit Uncensored {AB18_ICON}",
         "prompt_limit": 3000,
+        "short": "QEU",
+        "icon": "🧠",
+        "ab18": True,
     },
     "seedream-v5-pro-edit": {
         "label": f"🌊 Seedream V5 Pro Edit {AB18_ICON}",
         "prompt_limit": 5000,
+        "short": "SV5",
+        "icon": "🌊",
+        "ab18": True,
     },
     "nano-banana-2-edit": {
         "label": "🍌 Nano Banana 2 Edit",
         "prompt_limit": 10000,
+        "short": "NB2",
+        "icon": "🍌",
+        "ab18": False,
     },
 }
 MODEL_ORDER = list(MODELS.keys())
 
-BUTTON_MESSAGE_TEXT = "💡 Choose a model for a 🎭 face-consistent image!"
+BUTTON_MESSAGE_TEXT = "💡 Pick a model button for a 🎭 face-consistent image!"
 LEGACY_STARTER_TEXTS = {
     BUTTON_MESSAGE_TEXT,
+    "💡 Choose a model for a 🎭 face-consistent image!",
     "💡 Choose Model for 🎭 face-consistent image!",
 }
 RECENT_SCAN_LIMIT = 12
 SERVER_ANIM_ICON = "<a:01pepper_icon:1377636862847619213>"
-NO_MODEL_VALUE = "__no_models__"
 
 MAX_VIDEO_RENDER_SECONDS = 15
 VIDEO_DURATION_CHOICES = [5, 10, 15]
 VIDEO_ALLOWED_ASPECTS = {"1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"}
 
-
 # =================================================
-# QUOTA STORE (identisch zum Image-Cog - gleiche Datei, gleiches Format)
+# QUOTA STORE
 # =================================================
 class RollingQuotaStore:
     def __init__(self, file_path: str, window_seconds: int = IMAGE_WINDOW_SECONDS):
@@ -274,7 +287,6 @@ class RollingQuotaStore:
 
 image_quota = RollingQuotaStore(IMAGE_QUOTA_FILE)
 
-
 # =================================================
 # ROLE / TIER HELPERS
 # =================================================
@@ -297,7 +309,6 @@ def get_member_tier(member: Optional[discord.Member]) -> int:
 def get_image_limit_for_member(member: Optional[discord.Member]) -> int:
     tier = get_member_tier(member)
     return DEFAULT_IMAGE_LIMIT_24H if tier <= 0 else int(TIER_RULES[tier]["image_limit"])
-
 
 # =================================================
 # LOCKS + EPHEMERAL TRACKING
@@ -328,7 +339,6 @@ async def cleanup_user_ephemerals(interaction: discord.Interaction):
     for m in _ephemeral_messages.pop(_ephemeral_key(interaction), []):
         with contextlib.suppress(Exception):
             await m.delete()
-
 
 # =================================================
 # FACE REFERENCE CACHE
@@ -364,7 +374,6 @@ class FaceReferenceCache:
 
 
 face_ref_cache = FaceReferenceCache(FACE_REFERENCE_URL)
-
 
 # =================================================
 # HELPERS
@@ -588,6 +597,57 @@ def _extract_source_image_url(msg: discord.Message) -> Optional[str]:
     return None
 
 
+def _ordered_model_ids() -> list[str]:
+    ordered = [m for m in MODEL_ORDER if m in MODELS]
+    extras = [m for m in MODELS.keys() if m not in ordered]
+    return ordered + extras
+
+
+def _model_is_ab18(cfg: dict[str, Any]) -> bool:
+    label = str(cfg.get("label", ""))
+    return bool(cfg.get("ab18")) or ("🔞" in label) or ("18+" in label)
+
+
+def _model_icon(cfg: dict[str, Any]) -> str:
+    icon = str(cfg.get("icon", "")).strip()
+    if icon:
+        return icon
+    label = str(cfg.get("label", "")).strip()
+    first_token = label.split(" ", 1)[0] if label else ""
+    if first_token and not first_token[0].isalnum():
+        return first_token
+    return "🎭"
+
+
+def _model_short(model_id: str, cfg: dict[str, Any]) -> str:
+    short = str(cfg.get("short", "")).strip()
+    if short:
+        return short.upper()[:10]
+
+    parts = [p for p in re.split(r"[-_]+", model_id) if p]
+    if len(parts) > 1 and parts[-1].lower() == "edit":
+        parts = parts[:-1]
+
+    out: list[str] = []
+    for p in parts[:4]:
+        if re.fullmatch(r"v\d+", p, flags=re.IGNORECASE):
+            out.append(p.upper())
+        elif p.isdigit():
+            out.append(p)
+        else:
+            out.append(p[0].upper())
+    return ("".join(out) or model_id[:4].upper())[:8]
+
+
+def _model_button_label(model_id: str) -> str:
+    cfg = MODELS.get(model_id, {})
+    icon = _model_icon(cfg)
+    short = _model_short(model_id, cfg)
+    ab = " 18+" if _model_is_ab18(cfg) else ""
+    label = f"{icon} {short}{ab}".strip()
+    return label[:80]  # Discord label safety
+
+
 def is_starter_message(msg: discord.Message) -> bool:
     if msg.embeds or msg.attachments:
         return False
@@ -595,7 +655,10 @@ def is_starter_message(msg: discord.Message) -> bool:
         for row in msg.components:
             for child in row.children:
                 cid = getattr(child, "custom_id", None)
-                if isinstance(cid, str) and cid.startswith("venice_face_model_select:"):
+                if isinstance(cid, str) and (
+                    cid.startswith("venice_face_model_select:")  # legacy select
+                    or cid.startswith("venice_face_model_btn:")  # new button system
+                ):
                     return True
     return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
 
@@ -629,7 +692,6 @@ def _build_progress_embed(
     )
     emb.set_footer(text=f"{model_label} • {FACE_ASPECT_RATIO} • {FACE_RESOLUTION}")
     return emb
-
 
 # =================================================
 # API CALL
@@ -690,7 +752,6 @@ async def venice_edit(
             return None, f"Unexpected: {e}"
     return None, last_error
 
-
 # =================================================
 # EPHEMERAL SENDER
 # =================================================
@@ -728,7 +789,6 @@ async def send_quota_exhausted_message(interaction: discord.Interaction, state: 
         f"⏳ Reset in **{_seconds_human(state['reset_in'])}**."
     )
 
-
 # =================================================
 # PROGRESS LOOP
 # =================================================
@@ -759,7 +819,6 @@ async def run_with_progress(
         await asyncio.sleep(0.8)
     return time.monotonic() - started
 
-
 # =================================================
 # UI - OWNER LOCKED
 # =================================================
@@ -774,46 +833,33 @@ class OwnerLockedView(discord.ui.View):
             return False
         return True
 
-
 # =================================================
-# UI - STARTER
+# UI - STARTER (DYNAMIC BUTTONS, ONE PER MODEL)
 # =================================================
-def build_model_options() -> list[discord.SelectOption]:
-    opts: list[discord.SelectOption] = []
-    for i, mid in enumerate(MODEL_ORDER):
-        opts.append(discord.SelectOption(
-            label=MODELS[mid]["label"],
-            value=mid,
-            default=(i == 0),
-        ))
-    if not opts:
-        opts.append(discord.SelectOption(label="No models available", value=NO_MODEL_VALUE))
-    return opts
-
-
-class StarterModelSelect(discord.ui.Select):
-    def __init__(self, session_ref: Callable[[], Optional[aiohttp.ClientSession]], channel_id: int):
+class StarterModelButton(discord.ui.Button):
+    def __init__(
+        self,
+        session_ref: Callable[[], Optional[aiohttp.ClientSession]],
+        channel_id: int,
+        model_id: str,
+        row: int = 0,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ):
         self._session_ref = session_ref
         self.channel_id = channel_id
-        super().__init__(
-            placeholder="🎭 Choose a face-consistent model...",
-            min_values=1,
-            max_values=1,
-            options=build_model_options(),
-            custom_id=f"venice_face_model_select:{channel_id}",
-        )
+        self.model_id = model_id
+        label = _model_button_label(model_id)
+        custom_id = f"venice_face_model_btn:{channel_id}:{model_id}"
+        super().__init__(label=label, style=style, custom_id=custom_id, row=row)
 
     async def callback(self, interaction: discord.Interaction):
-        # Role Gate
-        if not user_has_required_role(interaction.user if isinstance(interaction.user, discord.Member) else None):
+        # Role gate
+        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        if not user_has_required_role(member):
             await send_role_locked_message(interaction)
             return
 
-        selected = self.values[0]
-        if selected == NO_MODEL_VALUE:
-            await send_ephemeral(interaction, "❌ No models available.")
-            return
-        if selected not in MODELS:
+        if self.model_id not in MODELS:
             await send_ephemeral(interaction, "❌ Unknown model.")
             return
 
@@ -822,14 +868,40 @@ class StarterModelSelect(discord.ui.Select):
             await send_ephemeral(interaction, "❌ Backend session not ready. Try again in a moment.")
             return
 
-        await interaction.response.send_modal(FacePromptModal(session, selected, interaction.user.id))
+        await interaction.response.send_modal(FacePromptModal(session, self.model_id, interaction.user.id))
 
 
 class StarterView(discord.ui.View):
     def __init__(self, session_ref: Callable[[], Optional[aiohttp.ClientSession]], channel_id: int):
         super().__init__(timeout=None)
-        self.add_item(StarterModelSelect(session_ref, channel_id))
 
+        model_ids = _ordered_model_ids()
+
+        # If no models configured
+        if not model_ids:
+            self.add_item(
+                discord.ui.Button(
+                    label="No models available",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                    row=0,
+                )
+            )
+            return
+
+        # Discord max: 5 rows × 5 buttons = 25 buttons
+        for i, mid in enumerate(model_ids[:25]):
+            row = i // 5
+            style = discord.ButtonStyle.primary if i == 0 else discord.ButtonStyle.secondary
+            self.add_item(
+                StarterModelButton(
+                    session_ref=session_ref,
+                    channel_id=channel_id,
+                    model_id=mid,
+                    row=row,
+                    style=style,
+                )
+            )
 
 # =================================================
 # UI - MODAL
@@ -870,7 +942,6 @@ class FacePromptModal(discord.ui.Modal):
             user_prompt=user_prompt,
         )
 
-
 # =================================================
 # GENERATION FLOW
 # =================================================
@@ -897,7 +968,7 @@ async def run_face_generation(
     token_quota: Optional[dict[str, int]] = None
 
     try:
-        # Quota reservieren (SHARED mit Image-Cog)
+        # Reserve quota (shared with image cog)
         image_limit = get_image_limit_for_member(member)
         ok, state, token_quota = await image_quota.reserve(
             interaction.guild.id, interaction.user.id, image_limit, 1
@@ -906,7 +977,7 @@ async def run_face_generation(
             await send_quota_exhausted_message(interaction, state)
             return
 
-        # Referenzbild laden
+        # Load face reference image
         image_b64 = await face_ref_cache.get_base64(session)
         if not image_b64:
             await send_ephemeral(
@@ -915,7 +986,7 @@ async def run_face_generation(
             )
             return
 
-        # Prompt bauen
+        # Build final prompt
         full_prompt = (
             f"{user_prompt.strip()}"
             f"{PROMPT_HIDDEN_SUFFIX}"
@@ -980,7 +1051,7 @@ async def run_face_generation(
                     ),
                 )
 
-        # Public Embed
+        # Public message
         embed = discord.Embed(
             title="🎭 Face Image",
             color=discord.Color.purple(),
@@ -1001,7 +1072,7 @@ async def run_face_generation(
             icon_url=guild_icon,
         )
 
-        # Upload mit Kompressions-Fallback
+        # Upload with compression fallback
         upload_limit = _discord_upload_limit_bytes(interaction)
         posted: Optional[discord.Message] = None
 
@@ -1033,12 +1104,12 @@ async def run_face_generation(
 
         quota_success = True
 
-        # Aktuelle Quota abfragen für ephemeral Info
+        # Refresh quota status
         quota_now = await image_quota.peek(
             interaction.guild.id, interaction.user.id, image_limit
         )
 
-        # Ephemeral mit Animate-Button
+        # Ephemeral success + animate button
         await send_ephemeral(
             interaction,
             content=(
@@ -1064,7 +1135,7 @@ async def run_face_generation(
         if not quota_success:
             await image_quota.rollback(token_quota)
 
-        # Starter-Message immer als neueste im Channel halten
+        # Keep starter message as newest in channel
         if isinstance(interaction.channel, discord.TextChannel):
             with contextlib.suppress(Exception):
                 await VeniceFaceCog.ensure_starter_message_static(
@@ -1073,9 +1144,8 @@ async def run_face_generation(
                     session_ref=lambda: session,
                 )
 
-
 # =================================================
-# ANIMATE INTEGRATION (ruft VeniceVideoCog auf, wie im Original)
+# ANIMATE INTEGRATION (uses VeniceVideoCog)
 # =================================================
 class AnimatePromptModal(discord.ui.Modal):
     def __init__(self, owner_id: int, source_channel_id: int, source_message_id: int, base_prompt: str, ratio: str):
@@ -1277,7 +1347,6 @@ class AnimateEphemeralView(OwnerLockedView):
             )
         )
 
-
 # =================================================
 # COG
 # =================================================
@@ -1301,7 +1370,7 @@ class VeniceFaceCog(commands.Cog):
 
     async def cog_load(self):
         await self._ensure_session()
-        # persistente View für den Face-Channel
+        # Persistent view for face channel
         self.bot.add_view(StarterView(self._session_ref, FACE_CHANNEL_ID))
 
     def cog_unload(self):
@@ -1359,7 +1428,7 @@ class VeniceFaceCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def face_reload(self, ctx: commands.Context):
         await self._ensure_session()
-        # Referenzbild neu laden
+        # Reload reference image cache
         await face_ref_cache.get_base64(self.session, force=True)
 
         reposted = 0
@@ -1370,7 +1439,7 @@ class VeniceFaceCog(commands.Cog):
                     reposted += 1
 
         await ctx.send(
-            f"✅ Face-Cog reloaded. Reference cached, reposted {reposted} starter message(s)."
+            f"✅ Face cog reloaded. Reference cached, reposted {reposted} starter message(s)."
         )
 
     @commands.Cog.listener()
@@ -1380,7 +1449,7 @@ class VeniceFaceCog(commands.Cog):
                 return
             self._ready_bootstrap_done = True
             await self._ensure_session()
-            # Referenzbild vorab laden
+            # Preload reference image
             with contextlib.suppress(Exception):
                 await face_ref_cache.get_base64(self.session)
             for guild in self.bot.guilds:
