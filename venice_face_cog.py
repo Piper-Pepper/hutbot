@@ -59,7 +59,7 @@ DISCORD_UPLOAD_SAFETY_BYTES = _env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024
 FACE_CHANNEL_ID = 1416468498305126522
 
 # URL zum Referenz-Gesichtsbild (öffentlich erreichbar). Wird gecacht.
-FACE_REFERENCE_URL = "https://cdn.discordapp.com/attachments/REPLACE/ME/face.png"
+FACE_REFERENCE_URL = "hhttps://cdn.discordapp.com/attachments/1383652563408392232/1532219730218450965/piper_close_up-1_nude.jpg"
 
 # Rollen die diesen Cog benutzen dürfen (User braucht MINDESTENS EINE davon).
 # Default: Tier-2-Rolle. Höhere Tier-Rollen aus dem alten Bot einfach hinzufügen.
@@ -74,7 +74,8 @@ REQUIRED_ROLE_IDS: set[int] = {
 
 # Allgemeiner Hidden-Suffix - wird an JEDEN User-Prompt angehängt
 PROMPT_HIDDEN_SUFFIX = (
-    " photorealistic, sharp focus, cinematic lighting, high detail, "
+    " photorealistic, sharp focus, cinematic lighting, high detail. Piper: 20years old Woman with pale skin, freckles, green eyes and red bangs. Her mouth has a slight overbite. She wears glowing green wireless headphones without cables. Her height is 155cm. 
+Her Skin is sweaty and wet."
     "professional photography"
 )
 
