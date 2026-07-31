@@ -526,10 +526,10 @@ class RiddleCog(commands.Cog):
         if not self._startup_done:
             try:
                 await self.startup_rebuild()
+                self._startup_done = True
             except Exception:
-                logger.exception("startup_rebuild failed")
-            self._startup_done = True
-        while not self.bot.is_closed():
+                logger.exception("startup_rebuild failed – will retry next cycle")
+        while not self.bot.is_closed():    
             try:
                 for gid in await self.repo.list_all_guild_ids():
                     await self.repo.ensure_guild_state(gid)
