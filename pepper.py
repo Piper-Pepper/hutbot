@@ -1,28 +1,28 @@
+# pepper.py
+from __future__ import annotations
+
 import datetime
+from typing import Optional
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import aiohttp
-import asyncio
-import time
 
 
-DEFAULT_IMAGE_URL = "https://cdn.discordapp.com/attachments/1383652563408392232/1414114417800515607/idcard_small.png"
-JSONBIN_URL = "https://api.jsonbin.io/v3/b/686699c18960c979a5b67e34/latest"
-HEADERS = {
-    "X-Master-Key": "$2a$10$3IrBbikJjQzeGd6FiaLHmuz8wTK.TXOMJRBkzMpeCAVH4ikeNtNaq"
-}
+# =============================================================================
+# CONFIG
+# =============================================================================
+DEFAULT_IMAGE_URL = (
+    "https://cdn.discordapp.com/attachments/"
+    "1383652563408392232/1414114417800515607/idcard_small.png"
+)
+NOT_MEMBER_IMAGE_URL = (
+    "https://cdn.discordapp.com/attachments/"
+    "1383652563408392232/1415301679242280980/Sad_piper.gif"
+)
 
-# ✅ Globale Session
-session = None
-
-# ✅ Einfacher Cache (verhindert Spam-Requests)
-json_cache = None
-json_cache_time = 0
-CACHE_DURATION = 30  # Sekunden
-
-
-special_roles_to_highlight = {
+# Roles that get a special badge next to their mention
+SPECIAL_ROLES_TO_HIGHLIGHT: dict[int, str] = {
     1346428405368750122: "*(Mod👮‍♂️)*",
     1346414581643219029: "",
     1375143857024401478: "*(XP🏆)*",
@@ -41,177 +41,274 @@ special_roles_to_highlight = {
     1380610400416043089: "",
 }
 
-level_roles = {
+# XP / level roles: (prefix, suffix) wrapped around the mention
+LEVEL_ROLES: dict[int, tuple[str, str]] = {
     1377051179615522926: ("0️⃣3️⃣", "ₜᵢₑᵣ ₁"),
     1375147276413964408: ("1️⃣1️⃣", "ₜᵢₑᵣ ₂"),
     1376592697606930593: ("2️⃣1️⃣", "ₜᵢₑᵣ ₃"),
     1381791848875430069: ("3️⃣3️⃣", "ₜᵢₑᵣ ₄"),
     1375666588404940830: ("4️⃣2️⃣", "ₜᵢₑᵣ ₅"),
-    1375584380914896978: ("6️⃣9️⃣", "ₜᵢₑᵣ ₆")
+    1375584380914896978: ("6️⃣9️⃣", "ₜᵢₑᵣ ₆"),
 }
 
-location_roles = {
-    "Europe", "North America", "Asia", "Oceania", "Africa", "South America", "Outer Gσσɳʋҽɾʂҽ"
+LOCATION_ROLE_NAMES: set[str] = {
+    "Europe", "North America", "Asia", "Oceania",
+    "Africa", "South America", "Outer Gσσɳʋҽɾʂҽ",
 }
+GENDER_ROLE_NAMES: set[str] = {"Male", "Female", "Non-Binary"}
 
-gender_roles = {
-    "Male", "Female", "Non-Binary"
-}
+STONER_ROLE_ID = 1346461573392105474
+DM_OPEN_ROLE_ID = 1387850018471284760
 
-stoner_role_id = 1346461573392105474
-dm_id = 1387850018471284760
+FOOTER_TEXT = "👅...and don't forget to lick the butt... of your favourite Goonette-Slut!"
 
 
-# ✅ JSON Fetch mit Cache
-async def get_riddle_data(user_id):
-    global json_cache, json_cache_time, session
+# =============================================================================
+# HELPERS
+# =============================================================================
+def _fmt_date_with_days(date: Optional[datetime.datetime]) -> str:
+    if not date:
+        return "Unknown"
+    now = discord.utils.utcnow()
+    days_ago = (now - date).days
+    return f"\n{date.strftime('%Y-%m-%d %H:%M UTC')}\n(**{days_ago} days ago**)"
 
-    now = time.time()
 
-    # Cache nutzen
-    if json_cache and (now - json_cache_time < CACHE_DURATION):
-        return json_cache.get(str(user_id))
-
+async def _resolve_member(guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member
     try:
-        async with session.get(JSONBIN_URL, headers=HEADERS) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                json_cache = data.get("record", {})
-                json_cache_time = now
-                return json_cache.get(str(user_id))
-    except Exception as e:
-        print(f"Error fetching riddle data: {e}")
+        return await guild.fetch_member(user_id)
+    except (discord.NotFound, discord.HTTPException):
+        return None
 
+
+async def _get_riddle_stats(bot: commands.Bot, guild_id: int, user_id: int) -> Optional[dict]:
+    """Fetch live riddle stats from the RiddleCog repo. Returns None on any failure."""
+    cog = bot.get_cog("RiddleCog")
+    if cog is None or not hasattr(cog, "repo"):
+        return None
+    try:
+        rows = await cog.repo.stats_entries(guild_id)  # [(uid, solved, xp), ...]
+    except Exception as e:
+        print(f"[pepper] riddle data lookup failed: {e}")
+        return None
+    for uid, solved, xp in rows:
+        if uid == user_id:
+            return {"solved": int(solved), "xp": int(xp)}
     return None
 
 
-async def send_pepper_embed(interaction, user, open=False, mention_group=None, text=None, image_url=None):
+class _RoleBuckets:
+    """Sorts a member's roles into the display buckets pepper cares about."""
+
+    def __init__(self):
+        self.highlighted: list[str] = []
+        self.level: list[str] = []
+        self.normal: list[str] = []
+        self.location: Optional[str] = None
+        self.gender: Optional[str] = None
+        self.stoner: Optional[str] = None
+        self.dm_open: Optional[str] = None
+
+    @classmethod
+    def from_member(cls, member: discord.Member) -> "_RoleBuckets":
+        b = cls()
+        # highest role first
+        for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
+            if role.is_default():
+                continue
+
+            # 1) level roles
+            if role.id in LEVEL_ROLES:
+                prefix, suffix = LEVEL_ROLES[role.id]
+                b.level.append(f"{prefix}\u200b{role.mention}\u200b{suffix}")
+                continue
+
+            # 2) highlighted / special roles
+            badge = SPECIAL_ROLES_TO_HIGHLIGHT.get(role.id)
+            if badge is not None:
+                b.highlighted.append(f"▶ {role.mention} ⏭ {badge}" if badge else f"▶ {role.mention}")
+                continue
+
+            # 3) meta roles
+            if role.id == STONER_ROLE_ID:
+                b.stoner = " ₛₜₒₙₑᵣ Bᵤddy💨"
+                continue
+            if role.id == DM_OPEN_ROLE_ID:
+                b.dm_open = "✅💌"
+                continue
+
+            # 4) location / gender (first match wins)
+            if b.location is None and role.name in LOCATION_ROLE_NAMES:
+                b.location = role.mention
+                continue
+            if b.gender is None and role.name in GENDER_ROLE_NAMES:
+                b.gender = role.mention
+                continue
+
+            # 5) everything else
+            b.normal.append(role.mention)
+        return b
+
+
+# =============================================================================
+# EMBED BUILDER
+# =============================================================================
+def _build_pepper_embed(
+    guild: discord.Guild,
+    user: discord.abc.User,
+    member: discord.Member,
+    buckets: _RoleBuckets,
+    riddles: Optional[dict],
+    image_url: Optional[str],
+) -> discord.Embed:
+    embed_color = (
+        member.top_role.color
+        if member.top_role.color.value
+        else discord.Color.dark_gold()
+    )
+    display_name = member.global_name or member.name
+
+    e = discord.Embed(
+        title=f"ᕼᑌT ᗰEᗰᗷEᖇ:\n{display_name} *({user.name})*",
+        color=embed_color,
+    )
+    e.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
+
+    e.add_field(name="ᴀᴄᴄᴏᴜɴᴛ", value=_fmt_date_with_days(user.created_at), inline=True)
+    e.add_field(name="ᴊᴏɪɴᴇᴅ", value=_fmt_date_with_days(member.joined_at), inline=True)
+    e.add_field(
+        name="ᴛᴏᴘ ʀᴏʟᴇ",
+        value=member.top_role.mention if not member.top_role.is_default() else "No top role",
+        inline=True,
+    )
+    e.add_field(name="🌍ʟᴏᴄᴀᴛɪᴏɴ", value=buckets.location or "No location role", inline=True)
+    e.add_field(name="🚻ɢᴇɴᴅᴇʀ", value=buckets.gender or "No gender role", inline=True)
+
+    if buckets.stoner:
+        e.add_field(name="✅ɢᴀɴᴊᴀ", value=buckets.stoner, inline=True)
+    if buckets.dm_open:
+        e.add_field(name="📬 Open for DM", value=buckets.dm_open, inline=False)
+
+    if buckets.level:
+        e.add_field(name="🏆 𝙇𝙀𝙑𝙀𝙇𝙎", value="\n".join(buckets.level), inline=False)
+    if buckets.highlighted:
+        e.add_field(name="⭐ Special Roles", value="\n".join(buckets.highlighted), inline=False)
+
+    if riddles:
+        e.add_field(
+            name="🧩ℜ𝔦𝔡𝔡𝔩𝔢 𝔇𝔞𝔱𝔞",
+            value=f"🔓 {riddles['solved']} / 🧠 {riddles['xp']} XP",
+            inline=True,
+        )
+
+    e.add_field(
+        name="🎭 𝙍𝙊𝙇𝙀𝙎",
+        value=", ".join(buckets.normal) if buckets.normal else "No roles",
+        inline=False,
+    )
+
+    avatar_url = user.avatar.url if user.avatar else user.default_avatar.url
+    e.set_thumbnail(url=avatar_url)
+    e.set_image(url=image_url or DEFAULT_IMAGE_URL)
+    e.set_footer(text=FOOTER_TEXT)
+    return e
+
+
+def _build_not_member_embed() -> discord.Embed:
+    e = discord.Embed(
+        title="❌ Member not found",
+        description="This member is currently not a member of the **Goon Hut.**",
+        color=discord.Color.red(),
+    )
+    e.set_image(url=NOT_MEMBER_IMAGE_URL)
+    return e
+
+
+# =============================================================================
+# MAIN HANDLER
+# =============================================================================
+async def send_pepper_embed(
+    interaction: discord.Interaction,
+    user: discord.User,
+    *,
+    open: bool = False,
+    mention_group: Optional[discord.Role] = None,
+    text: Optional[str] = None,
+    image_url: Optional[str] = None,
+) -> None:
     await interaction.response.defer(ephemeral=not open)
 
     guild = interaction.guild
-
-    member = guild.get_member(user.id)
-    if not member:
-        try:
-            member = await guild.fetch_member(user.id)
-        except discord.NotFound:
-            member = None
-
-    if not member:
-        embed = discord.Embed(
-            title="❌ Member not found",
-            description="This member is currently not a member of the **Goon Hut.**",
-            color=discord.Color.red()
-        )
-        embed.set_image(url="https://cdn.discordapp.com/attachments/1383652563408392232/1415301679242280980/Sad_piper.gif")
-        await interaction.followup.send(embed=embed, ephemeral=not open)
+    if guild is None:
         return
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    member = await _resolve_member(guild, user.id)
+    if member is None:
+        await interaction.followup.send(embed=_build_not_member_embed(), ephemeral=not open)
+        return
 
-    def format_date_with_days(date):
-        if not date:
-            return "Unknown"
-        days_ago = (now - date).days
-        return f"\n{date.strftime('%Y-%m-%d %H:%M UTC')}\n(**{days_ago} days ago**)"
+    buckets = _RoleBuckets.from_member(member)
+    riddles = await _get_riddle_stats(interaction.client, guild.id, user.id)  # type: ignore[arg-type]
+    embed = _build_pepper_embed(guild, user, member, buckets, riddles, image_url)
 
-    joined_at = format_date_with_days(member.joined_at)
-    created_at = format_date_with_days(user.created_at)
-
-    highlighted_roles, normal_roles = [], []
-    location_role = gender_role = stoner_buddy = dm_open = None
-
-    for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
-        role_highlight = special_roles_to_highlight.get(role.id)
-        if role_highlight:
-            highlighted_roles.append(f"▶ {role.mention} ⏭ {role_highlight}")
-        elif role.id in level_roles:
-            continue
-        elif role.name in location_roles and not location_role:
-            location_role = role.mention
-        elif role.name in gender_roles and not gender_role:
-            gender_role = role.mention
-        elif role.id == stoner_role_id:
-            stoner_buddy = " ₛₜₒₙₑᵣ Bᵤddy💨"
-        elif role.id == dm_id:
-            dm_open = "✅💌"
-        else:
-            normal_roles.append(f"{role.mention}")
-
-    level_roles_of_member = [
-        f"{level_roles[role.id][0]}​{role.mention}​{level_roles[role.id][1]}"
-        for role in sorted(member.roles, key=lambda r: r.position, reverse=True)
-        if role.id in level_roles
-    ]
-
-    embed_color = member.top_role.color if member.top_role.color.value else discord.Color.dark_gold()
-
-    embed = discord.Embed(
-        title=f"ᕼᑌT ᗰEᗰᗷEᖇ:\n{member.global_name or member.name} *({user.name})*",
-        color=embed_color
-    )
-
-    embed.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
-
-    embed.add_field(name="​ᴀᴄᴄᴏᴜɴᴛ", value=created_at, inline=True)
-    embed.add_field(name="​ᴊᴏɪɴᴇᴅ", value=joined_at, inline=True)
-    embed.add_field(name="ᴛᴏᴘ ʀᴏʟᴇ", value=member.top_role.mention if member.top_role != guild.default_role else "No top role", inline=True)
-    embed.add_field(name="🌍ʟᴏᴄᴀᴛɪᴏɴ", value=location_role or "No location role", inline=True)
-    embed.add_field(name="🚻ɢᴇɴᴅᴇʀ", value=gender_role or "No gender role", inline=True)
-
-    if stoner_buddy:
-        embed.add_field(name="✅ɢᴀɴᴊᴀ", value=stoner_buddy, inline=True)
-
-    if dm_open:
-        embed.add_field(name="📬​Open for DM", value=dm_open, inline=False)
-
-    if level_roles_of_member:
-        embed.add_field(name="🏆 𝙇𝙀𝙑𝙀𝙇𝙎", value="\n".join(level_roles_of_member), inline=False)
-
-    if highlighted_roles:
-        embed.add_field(name="⭐ Special Roles", value="\n".join(highlighted_roles), inline=False)
-
-    # ✅ JSON Daten (jetzt gecached)
-    riddles_info = await get_riddle_data(user.id)
-    if riddles_info:
-        solved = riddles_info.get("solved_riddles", 0)
-        xp = riddles_info.get("xp", 0)
-        embed.add_field(name="🧩ℜ𝔦𝔡𝔡𝔩𝔢 𝔇𝔞𝔱𝔞", value=f"🔓 {solved} / 🧠 {xp} XP", inline=True)
-
-    embed.add_field(name="🎭 𝙍𝙊𝙇𝙀𝙎", value=", ".join(normal_roles) if normal_roles else "No roles", inline=False)
-
-    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
-    embed.set_image(url=image_url if image_url else DEFAULT_IMAGE_URL)
-
-    embed.set_footer(text="👅...and don't forget to lick the butt... of your favourite Goonette-Slut!")
-
-    final_content = ""
-    if open and mention_group:
-        final_content += mention_group.mention + "\n"
+    content_parts: list[str] = []
+    if open and mention_group is not None:
+        content_parts.append(mention_group.mention)
     if text:
-        final_content += text
-
-    # ✅ kleiner Delay gegen Burst
-    await asyncio.sleep(0.5)
+        content_parts.append(text)
+    content = "\n".join(content_parts) if content_parts else None
 
     await interaction.followup.send(
-        content=final_content if final_content else None,
+        content=content,
         embed=embed,
-        ephemeral=not open
+        ephemeral=not open,
+        allowed_mentions=discord.AllowedMentions(
+            roles=bool(open and mention_group is not None),
+            users=False,
+            everyone=False,
+        ),
     )
 
 
+# =============================================================================
+# EXTENSION SETUP
+# =============================================================================
 async def setup(bot: commands.Bot):
-    global session
-    session = aiohttp.ClientSession()
 
     @bot.tree.context_menu(name="🛖 Goon Hut Info")
     async def pepper_context(interaction: discord.Interaction, user: discord.User):
         await send_pepper_embed(interaction, user)
 
-    @bot.tree.command(name="pepper", description="Do it Pepper-Style 🫦 ... and show your ID Card..")
-    async def pepper_slash(interaction: discord.Interaction, user: discord.User, open: bool = False, mention_group: discord.Role = None, text: str = None, image_url: str = None):
+    @bot.tree.command(
+        name="pepper",
+        description="Do it Pepper-Style 🫦 ... and show your ID Card..",
+    )
+    @app_commands.describe(
+        user="Whose ID card to show",
+        open="Post publicly instead of ephemeral",
+        mention_group="Role to ping (only usable when open=True)",
+        text="Optional text to include with the post",
+        image_url="Optional custom footer image URL",
+    )
+    async def pepper_slash(
+        interaction: discord.Interaction,
+        user: discord.User,
+        open: bool = False,
+        mention_group: Optional[discord.Role] = None,
+        text: Optional[str] = None,
+        image_url: Optional[str] = None,
+    ):
         if not open and mention_group is not None:
-            await interaction.response.send_message("⚠️ You can only use **mention-group** if **open** is set to True.", ephemeral=True)
+            await interaction.response.send_message(
+                "⚠️ You can only use **mention-group** if **open** is set to True.",
+                ephemeral=True,
+            )
             return
-        await send_pepper_embed(interaction, user, open=open, mention_group=mention_group, text=text, image_url=image_url)
+        await send_pepper_embed(
+            interaction, user,
+            open=open, mention_group=mention_group,
+            text=text, image_url=image_url,
+        )
