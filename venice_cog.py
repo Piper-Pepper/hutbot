@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -42,6 +43,7 @@ from venice_shared import (
     register_starter_reposter,
     repost_starter_for_channel,
     run_with_progress,
+    sanitize_error_text,
     seconds_human,
     send_ephemeral,
     send_image_quota_message,
@@ -139,6 +141,22 @@ RATING_NUDITY = "nudity"
 RATING_SFW = "sfw"
 OPEN_RATINGS = {RATING_EXPLICIT, RATING_NUDITY}
 
+# =================================================
+# TIMING / TIMEOUTS
+# =================================================
+NATIVE_RES_TIME_FACTOR = {"1K": 1.00, "2K": 1.30, "4K": 1.70}
+UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}
+UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
+
+DEFAULT_API_TIMEOUT = 150.0
+# Auflösung wirkt beim Timeout stärker als bei der ETA-Schätzung,
+# weil hier nach oben abgesichert wird statt geschätzt.
+RES_TIMEOUT_MULT = {"1K": 1.0, "2K": 1.6, "4K": 2.6}
+# Harte Obergrenze: Discord-Interaction-Tokens verfallen nach 15 Minuten,
+# danach ist die ephemere Progress-Nachricht nicht mehr editierbar.
+MAX_API_TIMEOUT = 780.0
+UPSCALE_API_TIMEOUT = 240.0
+
 DEFAULT_MODEL_ROW = {
     "prompt_limit": 1500,
     "default_steps": 20,
@@ -150,32 +168,33 @@ DEFAULT_MODEL_ROW = {
     "resolutions": [],
     "default_resolution": "1K",
     "speed_factor": 1.0,
+    "api_timeout": DEFAULT_API_TIMEOUT,
 }
 
 _FULL_ASPECTS = ["1:1", "3:2", "16:9", "21:9", "9:16", "2:3", "3:4", "4:5"]
 
 MODELS: dict[str, dict[str, Any]] = {
     "hidream": {"label": "🌙 HiDream", "rating": RATING_SFW, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 6.5, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": []}},
-    "gpt-image-2": {"label": "🧠 GPT Image 2", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "rating": RATING_SFW, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": []}},
-    "hunyuan-image-v3": {"label": "🐉 Hunyuan Image 3.0", "rating": RATING_NUDITY, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": []}},
-    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "nano-banana-2": {"label": "🐵 Nano Banana 2", "rating": RATING_SFW, "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"]}},
-    "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K"}},
-    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
-    "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": []}},
-    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "rating": RATING_SFW, "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"]}},
+    "flux-2-max": {"label": "🌌 Flux 2 Max", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["auto", *_FULL_ASPECTS], "default_aspect_ratio": "auto", "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.5}},
+    "gpt-image-2": {"label": "🧠 GPT Image 2", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"], "api_timeout": 420.0, "speed_factor": 2.4}},
+    "gpt-image-1-5": {"label": "🪄 GPT Image 1.5", "rating": RATING_SFW, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": [], "api_timeout": 300.0, "speed_factor": 1.8}},
+    "hunyuan-image-v3": {"label": "🐉 Hunyuan Image 3.0", "rating": RATING_NUDITY, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 300.0, "speed_factor": 1.9}},
+    "imagineart-1.5-pro": {"label": "🎨 ImagineArt 1.5 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4", "4:5"], "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.4}},
+    "ideogram-v4": {"label": "🔤 Ideogram V4 (Text)", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.4}},
+    "nano-banana-2": {"label": "🐵 Nano Banana 2", "rating": RATING_SFW, "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"], "api_timeout": 300.0, "speed_factor": 1.6}},
+    "nano-banana-pro": {"label": "🍌 Nano Banana Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 32768, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K", "4K"], "api_timeout": 360.0, "speed_factor": 2.0}},
+    "recraft-v4-pro": {"label": "🏗️ Recraft V4 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.4}},
+    "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K", "api_timeout": 300.0, "speed_factor": 1.7}},
+    "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"], "api_timeout": 200.0, "speed_factor": 1.1}},
+    "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.5}},
+    "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.5}},
+    "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "rating": RATING_SFW, "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "api_timeout": 240.0, "speed_factor": 1.4}},
     "lustify-sdxl": {"label": "💋 Lustify SDXL (Legacy)", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
     "lustify-v7": {"label": "🥵 Lustify v7", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "lustify-v8": {"label": "🔥 Lustify v8", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "lustify-v8": {"label": "🔥 Lustify v8", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 30, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [], "speed_factor": 1.2}},
     "wai-Illustrious": {"label": "🎌 Anime (WAI)", "rating": RATING_SFW, "caps": {"prompt_limit": 1500, "default_steps": 25, "max_steps": 30, "cfg_default": 7.0, "aspect_ratios": None, "width_height_divisor": 16, "resolutions": []}},
-    "z-image-turbo": {"label": "⚡ Z-Image Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
-    "chroma": {"label": "🌈 Chroma", "rating": RATING_NUDITY, "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
+    "z-image-turbo": {"label": "⚡ Z-Image Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 7500, "default_steps": 8, "max_steps": 8, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [], "api_timeout": 120.0, "speed_factor": 0.6}},
+    "chroma": {"label": "🌈 Chroma", "rating": RATING_NUDITY, "caps": {"prompt_limit": 7500, "default_steps": 10, "max_steps": 10, "cfg_default": 6.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": [], "api_timeout": 150.0, "speed_factor": 0.8}},
 }
 
 MODEL_CONFIG: dict[str, dict[str, Any]] = {
@@ -185,10 +204,6 @@ MODEL_CONFIG: dict[str, dict[str, Any]] = {
 MODEL_ORDER = list(MODELS.keys())
 MODEL_RATINGS = {mid: m["rating"] for mid, m in MODELS.items()}
 DISABLED_MODELS: set[str] = set()
-
-NATIVE_RES_TIME_FACTOR = {"1K": 1.00, "2K": 1.30, "4K": 1.70}
-UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}
-UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
 
 
 # =================================================
@@ -281,7 +296,7 @@ def snap_to_divisor(value: int, divisor: int) -> int:
 def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -> tuple[int, int]:
     # FIX: war r"^(\d+):(\d+)\$" - das \$ matchte ein Dollarzeichen statt
     # Zeilenende, also griff NIE ein Ratio und alles wurde 1024x1024.
-    m = re.match(r"^(\d+):(\d+)\$", ratio) if ratio != "auto" else None
+    m = re.match(r"^(\d+):(\d+)$", ratio) if ratio != "auto" else None
     if not m:
         side = snap_to_divisor(base_long_side, divisor)
         return side, side
@@ -376,7 +391,7 @@ def estimate_generation_seconds(
     prompt_f = 1.0 + min(prompt_len, 4000) / 8000.0
     cfg_f = 1.0 + max(0.0, cfg_scale - 5.0) * 0.02
     res_f = NATIVE_RES_TIME_FACTOR.get(generation_resolution or "1K", 1.0)
-    return max(6.0, min(base * model_f * steps_f * prompt_f * cfg_f * res_f, 240.0))
+    return max(6.0, min(base * model_f * steps_f * prompt_f * cfg_f * res_f, 420.0))
 
 
 def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> float:
@@ -384,6 +399,14 @@ def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> fl
         return 0.0
     base = UPSCALE_BASE_SECONDS.get(scale, 10.0)
     return max(4.0, min(base * UPSCALE_TARGET_FACTOR.get(target_resolution, 1.0), 180.0))
+
+
+def model_api_timeout(model_id: str, generation_resolution: Optional[str]) -> float:
+    """Request-Timeout je Modell und Zielauflösung, hart gedeckelt."""
+    cfg = MODEL_CONFIG.get(model_id, {})
+    base = float(cfg.get("api_timeout", DEFAULT_API_TIMEOUT))
+    mult = RES_TIMEOUT_MULT.get(generation_resolution or "1K", 1.0)
+    return max(60.0, min(base * mult, MAX_API_TIMEOUT))
 
 
 def build_model_options(channel_id: int, include_easy: bool = True) -> list[discord.SelectOption]:
@@ -453,43 +476,100 @@ def is_model_dropdown_message(msg: discord.Message) -> bool:
 # API CALLS
 # =================================================
 async def venice_generate(
-    session: aiohttp.ClientSession, payload: dict[str, Any], retries: int = 2
-) -> Optional[bytes]:
+    session: aiohttp.ClientSession,
+    payload: dict[str, Any],
+    timeout_total: float = DEFAULT_API_TIMEOUT,
+    retries: int = 2,
+) -> tuple[Optional[bytes], Optional[str]]:
+    """
+    Gibt (bytes, None) bei Erfolg, sonst (None, Fehlertext).
+
+    Timeouts werden NICHT wiederholt: bei einem langsamen Modell würde das
+    nur ein Mehrfaches der Wartezeit verbrennen, ohne die Ursache zu ändern.
+    """
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     req_id = os.urandom(4).hex()
-    logger.info("[IMG %s] -> POST generate model=%s", req_id, payload.get("model"))
-    timeout = aiohttp.ClientTimeout(total=120, connect=20, sock_read=90)
+    model = payload.get("model")
+
+    # sock_read nahe an total: Blocking-Renders senden lange gar keine Bytes.
+    timeout = aiohttp.ClientTimeout(
+        total=timeout_total,
+        connect=20,
+        sock_connect=20,
+        sock_read=max(30.0, timeout_total - 10),
+    )
+    logger.info(
+        "[IMG %s] -> POST model=%s res=%s timeout=%.0fs",
+        req_id, model, payload.get("resolution", "-"), timeout_total,
+    )
+
+    last_error: Optional[str] = None
 
     for attempt in range(retries + 1):
+        started = time.monotonic()
         try:
             async with session.post(
                 VENICE_IMAGE_URL, headers=headers, json=payload, timeout=timeout
             ) as resp:
-                logger.info("[IMG %s] <- status=%s attempt=%s", req_id, resp.status, attempt + 1)
+                elapsed = time.monotonic() - started
+                logger.info(
+                    "[IMG %s] <- status=%s attempt=%s after %.1fs",
+                    req_id, resp.status, attempt + 1, elapsed,
+                )
+
                 if resp.status == 200:
                     img = await extract_image_from_response(resp)
-                    return img if img and looks_like_image(img) else None
+                    if img and looks_like_image(img):
+                        return img, None
+                    last_error = "Provider returned an empty or invalid image."
+                    if attempt < retries:
+                        await asyncio.sleep(1.2 * (attempt + 1))
+                        continue
+                    return None, last_error
+
+                body = ""
+                with contextlib.suppress(Exception):
+                    body = await resp.text()
 
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
-                    await asyncio.sleep(1.2 * (attempt + 1))
+                    logger.warning(
+                        "[IMG %s] retryable %s: %s", req_id, resp.status, body[:200]
+                    )
+                    await asyncio.sleep(1.5 * (attempt + 1))
                     continue
 
-                with contextlib.suppress(Exception):
-                    logger.error("[IMG %s] error body: %s", req_id, (await resp.text())[:500])
-                return None
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+                logger.error("[IMG %s] error %s: %s", req_id, resp.status, body[:600])
+                return None, f"HTTP {resp.status}: {sanitize_error_text(body, 250)}"
+
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - started
+            logger.error(
+                "[IMG %s] TIMEOUT model=%s after %.0fs (limit %.0fs)",
+                req_id, model, elapsed, timeout_total,
+            )
+            return None, (
+                f"The model did not respond within {int(timeout_total)}s.\n"
+                f"This model is slow at this resolution — try **1K** "
+                f"or pick a faster model."
+            )
+        except aiohttp.ClientError as e:
+            last_error = f"Connection error: {e}"
             if attempt < retries:
-                await asyncio.sleep(1.2 * (attempt + 1))
+                await asyncio.sleep(1.5 * (attempt + 1))
                 continue
-            return None
-        except Exception:
+            return None, last_error
+        except Exception as e:
             logger.exception("[IMG %s] unexpected", req_id)
-            return None
-    return None
+            return None, f"Unexpected error: {e}"
+
+    return None, last_error or "Generation failed."
 
 
 async def _upscale_once(
-    session: aiohttp.ClientSession, image_bytes: bytes, scale: int, retries: int = 2
+    session: aiohttp.ClientSession,
+    image_bytes: bytes,
+    scale: int,
+    retries: int = 2,
 ) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     if not looks_like_image(image_bytes):
@@ -500,7 +580,11 @@ async def _upscale_once(
         {"image": b64, "scale": scale},
         {"image": f"data:image/png;base64,{b64}", "scale": scale},
     ]
-    timeout = aiohttp.ClientTimeout(total=120, connect=20, sock_read=90)
+    timeout = aiohttp.ClientTimeout(
+        total=UPSCALE_API_TIMEOUT,
+        connect=20,
+        sock_read=UPSCALE_API_TIMEOUT - 10,
+    )
 
     for attempt in range(retries + 1):
         for payload in payloads:
@@ -512,6 +596,14 @@ async def _upscale_once(
                         out = await extract_image_from_response(resp)
                         if out and looks_like_image(out):
                             return out
+                    else:
+                        with contextlib.suppress(Exception):
+                            logger.warning(
+                                "upscale status=%s: %s", resp.status, (await resp.text())[:200]
+                            )
+            except asyncio.TimeoutError:
+                logger.warning("upscale timeout after %.0fs", UPSCALE_API_TIMEOUT)
+                continue
             except Exception:
                 continue
         if attempt < retries:
@@ -679,8 +771,10 @@ class EasyModeModal(discord.ui.Modal):
         cfg = MODEL_CONFIG[model_id]
 
         super().__init__(
-            title=f"Easy Mode {EASY_MODE_ICON} • {get_model_label(model_id)} "
-                  f"• {ASPECT_LABELS.get(ratio, ratio)}"[:45]
+            title=(
+                f"Easy Mode {EASY_MODE_ICON} • {get_model_label(model_id)} "
+                f"• {ASPECT_LABELS.get(ratio, ratio)}"
+            )[:45]
         )
         self.prompt = discord.ui.TextInput(
             label="Describe what you want to see",
@@ -918,6 +1012,14 @@ class ResolutionSelectView(OwnerLockedView):
         quota_success = False
         token_quota: Optional[dict[str, int]] = None
 
+        async def drop_progress():
+            """Progress-Nachricht sofort entfernen (idempotent)."""
+            nonlocal progress_msg
+            if progress_msg is not None:
+                msg, progress_msg = progress_msg, None
+                with contextlib.suppress(Exception):
+                    await msg.delete()
+
         try:
             if model_id in DISABLED_MODELS:
                 await send_ephemeral(interaction, "❌ This model is disabled.")
@@ -946,8 +1048,10 @@ class ResolutionSelectView(OwnerLockedView):
             est_gen = estimate_generation_seconds(
                 model_id, steps, cfg_val, len(prompt_text or ""), effective_gen_res
             )
+            api_timeout = model_api_timeout(model_id, effective_gen_res)
             gen_cap = 82 if upscale_factor in (2, 4) else 97
 
+            # Ephemere Progress-Nachricht: nur für den auslösenden User sichtbar
             progress_msg = await send_ephemeral(
                 interaction,
                 embed=_image_progress_embed(
@@ -956,7 +1060,9 @@ class ResolutionSelectView(OwnerLockedView):
                 ),
             )
 
-            gen_task = asyncio.create_task(venice_generate(self.session, payload))
+            gen_task = asyncio.create_task(
+                venice_generate(self.session, payload, timeout_total=api_timeout)
+            )
 
             def gen_embed(percent: int, eta: float) -> discord.Embed:
                 return _image_progress_embed(
@@ -965,9 +1071,14 @@ class ResolutionSelectView(OwnerLockedView):
                 )
 
             await run_with_progress(gen_task, progress_msg, est_gen, 0, gen_cap, gen_embed, 6.0)
-            image_bytes = await gen_task
+            image_bytes, gen_error = await gen_task
+
             if not image_bytes:
-                await send_ephemeral(interaction, "❌ Image generation failed.")
+                await drop_progress()
+                await send_ephemeral(
+                    interaction,
+                    f"❌ Image generation failed.\n{gen_error or 'Unknown error.'}",
+                )
                 return
 
             upscaled_success = False
@@ -989,24 +1100,25 @@ class ResolutionSelectView(OwnerLockedView):
                 if upscaled:
                     image_bytes = upscaled
                     upscaled_success = True
+                else:
+                    logger.warning(
+                        "Upscale %sx failed for %s, posting base resolution",
+                        upscale_factor, model_id,
+                    )
 
             if _is_venice_filter_placeholder(image_bytes):
+                await drop_progress()
                 await send_ephemeral(interaction, AUTO_FILTER_EPHEMERAL_TEXT)
                 return
 
-            if progress_msg:
-                with contextlib.suppress(Exception):
-                    await progress_msg.edit(
-                        content=None,
-                        embed=_image_progress_embed(
-                            interaction.user, prompt_text, get_model_label(model_id),
-                            ratio, resolution, 100, 0.0, "Finalizing upload...", state,
-                        ),
-                    )
-
             if not interaction.channel:
+                await drop_progress()
                 await send_ephemeral(interaction, "❌ Channel unavailable.")
                 return
+
+            # Progress-Nachricht VOR dem öffentlichen Post entfernen,
+            # damit der Balken nicht neben dem fertigen Bild stehen bleibt.
+            await drop_progress()
 
             # Backslash muss vor den f-string raus (Python < 3.12)
             prompt_preview = codeblock_safe(
@@ -1022,12 +1134,7 @@ class ResolutionSelectView(OwnerLockedView):
                 name=f"{interaction.user.display_name} • {datetime.now().strftime('%Y-%m-%d')}",
                 icon_url=interaction.user.display_avatar.url,
             )
-            embed.add_field(
-                name="Prompt",
-                value=f"```{prompt_preview}```",
-                inline=False,
-            )
-
+            embed.add_field(name="Prompt", value=f"```{prompt_preview}```", inline=False)
 
             default_hidden = channel_suffix(channel_id)
             used_hidden = previous_inputs.get("hidden_suffix")
@@ -1092,9 +1199,8 @@ class ResolutionSelectView(OwnerLockedView):
             )
 
         finally:
-            if progress_msg:
-                with contextlib.suppress(Exception):
-                    await progress_msg.delete()
+            # Sicherheitsnetz: falls oben ein Pfad das Löschen übersprungen hat
+            await drop_progress()
 
             if not quota_success:
                 await image_quota.rollback(token_quota)
@@ -1119,7 +1225,7 @@ class VeniceImageCog(commands.Cog):
         if self.session and not self.session.closed:
             return
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=300),
+            timeout=aiohttp.ClientTimeout(total=MAX_API_TIMEOUT + 60),
             connector=aiohttp.TCPConnector(limit=60, ttl_dns_cache=300),
         )
 
@@ -1162,6 +1268,26 @@ class VeniceImageCog(commands.Cog):
             f"Disabled={len(DISABLED_MODELS)}, reposted {reposted} starter message(s), "
             f"pruned {pruned} expired quota entr(ies)."
         )
+
+    @commands.command(name="venice_timeouts")
+    @commands.has_permissions(administrator=True)
+    async def venice_timeouts(self, ctx: commands.Context):
+        """Zeigt die konfigurierten Timeouts je Modell und Auflösung."""
+        lines = []
+        for mid in get_active_model_ids():
+            t1 = model_api_timeout(mid, "1K")
+            t2 = model_api_timeout(mid, "2K")
+            t4 = model_api_timeout(mid, "4K")
+            lines.append(f"`{mid}` → 1K:{t1:.0f}s 2K:{t2:.0f}s 4K:{t4:.0f}s")
+
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) > 1800:
+                await ctx.send(chunk)
+                chunk = ""
+            chunk += line + "\n"
+        if chunk:
+            await ctx.send("⏱️ **API timeouts**\n" + chunk)
 
     @commands.Cog.listener()
     async def on_ready(self):
