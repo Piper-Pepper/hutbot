@@ -1,0 +1,1195 @@
+# venice_shared.py
+"""
+Gemeinsame Infrastruktur für alle Venice-Cogs.
+
+REGELN:
+- Quota-Stores NUR über get_quota_store() holen. Direkte Instanziierung
+  umgeht die Path-Registry und damit den gemeinsamen asyncio.Lock ->
+  Race Conditions bei geteilten Dateien.
+- TIER_RULES ist hier die einzige Wahrheit. Nirgendwo sonst duplizieren.
+- Jeder Cog mit Starter-Menü registriert sich per register_starter_reposter().
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import contextlib
+import io
+import json
+import logging
+import os
+import re
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Optional
+
+import aiohttp
+import discord
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+logger = logging.getLogger("venice_shared")
+
+
+# =================================================
+# ENV HELPERS
+# =================================================
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    return default if not raw else raw in ("1", "true", "yes", "on")
+
+
+DISCORD_UPLOAD_LIMIT_FORCE_MB = env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)
+DISCORD_UPLOAD_LIMIT_FALLBACK_MB = env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)
+DISCORD_UPLOAD_SAFETY_BYTES = env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
+
+DEFAULT_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# =================================================
+# ROLLING QUOTA STORE
+# =================================================
+class RollingQuotaStore:
+    """
+    24h-Rolling-Window-Kontingent, persistiert als JSON.
+    Atomares Schreiben (temp + os.replace), File-I/O im Thread damit
+    der Event-Loop nicht blockiert.
+    """
+
+    def __init__(self, file_path: str | Path, window_seconds: int = DEFAULT_WINDOW_SECONDS):
+        self.file_path = Path(file_path)
+        self.window_seconds = int(window_seconds)
+        self.lock = asyncio.Lock()
+
+    # ---------- io ----------
+    def _read_sync(self) -> dict[str, Any]:
+        if not self.file_path.exists():
+            return {}
+        try:
+            raw = self.file_path.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw.strip() else {}
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.error("Quota read failed (%s): %s", self.file_path, e)
+            with contextlib.suppress(Exception):
+                backup = self.file_path.with_suffix(f".corrupt.{int(time.time())}")
+                self.file_path.replace(backup)
+                logger.error("Corrupt quota file moved to %s", backup)
+            return {}
+
+    def _write_sync(self, data: dict[str, Any]) -> None:
+        parent = self.file_path.parent
+        if parent and str(parent) != ".":
+            parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.file_path.with_suffix(self.file_path.suffix + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self.file_path)
+
+    async def _read(self) -> dict[str, Any]:
+        return await asyncio.to_thread(self._read_sync)
+
+    async def _write(self, data: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._write_sync, data)
+
+    # ---------- window ----------
+    def _key(self, guild_id: int, user_id: int) -> str:
+        return f"{guild_id}:{user_id}"
+
+    def _normalize(self, entry: Any, now_ts: int) -> dict[str, int]:
+        if not isinstance(entry, dict):
+            entry = {}
+        start = int(entry.get("start", 0) or 0)
+        used = int(entry.get("used", 0) or 0)
+        if start > 0 and (now_ts - start) >= self.window_seconds:
+            start, used = 0, 0
+        return {"start": start, "used": max(0, used)}
+
+    def _state(self, entry: dict[str, int], limit: int, now_ts: int) -> dict[str, int]:
+        used, start = entry["used"], entry["start"]
+        return {
+            "used": used,
+            "limit": limit,
+            "remaining": max(0, limit - used),
+            "start": start,
+            "reset_in": max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0,
+        }
+
+    # ---------- api ----------
+    async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
+        """Nur lesen, kein Disk-Write."""
+        now_ts = int(time.time())
+        limit = max(0, int(limit))
+        async with self.lock:
+            db = await self._read()
+            entry = self._normalize(db.get(self._key(guild_id, user_id), {}), now_ts)
+            return self._state(entry, limit, now_ts)
+
+    async def reserve(
+        self, guild_id: int, user_id: int, limit: int, amount: int
+    ) -> tuple[bool, dict[str, int], Optional[dict[str, int]]]:
+        now_ts = int(time.time())
+        limit = max(0, int(limit))
+        amount = max(0, int(amount))
+
+        async with self.lock:
+            db = await self._read()
+            key = self._key(guild_id, user_id)
+            entry = self._normalize(db.get(key, {}), now_ts)
+
+            if limit <= 0 or amount <= 0 or entry["used"] + amount > limit:
+                return False, self._state(entry, limit, now_ts), None
+
+            if entry["start"] <= 0:
+                entry["start"] = now_ts
+            entry["used"] += amount
+
+            db[key] = entry
+            await self._write(db)
+
+            token = {
+                "guild_id": guild_id,
+                "user_id": user_id,
+                "amount": amount,
+                "start": entry["start"],
+            }
+            return True, self._state(entry, limit, now_ts), token
+
+    async def rollback(self, token: Optional[dict[str, int]]) -> None:
+        if not token:
+            return
+        guild_id = int(token.get("guild_id", 0))
+        user_id = int(token.get("user_id", 0))
+        amount = int(token.get("amount", 0))
+        token_start = int(token.get("start", 0))
+        if guild_id <= 0 or user_id <= 0 or amount <= 0:
+            return
+
+        now_ts = int(time.time())
+        async with self.lock:
+            db = await self._read()
+            key = self._key(guild_id, user_id)
+            entry = self._normalize(db.get(key, {}), now_ts)
+
+            # Nur zurückbuchen wenn es noch dasselbe Fenster ist
+            if entry["start"] == token_start and entry["used"] > 0:
+                entry["used"] = max(0, entry["used"] - amount)
+                if entry["used"] == 0:
+                    entry["start"] = 0
+                db[key] = entry
+                await self._write(db)
+
+    async def prune(self) -> int:
+        """Abgelaufene Einträge entfernen."""
+        now_ts = int(time.time())
+        async with self.lock:
+            db = await self._read()
+            before = len(db)
+            alive = {k: v for k, v in db.items() if self._normalize(v, now_ts)["start"] > 0}
+            if len(alive) != before:
+                await self._write(alive)
+            return before - len(alive)
+
+
+_stores: dict[str, RollingQuotaStore] = {}
+
+
+def get_quota_store(
+    file_path: str | Path, window_seconds: int = DEFAULT_WINDOW_SECONDS
+) -> RollingQuotaStore:
+    """Pro Pfad immer dieselbe Instanz -> gemeinsamer Lock über alle Cogs."""
+    resolved = str(Path(file_path).expanduser().resolve())
+    store = _stores.get(resolved)
+    if store is None:
+        store = RollingQuotaStore(resolved, window_seconds)
+        _stores[resolved] = store
+        logger.info("Quota store registered: %s (window=%ss)", resolved, window_seconds)
+    elif store.window_seconds != int(window_seconds):
+        logger.warning(
+            "Quota store %s bereits mit window=%ss registriert; %ss ignoriert.",
+            resolved, store.window_seconds, window_seconds,
+        )
+    return store
+
+
+# =================================================
+# TIERS - EINZIGE WAHRHEIT
+# =================================================
+TIER_RULES: dict[int, dict[str, int]] = {
+    1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10,  "video_budget_sec": 10},
+    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 15,  "video_budget_sec": 20},
+    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 20,  "video_budget_sec": 30},
+    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 25,  "video_budget_sec": 35},
+    5: {"role_id": 1375666588404940830, "level": 43, "image_limit": 30,  "video_budget_sec": 40},
+    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 50},
+    7: {"role_id": 1346414581643219029, "level": 99, "image_limit": 300, "video_budget_sec": 300},
+}
+
+DEFAULT_IMAGE_LIMIT_24H = 5
+DEFAULT_VIDEO_BUDGET_SEC = 0
+
+
+def tiers_asc() -> list[tuple[int, dict[str, int]]]:
+    return sorted(TIER_RULES.items(), key=lambda x: x[0])
+
+
+def tiers_desc() -> list[tuple[int, dict[str, int]]]:
+    return sorted(TIER_RULES.items(), key=lambda x: x[0], reverse=True)
+
+
+def get_member_tier(member: Optional[discord.Member]) -> int:
+    if not isinstance(member, discord.Member):
+        return 0
+    role_ids = {r.id for r in member.roles}
+    for tier, cfg in tiers_desc():
+        if cfg["role_id"] in role_ids:
+            return tier
+    return 0
+
+
+def get_image_limit_for_member(member: Optional[discord.Member]) -> int:
+    tier = get_member_tier(member)
+    return DEFAULT_IMAGE_LIMIT_24H if tier <= 0 else int(TIER_RULES[tier]["image_limit"])
+
+
+def get_video_budget_for_member(member: Optional[discord.Member]) -> int:
+    tier = get_member_tier(member)
+    return DEFAULT_VIDEO_BUDGET_SEC if tier <= 0 else int(TIER_RULES[tier]["video_budget_sec"])
+
+
+def next_tier(current_tier: int) -> Optional[tuple[int, dict[str, int]]]:
+    for tier, cfg in tiers_asc():
+        if tier > current_tier:
+            return tier, cfg
+    return None
+
+
+def role_ids_for_tier_and_above(min_tier: int) -> list[int]:
+    return [cfg["role_id"] for t, cfg in tiers_asc() if t >= min_tier]
+
+
+def image_tier_line() -> str:
+    return " • ".join(f"T{t}:{cfg['image_limit']}" for t, cfg in tiers_asc())
+
+
+def video_tier_line() -> str:
+    return " • ".join(f"T{t}:{cfg['video_budget_sec']}s" for t, cfg in tiers_asc())
+
+
+# =================================================
+# TEXT HELPERS
+# =================================================
+def trim(text: str, limit: int) -> str:
+    t = (text or "").strip()
+    return t if len(t) <= limit else (t[:limit] + " [...]")
+
+
+def codeblock_safe(text: str) -> str:
+    return (text or "").replace("```", "'''").strip()
+
+
+def progress_bar(percent: int, blocks: int = 14) -> str:
+    p = max(0, min(100, int(percent)))
+    filled = int(blocks * p / 100)
+    return "█" * filled + "░" * (blocks - filled)
+
+
+def eta_text(seconds_float: float) -> str:
+    s = max(0, int(round(seconds_float)))
+    return f"{s}s" if s < 60 else f"{s // 60}m {s % 60}s"
+
+
+def seconds_human(sec: int) -> str:
+    sec = max(0, int(sec))
+    h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
+    if h > 0:
+        return f"{h}h {m}m"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def sanitize_error_text(text: str, limit: int = 300) -> str:
+    t = re.sub(r"https?://\S+", "[link removed]", (text or "").strip())
+    return re.sub(r"\s+", " ", t).strip()[:limit]
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def make_safe_filename(prompt: str, ext: str = "png", fallback: str = "image") -> str:
+    base = "_".join((prompt or "").split()[:5]) or fallback
+    base = re.sub(r"[^a-zA-Z0-9_]", "_", base)[:60] or fallback
+    ext = (ext or "png").lower().strip(".")
+    return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.{ext}"
+
+
+# =================================================
+# BINARY / IMAGE HELPERS
+# =================================================
+def looks_like_image(binary: bytes) -> bool:
+    if not binary or len(binary) < 12:
+        return False
+    return (
+        binary.startswith(b"\x89PNG\r\n\x1a\n")
+        or binary.startswith(b"\xff\xd8\xff")
+        or (binary[:4] == b"RIFF" and binary[8:12] == b"WEBP")
+        or binary.startswith((b"GIF87a", b"GIF89a"))
+    )
+
+
+def looks_like_video(binary: bytes) -> bool:
+    return bool(binary and len(binary) >= 12 and binary[4:8] == b"ftyp")
+
+
+def infer_image_ext(binary: bytes) -> str:
+    if binary.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if binary.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if binary[:4] == b"RIFF" and binary[8:12] == b"WEBP":
+        return "webp"
+    if binary.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return "png"
+
+
+def infer_image_mime(binary: bytes) -> str:
+    return {
+        "png": "image/png", "jpg": "image/jpeg",
+        "webp": "image/webp", "gif": "image/gif",
+    }.get(infer_image_ext(binary), "image/png")
+
+
+def b64_to_bytes(s: str) -> Optional[bytes]:
+    if not s:
+        return None
+    s = s.strip()
+    if s.startswith("data:") and "," in s:
+        s = s.split(",", 1)[1]
+    try:
+        return base64.b64decode(s)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def bytes_to_b64(binary: bytes) -> str:
+    return base64.b64encode(binary).decode("utf-8")
+
+
+def bytes_to_data_url(binary: bytes) -> str:
+    return f"data:{infer_image_mime(binary)};base64,{bytes_to_b64(binary)}"
+
+
+def extract_image_from_json_obj(obj: Any, depth: int = 0) -> Optional[bytes]:
+    if depth > 8:
+        return None
+    if isinstance(obj, dict):
+        for key in (
+            "image", "image_base64", "imageBase64", "b64_json",
+            "base64", "upscaled_image", "edited_image",
+        ):
+            val = obj.get(key)
+            if isinstance(val, str):
+                out = b64_to_bytes(val)
+                if out and looks_like_image(out):
+                    return out
+        for _, val in list(obj.items())[:20]:
+            out = extract_image_from_json_obj(val, depth + 1)
+            if out:
+                return out
+    elif isinstance(obj, list):
+        for item in obj[:20]:
+            out = extract_image_from_json_obj(item, depth + 1)
+            if out:
+                return out
+    elif isinstance(obj, str):
+        out = b64_to_bytes(obj)
+        if out and looks_like_image(out):
+            return out
+    return None
+
+
+async def extract_image_from_response(resp: aiohttp.ClientResponse) -> Optional[bytes]:
+    raw = await resp.read()
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if "image/" in ctype and looks_like_image(raw):
+        return raw
+    try:
+        data = json.loads(raw.decode("utf-8", errors="ignore"))
+    except Exception:
+        return raw if looks_like_image(raw) else None
+    out = extract_image_from_json_obj(data)
+    return out if out and looks_like_image(out) else None
+
+
+def extract_urls_from_payload(payload: Any) -> list[str]:
+    urls: list[str] = []
+    if not isinstance(payload, (dict, list)):
+        return urls
+    interesting = {"download_url", "url", "result_url", "video_url", "file_url", "asset_url"}
+
+    def walk(obj: Any, depth: int = 0):
+        if depth > 8:
+            return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                lk = str(k).lower()
+                if isinstance(v, str) and v.startswith("http"):
+                    if lk in interesting or "url" in lk or "download" in lk:
+                        urls.append(v)
+                walk(v, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item, depth + 1)
+
+    walk(payload)
+    return list(dict.fromkeys(urls))
+
+
+# =================================================
+# DISCORD UPLOAD
+# =================================================
+def discord_upload_limit_bytes(interaction: discord.Interaction) -> int:
+    if DISCORD_UPLOAD_LIMIT_FORCE_MB > 0:
+        return DISCORD_UPLOAD_LIMIT_FORCE_MB * 1024 * 1024
+    inter_limit = getattr(interaction, "filesize_limit", None)
+    guild_limit = getattr(interaction.guild, "filesize_limit", None) if interaction.guild else None
+    candidates = [v for v in (inter_limit, guild_limit) if isinstance(v, int) and v > 0]
+    return max(candidates) if candidates else DISCORD_UPLOAD_LIMIT_FALLBACK_MB * 1024 * 1024
+
+
+def fit_image_for_discord(image_bytes: bytes, max_bytes: int) -> tuple[bytes, str]:
+    target = max(256 * 1024, int(max_bytes - DISCORD_UPLOAD_SAFETY_BYTES))
+
+    if len(image_bytes) <= target and looks_like_image(image_bytes):
+        return image_bytes, infer_image_ext(image_bytes)
+    if Image is None:
+        return image_bytes, infer_image_ext(image_bytes)
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+    except Exception:
+        return image_bytes, infer_image_ext(image_bytes)
+
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+
+    resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+    best_data, best_ext = image_bytes, infer_image_ext(image_bytes)
+
+    def remember(data: bytes, ext: str):
+        nonlocal best_data, best_ext
+        if len(data) < len(best_data):
+            best_data, best_ext = data, ext
+
+    for max_side in (4096, 3072, 2560, 2048, 1792, 1536, 1280, 1024, 896, 768, 640, 512):
+        work = img.copy()
+        work.thumbnail((max_side, max_side), resample)
+        for q in (92, 86, 80, 74, 68, 62, 56, 50, 44, 38, 32, 28, 24):
+            with contextlib.suppress(Exception):
+                buf = io.BytesIO()
+                work.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
+                data = buf.getvalue()
+                remember(data, "jpg")
+                if len(data) <= target:
+                    return data, "jpg"
+
+    for max_side in (3072, 2560, 2048, 1536, 1280, 1024, 896, 768, 640, 512):
+        work = img.copy()
+        work.thumbnail((max_side, max_side), resample)
+        for q in (90, 80, 70, 60, 50, 40, 30, 24):
+            with contextlib.suppress(Exception):
+                buf = io.BytesIO()
+                work.save(buf, format="WEBP", quality=q, method=6)
+                data = buf.getvalue()
+                remember(data, "webp")
+                if len(data) <= target:
+                    return data, "webp"
+
+    return best_data, best_ext
+
+
+async def send_image_with_compression(
+    channel: discord.abc.Messageable,
+    interaction: discord.Interaction,
+    image_bytes: bytes,
+    embed: discord.Embed,
+    content: str,
+    filename_prompt: str,
+    filename_fallback: str = "image",
+) -> Optional[discord.Message]:
+    """Postet ein Bild, verkleinert bei 413 stufenweise."""
+    upload_limit = discord_upload_limit_bytes(interaction)
+
+    for scale in (1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.22, 0.18):
+        target = max(256 * 1024, int(upload_limit * scale))
+        data, ext = fit_image_for_discord(image_bytes, target)
+        fname = make_safe_filename(filename_prompt, ext=ext, fallback=filename_fallback)
+
+        fp = io.BytesIO(data)
+        fp.seek(0)
+        embed.set_image(url=f"attachment://{fname}")
+
+        try:
+            return await channel.send(
+                content=content,
+                embed=embed,
+                file=discord.File(fp, filename=fname),
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except discord.HTTPException as e:
+            if e.status == 413 or getattr(e, "code", None) == 40005:
+                continue
+            raise
+    return None
+
+
+# =================================================
+# MESSAGE -> IMAGE EXTRACTION
+# =================================================
+def extract_embed_image_urls(msg: discord.Message) -> list[str]:
+    urls: list[str] = []
+    for emb in msg.embeds:
+        if emb.image and emb.image.url:
+            urls.append(emb.image.url)
+        if emb.thumbnail and emb.thumbnail.url:
+            urls.append(emb.thumbnail.url)
+        if isinstance(emb.url, str) and emb.url.startswith("http"):
+            urls.append(emb.url)
+    return list(dict.fromkeys(urls))
+
+
+async def extract_image_bytes_from_message(
+    msg: discord.Message,
+    shared_session: Optional[aiohttp.ClientSession] = None,
+) -> Optional[bytes]:
+    for a in msg.attachments:
+        with contextlib.suppress(Exception):
+            raw = await a.read()
+            if looks_like_image(raw):
+                return raw
+
+    urls = extract_embed_image_urls(msg)
+    if not urls:
+        return None
+
+    own = False
+    session = shared_session
+    if session is None or session.closed:
+        own = True
+        session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25))
+
+    try:
+        for url in urls[:8]:
+            with contextlib.suppress(Exception):
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        continue
+                    raw = await resp.read()
+                    if looks_like_image(raw):
+                        return raw
+    finally:
+        if own and session:
+            with contextlib.suppress(Exception):
+                await session.close()
+    return None
+
+
+def extract_source_image_url(msg: discord.Message) -> Optional[str]:
+    for a in msg.attachments:
+        ctype = (a.content_type or "").lower()
+        name = (a.filename or "").lower()
+        if ctype.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+            if isinstance(a.url, str) and a.url.startswith("http"):
+                return a.url
+    for emb in msg.embeds:
+        u = (emb.image.url if emb.image else None) or (emb.thumbnail.url if emb.thumbnail else None)
+        if isinstance(u, str) and u.startswith("http"):
+            return u
+        if isinstance(emb.url, str) and emb.url.startswith("http"):
+            return emb.url
+    return None
+
+
+# =================================================
+# CHANNEL LOCKS
+# =================================================
+_channel_locks: dict[int, asyncio.Lock] = {}
+
+
+def get_channel_lock(channel_id: int) -> asyncio.Lock:
+    lock = _channel_locks.get(channel_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _channel_locks[channel_id] = lock
+    return lock
+
+
+# =================================================
+# EPHEMERAL TRACKING
+# =================================================
+_ephemeral_messages: dict[tuple[int, int], list[discord.Message]] = {}
+
+
+def _ephemeral_key(interaction: discord.Interaction) -> tuple[int, int]:
+    return (interaction.guild.id if interaction.guild else 0), interaction.user.id
+
+
+async def track_ephemeral_message(interaction: discord.Interaction, msg: Optional[discord.Message]):
+    if msg:
+        _ephemeral_messages.setdefault(_ephemeral_key(interaction), []).append(msg)
+
+
+async def cleanup_user_ephemerals(interaction: discord.Interaction, delay: float = 0.0):
+    if delay > 0:
+        await asyncio.sleep(delay)
+    for m in _ephemeral_messages.pop(_ephemeral_key(interaction), []):
+        with contextlib.suppress(Exception):
+            await m.delete()
+
+
+async def send_ephemeral(
+    interaction: discord.Interaction,
+    content: Optional[str] = None,
+    **kwargs,
+) -> Optional[discord.Message]:
+    payload = dict(kwargs)
+    payload["ephemeral"] = True
+    if content is not None:
+        payload["content"] = content
+    try:
+        if interaction.response.is_done():
+            msg = await interaction.followup.send(wait=True, **payload)
+        else:
+            await interaction.response.send_message(**payload)
+            msg = await interaction.original_response()
+        await track_ephemeral_message(interaction, msg)
+        return msg
+    except Exception:
+        return None
+
+
+# =================================================
+# POST DECORATION
+# =================================================
+SERVER_ANIM_ICON = "<a:01pepper_icon:1377636862847619213>"
+
+RATING_REACTIONS: list[str] = [
+    "1️⃣",
+    "2️⃣",
+    "3️⃣",
+    "<:011:1346549711817146400>",
+    "<:011pump:1346549688836296787>",
+]
+
+_dead_reactions: set[str] = set()
+
+
+async def add_rating_reactions(
+    message: Optional[discord.Message],
+    reactions: Optional[list[str]] = None,
+) -> int:
+    """
+    Setzt Bewertungs-Reactions. Emojis, die dauerhaft fehlschlagen
+    (gelöscht / kein Zugriff), werden einmal geloggt und danach übersprungen.
+    """
+    if message is None:
+        return 0
+
+    ok = 0
+    for emo in (reactions if reactions is not None else RATING_REACTIONS):
+        if emo in _dead_reactions:
+            continue
+        try:
+            await message.add_reaction(emo)
+            ok += 1
+        except discord.HTTPException as e:
+            code = getattr(e, "code", None)
+            if code in (10014, 50001):  # Unknown Emoji / Missing Access
+                _dead_reactions.add(emo)
+                logger.warning("Reaction %r nicht verfügbar (code=%s), übersprungen.", emo, code)
+            elif e.status == 403:
+                logger.warning("Keine Reaction-Berechtigung in #%s", message.channel)
+                return ok
+        except Exception as e:
+            logger.debug("add_reaction(%r) fehlgeschlagen: %s", emo, e)
+    return ok
+
+
+# =================================================
+# QUOTA MESSAGES
+# =================================================
+def build_image_quota_text(member: Optional[discord.Member], state: dict[str, int]) -> str:
+    tier = get_member_tier(member)
+    lines = [
+        f"⛔ Daily image limit reached: **{state['used']}/{state['limit']}** in this 24h window.",
+        f"⏳ Reset in **{seconds_human(int(state['reset_in']))}**.",
+        (f"Current: **Tier {tier}** → **{state['limit']} images/24h**" if tier > 0
+         else f"Current: **No Tier** → **{state['limit']} images/24h**"),
+    ]
+    nxt = next_tier(tier)
+    if nxt:
+        nt, cfg = nxt
+        lines.append(
+            f"🚀 Next unlock: **Tier {nt}** (<@&{cfg['role_id']}>, Level {cfg['level']}) "
+            f"→ **{cfg['image_limit']} images/24h**."
+        )
+    else:
+        lines.append("🏆 You already have the highest image tier.")
+    lines.append(f"Tier limits: `{image_tier_line()}` • Default: `{DEFAULT_IMAGE_LIMIT_24H}`")
+    return "\n".join(lines)
+
+
+async def send_image_quota_message(
+    interaction: discord.Interaction,
+    member: Optional[discord.Member],
+    state: dict[str, int],
+):
+    await send_ephemeral(interaction, build_image_quota_text(member, state))
+
+
+async def send_tier_locked_message(
+    interaction: discord.Interaction,
+    min_tier: int,
+    feature: str = "This feature",
+):
+    mentions = " ".join(f"<@&{rid}>" for rid in role_ids_for_tier_and_above(min_tier))
+    cfg = TIER_RULES.get(min_tier)
+    lvl = f" (Level {cfg['level']}+)" if cfg else ""
+    await send_ephemeral(
+        interaction,
+        f"🔒 {feature} requires **Tier {min_tier}+**{lvl}.\n{mentions}\n\nLevel up to gain access.",
+    )
+
+
+async def send_resolution_lock_message(
+    interaction: discord.Interaction,
+    resolution: str,
+    required_tier: int,
+    current_tier: int,
+):
+    cfg = TIER_RULES.get(required_tier)
+    if not cfg:
+        await send_ephemeral(interaction, f"🔒 **{resolution}** is locked.")
+        return
+    await send_ephemeral(
+        interaction,
+        f"🔒 **{resolution}** is locked.\n"
+        f"Required: **Tier {required_tier}+** (<@&{cfg['role_id']}>, Level {cfg['level']}+)\n"
+        f"Current: **Tier {current_tier}**.",
+    )
+
+
+# =================================================
+# PROGRESS EMBED (einmalig, war 3x fast identisch)
+# =================================================
+def build_progress_embed(
+    *,
+    title: str,
+    color: discord.Color,
+    user: discord.abc.User,
+    prompt: str,
+    percent: int,
+    status_lines: list[str],
+    quota_name: str,
+    quota_used: int,
+    quota_limit: int,
+    quota_remaining: int,
+    quota_unit: str = "",
+    footer: Optional[str] = None,
+    footer_icon: Optional[str] = None,
+) -> discord.Embed:
+    emb = discord.Embed(
+        title=title,
+        description=user.mention,
+        color=color,
+        timestamp=utc_now(),
+    )
+    emb.add_field(name="Prompt", value=f"```{codeblock_safe(trim(prompt, 420))}```", inline=False)
+    emb.add_field(name="Progress", value=f"`{progress_bar(percent)} {percent}%`", inline=False)
+    emb.add_field(
+        name="Status",
+        value="\n".join(f"• {ln}" for ln in status_lines if ln),
+        inline=False,
+    )
+    emb.add_field(
+        name=quota_name,
+        value=(
+            f"• Used: `{quota_used}/{quota_limit}{quota_unit}`\n"
+            f"• Remaining: `{quota_remaining}{quota_unit}`"
+        ),
+        inline=False,
+    )
+    if footer:
+        emb.set_footer(text=footer, icon_url=footer_icon)
+    return emb
+
+
+# =================================================
+# PROGRESS LOOP
+# =================================================
+async def run_with_progress(
+    task: asyncio.Task,
+    progress_msg: Optional[discord.Message],
+    est: float,
+    start_percent: int,
+    end_percent: int,
+    make_embed: Callable[[int, float], discord.Embed],
+    min_est: float = 6.0,
+) -> float:
+    started = time.monotonic()
+    last_percent = -1
+    span = max(0, end_percent - start_percent)
+
+    while not task.done():
+        elapsed = time.monotonic() - started
+        if elapsed > est * 1.15:
+            est = elapsed * 1.20
+        ratio = min(0.999, elapsed / max(est, min_est))
+        percent = min(end_percent, start_percent + int(ratio * span))
+        eta = max(0.0, est - elapsed)
+
+        if percent != last_percent:
+            last_percent = percent
+            if progress_msg:
+                with contextlib.suppress(Exception):
+                    await progress_msg.edit(content=None, embed=make_embed(percent, eta))
+        await asyncio.sleep(0.8)
+
+    return time.monotonic() - started
+
+
+# =================================================
+# OWNER LOCKED VIEW
+# =================================================
+class OwnerLockedView(discord.ui.View):
+    def __init__(self, owner_id: int, timeout: Optional[float] = 900):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This menu belongs to another user.")
+            return False
+        return True
+
+
+# =================================================
+# STARTER REPOST REGISTRY
+# Behebt: Video-Cog postete im Face-Channel das Image-Menü.
+# =================================================
+_starter_reposters: dict[int, Callable[[discord.TextChannel], Awaitable[None]]] = {}
+
+
+def register_starter_reposter(
+    channel_id: int,
+    fn: Callable[[discord.TextChannel], Awaitable[None]],
+) -> None:
+    _starter_reposters[int(channel_id)] = fn
+
+
+def unregister_starter_reposter(channel_id: int) -> None:
+    _starter_reposters.pop(int(channel_id), None)
+
+
+def has_starter_reposter(channel_id: int) -> bool:
+    return int(channel_id) in _starter_reposters
+
+
+async def repost_starter_for_channel(channel: discord.abc.Messageable) -> bool:
+    """Postet das für DIESEN Channel registrierte Starter-Menü neu."""
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    fn = _starter_reposters.get(channel.id)
+    if fn is None:
+        return False
+    try:
+        await fn(channel)
+        return True
+    except Exception as e:
+        logger.warning("repost_starter_for_channel failed (%s): %s", channel.id, e)
+        return False
+
+
+# =================================================
+# STARTER MESSAGE HELPER
+# =================================================
+async def refresh_starter_message(
+    channel: discord.TextChannel,
+    bot_user_id: Optional[int],
+    content: str,
+    view_factory: Callable[[], discord.ui.View],
+    matcher: Callable[[discord.Message], bool],
+    scan_limit: int = 12,
+) -> None:
+    """Löscht alte Starter-Posts im Scan-Fenster und postet einen neuen."""
+    async with get_channel_lock(channel.id):
+        try:
+            async for msg in channel.history(limit=scan_limit):
+                if bot_user_id is not None and msg.author.id != bot_user_id:
+                    continue
+                if matcher(msg):
+                    with contextlib.suppress(Exception):
+                        await msg.delete()
+            await channel.send(content, view=view_factory())
+        except Exception as e:
+            logger.warning("refresh_starter_message failed (%s): %s", channel.id, e)
+
+
+# =================================================
+# VIDEO CONSTANTS + ANIMATE UI (war 2x dupliziert)
+# =================================================
+MAX_VIDEO_RENDER_SECONDS = 15
+VIDEO_DURATION_CHOICES = [5, 10, 15]
+VIDEO_ALLOWED_ASPECTS = {"1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"}
+
+
+class AnimatePromptModal(discord.ui.Modal):
+    def __init__(
+        self,
+        owner_id: int,
+        source_channel_id: int,
+        source_message_id: int,
+        base_prompt: str,
+        ratio: str,
+    ):
+        self.owner_id = owner_id
+        self.source_channel_id = source_channel_id
+        self.source_message_id = source_message_id
+        self.base_prompt = (base_prompt or "").strip()
+        self.ratio = ratio
+        super().__init__(title="🎬 Animate Image • Video Prompt")
+
+        self.video_prompt = discord.ui.TextInput(
+            label="Video prompt",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=2000,
+            default=(self.base_prompt[:2000] if self.base_prompt else ""),
+            placeholder="Describe motion, camera movement, atmosphere...",
+        )
+        self.add_item(self.video_prompt)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This modal does not belong to you.")
+            return
+        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
+            await send_ephemeral(interaction, "❌ This action is server-only.")
+            return
+
+        final_prompt = (
+            (self.video_prompt.value or "").strip()
+            or self.base_prompt
+            or "Animate this image with natural motion."
+        )
+
+        video_cog = interaction.client.get_cog("VeniceVideoCog")
+        if not video_cog:
+            await send_ephemeral(interaction, "❌ VeniceVideoCog is not loaded.")
+            return
+
+        try:
+            info = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
+        except Exception:
+            await send_ephemeral(interaction, "❌ Could not load your video quota right now.")
+            return
+
+        budget = int(info["limit"])
+        if budget <= 0:
+            await send_ephemeral(
+                interaction, "🎬 Video rendering is locked for members without a Tier role."
+            )
+            return
+
+        remaining = int(info["remaining"])
+        allowed = [s for s in VIDEO_DURATION_CHOICES if s <= min(MAX_VIDEO_RENDER_SECONDS, remaining)]
+
+        if not allowed:
+            await send_ephemeral(
+                interaction,
+                f"⛔ Video seconds exhausted for this 24h window: **{info['used']}/{budget}s**.\n"
+                f"⏳ Reset in **{seconds_human(int(info['reset_in']))}**.\n"
+                f"Current tier: **T{info['tier']}**.\n"
+                f"Tier budgets: `{video_tier_line()}`",
+            )
+            return
+
+        await send_ephemeral(
+            interaction,
+            content=(
+                f"✅ Video prompt set.\n"
+                f"⏱ Choose length (remaining today: **{remaining}s**, "
+                f"max per render: **{MAX_VIDEO_RENDER_SECONDS}s**):"
+            ),
+            view=AnimateDurationView(
+                owner_id=self.owner_id,
+                source_channel_id=self.source_channel_id,
+                source_message_id=self.source_message_id,
+                prompt_text=final_prompt,
+                ratio=self.ratio,
+                allowed_durations=allowed,
+            ),
+        )
+
+
+class AnimateDurationView(OwnerLockedView):
+    def __init__(
+        self,
+        owner_id: int,
+        source_channel_id: int,
+        source_message_id: int,
+        prompt_text: str,
+        ratio: str,
+        allowed_durations: list[int],
+    ):
+        super().__init__(owner_id=owner_id, timeout=300)
+        self.source_channel_id = source_channel_id
+        self.source_message_id = source_message_id
+        self.prompt_text = prompt_text
+        self.ratio = ratio
+        self.allowed_durations = sorted({d for d in allowed_durations if d > 0})
+
+        if not self.allowed_durations:
+            self.add_item(discord.ui.Button(
+                label="No duration available",
+                disabled=True,
+                style=discord.ButtonStyle.secondary,
+            ))
+            return
+
+        for idx, sec in enumerate(self.allowed_durations):
+            style = (
+                discord.ButtonStyle.success if sec <= 10
+                else discord.ButtonStyle.danger if sec >= 15
+                else discord.ButtonStyle.primary
+            )
+            b = discord.ui.Button(label=f"{sec} seconds", style=style, row=idx // 5)
+            b.callback = self._make_callback(sec)
+            self.add_item(b)
+
+    def _make_callback(self, seconds: int):
+        async def _cb(interaction: discord.Interaction):
+            await self._run(interaction, seconds)
+        return _cb
+
+    async def _run(self, interaction: discord.Interaction, seconds: int):
+        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
+            await send_ephemeral(interaction, "❌ This action is server-only.")
+            return
+
+        video_cog = interaction.client.get_cog("VeniceVideoCog")
+        if not video_cog:
+            await send_ephemeral(interaction, "❌ VeniceVideoCog is not loaded.")
+            return
+
+        if seconds > MAX_VIDEO_RENDER_SECONDS:
+            await send_ephemeral(
+                interaction, f"❌ Max duration per render is {MAX_VIDEO_RENDER_SECONDS} seconds."
+            )
+            return
+
+        with contextlib.suppress(Exception):
+            rem = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
+            if int(rem.get("remaining", 0)) < seconds:
+                await send_ephemeral(
+                    interaction,
+                    f"⛔ Not enough video seconds left.\n"
+                    f"Remaining: **{rem.get('remaining', 0)}s** of **{rem.get('limit', 0)}s**.",
+                )
+                return
+
+        await interaction.response.defer(ephemeral=True)
+
+        channel = interaction.client.get_channel(self.source_channel_id)
+        if channel is None:
+            with contextlib.suppress(Exception):
+                channel = await interaction.client.fetch_channel(self.source_channel_id)
+        if channel is None or not hasattr(channel, "fetch_message"):
+            await send_ephemeral(interaction, "❌ Source channel not usable.")
+            return
+
+        try:
+            source_message = await channel.fetch_message(self.source_message_id)
+        except Exception:
+            await send_ephemeral(interaction, "❌ Source image message not found.")
+            return
+
+        source_image_url = extract_source_image_url(source_message)
+
+        face_cog = interaction.client.get_cog("VeniceFaceCog")
+        image_cog = interaction.client.get_cog("VeniceImageCog")
+        shared_session = (
+            getattr(face_cog, "session", None) or getattr(image_cog, "session", None)
+        )
+        image_bytes = await extract_image_bytes_from_message(source_message, shared_session)
+
+        if not source_image_url and not image_bytes:
+            await send_ephemeral(interaction, "❌ No usable source image found.")
+            return
+
+        aspect = self.ratio if self.ratio in VIDEO_ALLOWED_ASPECTS else "16:9"
+        prompt = (self.prompt_text or "").strip() or "Animate this image with natural motion."
+
+        await video_cog.animate_image_to_video(
+            interaction=interaction,
+            image_url=source_image_url or "",
+            image_bytes=image_bytes,
+            prompt=prompt,
+            aspect=aspect,
+            seconds=seconds,
+            target_channel=channel,
+        )
+        await cleanup_user_ephemerals(interaction)
+
+
+class AnimateEphemeralView(OwnerLockedView):
+    def __init__(
+        self,
+        owner_id: int,
+        source_channel_id: int,
+        source_message_id: int,
+        prompt_text: str,
+        ratio: str,
+    ):
+        super().__init__(owner_id=owner_id, timeout=1800)
+        self.source_channel_id = source_channel_id
+        self.source_message_id = source_message_id
+        self.prompt_text = prompt_text
+        self.ratio = ratio
+
+    @discord.ui.button(label="🎬 Animate this image", style=discord.ButtonStyle.primary)
+    async def animate(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
+            await send_ephemeral(interaction, "❌ This action is server-only.")
+            return
+        await interaction.response.send_modal(
+            AnimatePromptModal(
+                owner_id=self.owner_id,
+                source_channel_id=self.source_channel_id,
+                source_message_id=self.source_message_id,
+                base_prompt=self.prompt_text,
+                ratio=self.ratio,
+            )
+        )
