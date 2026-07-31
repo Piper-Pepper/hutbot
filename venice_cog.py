@@ -1017,11 +1017,12 @@ class ResolutionSelectView(OwnerLockedView):
                 name=f"{interaction.user.display_name} • {datetime.now().strftime('%Y-%m-%d')}",
                 icon_url=interaction.user.display_avatar.url,
             )
-            embed.add_field(
-                name="Prompt",
-                value=f"```{codeblock_safe(trim((prompt_text or '').replace('\n\n', '\n'), 1600))}```",
-                inline=False,
-            )
+            prompt_preview = codeblock_safe(trim((prompt_text or "").replace("\n\n", "\n"), 1600))
+                    embed.add_field(
+                        name="Prompt",
+                        value=f"```{prompt_preview}```",
+                        inline=False,
+                    )
 
             default_hidden = channel_suffix(channel_id)
             used_hidden = previous_inputs.get("hidden_suffix")
