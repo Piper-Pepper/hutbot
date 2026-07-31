@@ -22,6 +22,16 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
+# helpers
+# =============================================================================
+def _spoiler_safe(text: str) -> str:
+    """Neutralize any existing '||' so it doesn't break an outer spoiler wrapper."""
+    if not text:
+        return text
+    return text.replace("||", "\u200b|\u200b|\u200b")
+
+
+# =============================================================================
 # EMBED BUILDERS
 # =============================================================================
 def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict) -> discord.Embed:
@@ -60,8 +70,9 @@ def build_fresh_solved_post_embed(
       - riddle image as THUMBNAIL
       - solution image as BIG IMAGE
       - solution text with clickable [🔗 MORE](url) hyperlink label
-      - riddle text truncated at 150 chars
-      - winning (user-submitted) answer
+      - FULL riddle text (no truncation) in the description
+      - Winning (user-submitted) answer AS SPOILER
+      - Solution AS SPOILER
       - Award/XP field
       - NO pings on this post
     """
@@ -70,7 +81,9 @@ def build_fresh_solved_post_embed(
     sol_text_raw = (riddle.get("solution") or "").strip()
     sol_text, more_url = extract_first_url(sol_text_raw)
 
-    riddle_text = truncate_text(riddle.get("text") or "*No text*", 150)
+    # NO more truncation for the riddle text — full text, only clamped to
+    # the hard embed description limit (~4096 chars) as a last resort.
+    riddle_text = (riddle.get("text") or "*No text*").strip()
 
     e = discord.Embed(
         title=f"🎉 Riddle No.{r_no} — Solved!",
@@ -85,20 +98,28 @@ def build_fresh_solved_post_embed(
     else:
         e.set_author(name=solver_display_name)
 
+    # Winning answer -> hidden behind spoiler
     if submitted_answer and submitted_answer.strip():
+        safe_ans = _spoiler_safe(submitted_answer.strip())
         e.add_field(
             name="🧠 Winning Answer",
-            value=clamp_embed_value(submitted_answer.strip()),
+            value=clamp_embed_value(f"||{safe_ans}||"),
             inline=False,
         )
 
+    # Solution -> hidden behind spoiler (link stays clickable inside spoiler)
     if sol_text or more_url:
         parts: list[str] = []
         if sol_text:
-            parts.append(sol_text)
+            parts.append(_spoiler_safe(sol_text))
         if more_url:
             parts.append(f"[🔗 MORE]({more_url})")
-        e.add_field(name="✅ Solution", value=clamp_embed_value("\n\n".join(parts)), inline=False)
+        joined = "\n\n".join(parts)
+        e.add_field(
+            name="✅ Solution",
+            value=clamp_embed_value(f"||{joined}||"),
+            inline=False,
+        )
 
     e.add_field(name="🏆 Award", value=f"{xp} XP", inline=True)
 
@@ -254,6 +275,7 @@ class LoggedPersistentView(View):
         super().__init__(timeout=timeout)
     async def on_error(self, interaction: Interaction, error: Exception, item):
         logger.exception("View error in %s: %s", self.__class__.__name__, error)
+
 
 # =============================================================================
 # MODALS
@@ -661,6 +683,7 @@ class VoteButtons(LoggedPersistentView):
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
 
+# riddle_ui.py  (Teil 2/2)
 
 # =============================================================================
 # ADMIN PANEL  ( /riddle )
@@ -677,6 +700,7 @@ class SlotSelectPanel(Select):
                 description=desc[:100], default=(slot == panel.selected_slot),
             ))
         super().__init__(placeholder="Select slot", min_values=1, max_values=1, options=opts, row=0)
+
     async def callback(self, interaction: Interaction):
         self.panel.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, to_int(self.values[0], 1)))
         if not await safe_defer(interaction):
@@ -691,6 +715,7 @@ class PanelButton(discord.ui.Button):
         super().__init__(label=label, style=style, row=row)
         self.panel = panel
         self.action = action
+
     async def callback(self, interaction: Interaction):
         try:
             await self.panel.handle_action(interaction, self.action)
@@ -963,11 +988,14 @@ class ChampionsView(View):
         self.owner_id = owner_id
         self.message: Optional[discord.Message] = None
         self._sync()
+
     def _sync(self):
         self.prev_btn.disabled = self.page <= 0
         self.next_btn.disabled = self.page >= self.max_page
+
     def _name(self, uid: int) -> str:
         return self.name_cache.get(uid, f"User {uid}")
+
     def build_embed(self) -> discord.Embed:
         start = self.page * self.per_page
         rows = self.entries[start:start + self.per_page]
@@ -993,16 +1021,19 @@ class ChampionsView(View):
         if is_http_url(img):
             e.set_image(url=img)
         return e
+
     async def interaction_check(self, interaction: Interaction) -> bool:
         if self.owner_id is not None and interaction.user.id != self.owner_id:
             return False
         return True
+
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.secondary)
     async def prev_btn(self, interaction: Interaction, _: discord.ui.Button):
         if self.page > 0:
             self.page -= 1
         self._sync()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
     @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
     async def next_btn(self, interaction: Interaction, _: discord.ui.Button):
         if self.page < self.max_page:
