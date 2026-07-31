@@ -70,15 +70,6 @@ def build_fresh_solved_post_embed(
     solver_avatar_url: Optional[str],
     submitted_answer: str,
 ) -> discord.Embed:
-    """
-    Big 'refreshed' solved post that REPLACES the deleted original riddle post.
-      - riddle image as THUMBNAIL
-      - solution image as BIG IMAGE
-      - FULL riddle text (no truncation) in description
-      - Winning answer + Solution behind SPOILER tags
-      - Award field
-      - NO pings on this post
-    """
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     sol_text_raw = (riddle.get("solution") or "").strip()
@@ -138,7 +129,6 @@ def build_solved_ping_post_embed(
     solver_mention: str,
     solver_avatar_url: Optional[str],
 ) -> discord.Embed:
-    """Small ping/announcement post (base+extras+winner ping is set as message content by the cog)."""
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     sol_text_raw = (riddle.get("solution") or "").strip()
@@ -739,25 +729,75 @@ class VoteButtons(LoggedPersistentView):
 # =============================================================================
 # ADMIN PANEL  ( /riddle )
 # =============================================================================
-class SlotSelectPanel(Select):
-    def __init__(self, panel: "RiddleAdminPanelView"):
+class _BaseSlotSelect(Select):
+    """Shared behavior for the two slot dropdowns (filled / empty)."""
+    _placeholder = "Select slot"
+    _kind_label = ""
+
+    def __init__(self, panel: "RiddleAdminPanelView", *, options: list[discord.SelectOption], row: int):
         self.panel = panel
-        opts = []
-        for slot in range(1, MAX_RIDDLE_SLOTS + 1):
-            row = panel.slot_map.get(slot)
-            desc = "EMPTY" if not row else truncate_text(row.get("text") or "configured", 60)
-            opts.append(discord.SelectOption(
-                label=f"Slot {slot}", value=str(slot),
-                description=desc[:100], default=(slot == panel.selected_slot),
-            ))
-        super().__init__(placeholder="Select slot", min_values=1, max_values=1, options=opts, row=0)
+        # If a category is empty, we still need at least 1 option → dummy sentinel.
+        if not options:
+            options = [discord.SelectOption(
+                label=f"(no {self._kind_label} slots)",
+                value="_none_", default=True,
+            )]
+        super().__init__(
+            placeholder=self._placeholder,
+            min_values=1, max_values=1,
+            options=options[:25], row=row,
+        )
 
     async def callback(self, interaction: Interaction):
-        self.panel.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, to_int(self.values[0], 1)))
+        val = self.values[0]
+        if val == "_none_":
+            await safe_defer(interaction)
+            return
+        self.panel.selected_slot = max(1, min(MAX_RIDDLE_SLOTS, to_int(val, 1)))
         if not await safe_defer(interaction):
             return
-        self.panel.last_info = f"Selected slot {self.panel.selected_slot}."
+        self.panel.last_info = f"Selected {self._kind_label} slot {self.panel.selected_slot}."
         await self.panel.safe_edit_panel()
+
+
+class FilledSlotsSelect(_BaseSlotSelect):
+    _placeholder = "📋 Filled slots — pick to edit"
+    _kind_label = "filled"
+
+    def __init__(self, panel: "RiddleAdminPanelView", row: int):
+        opts: list[discord.SelectOption] = []
+        for slot in range(1, MAX_RIDDLE_SLOTS + 1):
+            r = panel.slot_map.get(slot)
+            if not r:
+                continue
+            desc = _first_line(r.get("solution"), 90)
+            opts.append(discord.SelectOption(
+                label=f"Slot {slot}",
+                value=str(slot),
+                description=desc[:100],
+                default=(slot == panel.selected_slot),
+                emoji="🧩",
+            ))
+        super().__init__(panel, options=opts, row=row)
+
+
+class EmptySlotsSelect(_BaseSlotSelect):
+    _placeholder = "🈳 Empty slots — pick to fill"
+    _kind_label = "empty"
+
+    def __init__(self, panel: "RiddleAdminPanelView", row: int):
+        opts: list[discord.SelectOption] = []
+        for slot in range(1, MAX_RIDDLE_SLOTS + 1):
+            if panel.slot_map.get(slot):
+                continue
+            opts.append(discord.SelectOption(
+                label=f"Slot {slot}",
+                value=str(slot),
+                description="EMPTY — click to create",
+                default=(slot == panel.selected_slot),
+                emoji="⬜",
+            ))
+        super().__init__(panel, options=opts, row=row)
 
 
 class PanelButton(discord.ui.Button):
@@ -799,8 +839,7 @@ class RiddleAdminPanelView(View):
         self.state: dict = {}
         self.last_info: str = "Ready."
         self.message: Optional[discord.Message] = None
-        # NEW: preview mode toggle (default = compact)
-        self.show_full_preview: bool = False
+        self.show_full_preview: bool = False  # default: compact preview
 
     async def interaction_check(self, interaction: Interaction) -> bool:
         return interaction.user.id == self.owner_id
@@ -813,21 +852,23 @@ class RiddleAdminPanelView(View):
         self.clear_items()
         enabled = bool(to_int(self.state.get("is_enabled"), 0))
 
-        # Row 0: slot select
-        self.add_item(SlotSelectPanel(self))
+        # Row 0: Filled slots dropdown
+        self.add_item(FilledSlotsSelect(self, row=0))
+        # Row 1: Empty slots dropdown
+        self.add_item(EmptySlotsSelect(self, row=1))
 
-        # Row 1: editing
-        self.add_item(PanelButton(self, "✏️ Edit Content", "edit_content", 1))
-        self.add_item(PanelButton(self, "🖼️ Edit Images", "edit_images", 1))
-        self.add_item(PanelButton(self, "🎯 Edit Ping Roles", "edit_mentions", 1))
-        self.add_item(PanelButton(self, "↘ Move to End", "move_to_end", 1, discord.ButtonStyle.secondary))
+        # Row 2: editing actions
+        self.add_item(PanelButton(self, "✏️ Edit Content", "edit_content", 2))
+        self.add_item(PanelButton(self, "🖼️ Edit Images", "edit_images", 2))
+        self.add_item(PanelButton(self, "🎯 Ping Roles", "edit_mentions", 2))
+        self.add_item(PanelButton(self, "↘ Move to End", "move_to_end", 2, discord.ButtonStyle.secondary))
 
-        # Row 2: destructive / power
-        self.add_item(PanelButton(self, "🗑️ Delete Slot", "delete_slot", 2, discord.ButtonStyle.danger))
-        self.add_item(PanelButton(self, "🔴 Turn OFF" if enabled else "🟢 Turn ON", "toggle", 2,
-                                  discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success))
-
-        # Row 3: publish
+        # Row 3: destructive + on/off + publish
+        self.add_item(PanelButton(self, "🗑️ Delete Slot", "delete_slot", 3, discord.ButtonStyle.danger))
+        self.add_item(PanelButton(
+            self, "🔴 Turn OFF" if enabled else "🟢 Turn ON", "toggle", 3,
+            discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success,
+        ))
         self.add_item(PanelButton(self, "📢 Post Now", "post_now", 3))
         self.add_item(PanelButton(self, "🔒 Close Active", "close_active", 3, discord.ButtonStyle.danger))
 
@@ -852,6 +893,7 @@ class RiddleAdminPanelView(View):
         main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
         main.add_field(name="Selected Slot", value=str(self.selected_slot), inline=True)
         main.add_field(name="Solved (cached, filtered)", value=str(solved_cached), inline=True)
+
         occupied = sum(1 for s in range(1, MAX_RIDDLE_SLOTS + 1) if self.slot_map.get(s))
         main.add_field(
             name="Occupancy",
@@ -859,6 +901,7 @@ class RiddleAdminPanelView(View):
             inline=False,
         )
 
+        # Compact one-line-per-slot listing using SOLUTION 1st line only
         lines: list[str] = []
         for slot in range(1, MAX_RIDDLE_SLOTS + 1):
             row = self.slot_map.get(slot)
@@ -869,11 +912,10 @@ class RiddleAdminPanelView(View):
             shown_no = solved_cached + slot
             extras = parse_csv_role_ids(row.get("mention_role_ids"))
             xp = to_int(row.get("xp"), 0)
-            preview = truncate_text(row.get("text") or "", 60)
+            preview = _first_line(row.get("solution"), 80)
             active_tag = " · ⭐ ACTIVE" if slot == 1 else ""
             lines.append(
-                f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · +{len(extras)} roles{active_tag}\n"
-                f"    _{preview}_"
+                f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · +{len(extras)} roles{active_tag} — _{preview}_"
             )
         main.add_field(
             name="Slots",
@@ -963,7 +1005,6 @@ class RiddleAdminPanelView(View):
             return
         except discord.HTTPException as e:
             if getattr(e, "code", None) == 50027 or getattr(e, "status", None) == 401:
-                # ephemeral panel session expired -> stop trying to edit it
                 self.message = None
                 self.stop()
                 logger.info("Admin panel session expired (invalid webhook token) – user must rerun /riddle.")
@@ -988,7 +1029,7 @@ class RiddleAdminPanelView(View):
             return
         row = self.slot_map.get(self.selected_slot)
 
-        # --- MODAL actions (must respond with send_modal on the raw interaction) ---
+        # --- MODAL actions ---
         if action == "edit_content":
             ping_preview = f"Base: <@&{RIDDLE_ROLE_ID}>"
             if row:
@@ -1038,16 +1079,14 @@ class RiddleAdminPanelView(View):
             )
             return
 
-        # --- generic actions (defer + edit panel) ---
+        # --- generic actions ---
         if not await safe_defer(interaction):
             return
         gid = interaction.guild.id
 
         if action == "toggle_preview":
             self.show_full_preview = not self.show_full_preview
-            self.last_info = (
-                "🔎 Preview: FULL." if self.show_full_preview else "📇 Preview: COMPACT."
-            )
+            self.last_info = "🔎 Preview: FULL." if self.show_full_preview else "📇 Preview: COMPACT."
             await self.safe_edit_panel()
             return
 
