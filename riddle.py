@@ -556,6 +556,23 @@ class RiddleCog(commands.Cog):
             await self.rebuild_cached_solved_total_for_guild(after.guild.id)
             await self.sync_open_slot_numbers_for_guild(after.guild.id)
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Repost the active riddle after every (re)connect so buttons work again."""
+        if not self._startup_done:
+            return  # first startup is handled by _auto_worker -> startup_rebuild
+        try:
+            # Re-register persistent views defensively (idempotent)
+            self.bot.add_view(SubmitButtonView(self))
+            self.bot.add_view(VoteButtons(self))
+            for gid in await self.repo.list_all_guild_ids():
+                if await self.repo.is_enabled(gid):
+                    await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
+            await self.repost_pending_votes()
+            logger.info("on_ready: reposted active riddles + pending votes after reconnect")
+        except Exception:
+            logger.exception("on_ready reconnect recovery failed")
+
     # ==========================================================================
     # LIFECYCLE
     # ==========================================================================
