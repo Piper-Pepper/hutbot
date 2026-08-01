@@ -884,15 +884,11 @@ class RiddleAdminPanelView(View):
         # ---------- Main overview embed ----------
         main = discord.Embed(
             title="🗂️ Riddle Control Center",
-            description=(
-                f"**{MAX_RIDDLE_SLOTS} slots** • base ping + up to {MAX_EXTRA_PING_ROLES} extra roles\n"
-                f"_System auto-STOPs after every solve — turn ON to post the next riddle._"
-            ),
             color=discord.Color.green() if enabled else discord.Color.orange(),
         )
-        main.add_field(name="System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
-        main.add_field(name="Selected Slot", value=str(self.selected_slot), inline=True)
-        main.add_field(name="Solved (cached, filtered)", value=str(solved_cached), inline=True)
+        main.add_field(name="🧩System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
+        main.add_field(name="❓Slot", value=str(self.selected_slot), inline=True)
+        main.add_field(name="⁉️Solved", value=str(solved_cached), inline=True)
 
         occupied = sum(1 for s in range(1, MAX_RIDDLE_SLOTS + 1) if self.slot_map.get(s))
         main.add_field(
