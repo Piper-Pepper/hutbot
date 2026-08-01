@@ -411,6 +411,7 @@ class RiddleCog(commands.Cog):
 
                 ping_embed = build_solved_ping_post_embed(
                     guild, riddle_row, solver_mention, solver_avatar,
+                    submitted_answer=submitted_answer,
                 )
                 await ch.send(
                     content=ping_content,

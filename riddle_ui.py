@@ -40,6 +40,33 @@ def _first_line(text: Optional[str], max_len: int = 200) -> str:
 
 
 # =============================================================================
+# LEVEL / DIFFICULTY  (rein visuell — aus vorhandenem XP-Wert abgeleitet)
+# =============================================================================
+def riddle_level(xp: int) -> tuple[str, str]:
+    """
+    Return (label, emoji) based on XP reward.
+      0    – 1499  -> EASY
+      1500 – 2999  -> MEDIUM
+      3000 – 4999  -> HARD
+      5000 +       -> BRAIN-DEAD
+    """
+    x = max(0, to_int(xp, 0))
+    if x < 1500:
+        return ("EASY", "🟢")
+    if x < 3000:
+        return ("MEDIUM", "🟡")
+    if x < 5000:
+        return ("HARD", "🔴")
+    return ("BRAIN-DEAD", "💀")
+
+
+def level_badge(xp: int) -> str:
+    """Compact one-liner like '🟢 `EASY`' — designed to sit small & clean in embed fields."""
+    label, emoji = riddle_level(xp)
+    return f"{emoji} `{label}`"
+
+
+# =============================================================================
 # EMBED BUILDERS
 # =============================================================================
 def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict) -> discord.Embed:
@@ -52,7 +79,8 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict) -> d
     )
     if guild:
         e.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
-    e.add_field(name="🏆 Award", value=f"{xp} XP", inline=False)
+    e.add_field(name="🏆 Award",  value=f"{xp} XP",      inline=True)
+    e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
     img = riddle.get("image_url")
     if not is_http_url(img):
         img = DEFAULT_IMAGE_URL
@@ -110,7 +138,8 @@ def build_fresh_solved_post_embed(
             inline=False,
         )
 
-    e.add_field(name="🏆 Award", value=f"{xp} XP", inline=True)
+    e.add_field(name="🏆 Award",  value=f"{xp} XP",      inline=True)
+    e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
 
     r_img = riddle.get("image_url")
     if is_http_url(r_img):
@@ -128,7 +157,12 @@ def build_solved_ping_post_embed(
     riddle: dict,
     solver_mention: str,
     solver_avatar_url: Optional[str],
+    submitted_answer: str = "",
 ) -> discord.Embed:
+    """
+    Short 'ping' post announcing the winner.
+    Contains: winner mention + avatar image + XP + level + both answers behind spoilers.
+    """
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     sol_text_raw = (riddle.get("solution") or "").strip()
@@ -139,14 +173,33 @@ def build_solved_ping_post_embed(
         description=f"Congratulations {solver_mention}! 🎉",
         color=discord.Color.green(),
     )
+
+    # Winner's submitted answer (spoiler)
+    if submitted_answer and submitted_answer.strip():
+        safe_ans = _spoiler_safe(submitted_answer.strip())
+        e.add_field(
+            name="🧠 Winning Answer",
+            value=clamp_embed_value(f"||{safe_ans}||"),
+            inline=False,
+        )
+
+    # Real solution (spoiler)
     if sol_text or more_url:
         parts: list[str] = []
         if sol_text:
-            parts.append(sol_text)
+            parts.append(_spoiler_safe(sol_text))
         if more_url:
             parts.append(f"[🔗 MORE]({more_url})")
-        e.add_field(name="✅ Solution", value=clamp_embed_value("\n\n".join(parts)), inline=False)
-    e.add_field(name="🏆 XP", value=f"{xp}", inline=True)
+        joined = "\n\n".join(parts)
+        e.add_field(
+            name="✅ Solution",
+            value=clamp_embed_value(f"||{joined}||"),
+            inline=False,
+        )
+
+    e.add_field(name="🏆 XP",     value=str(xp),         inline=True)
+    e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
+
     if solver_avatar_url:
         e.set_thumbnail(url=solver_avatar_url)
     e.set_footer(text=footer_text(guild))
@@ -177,7 +230,8 @@ def build_wrong_post_embed(
         e.set_author(name=submitter_name)
     e.add_field(name="🧩 Riddle", value=clamp_embed_value(riddle.get("text") or "*No text*"), inline=False)
     e.add_field(name="🧠 Submitted Answer", value=clamp_embed_value(submitted_answer or "*empty*"), inline=False)
-    e.add_field(name="🏆 Award (still up for grabs)", value=f"{xp} XP", inline=True)
+    e.add_field(name="🏆 Award (still up for grabs)", value=f"{xp} XP",      inline=True)
+    e.add_field(name="🎚️ Level",                     value=level_badge(xp), inline=True)
     r_img = riddle.get("image_url")
     if is_http_url(r_img):
         e.set_thumbnail(url=r_img)
@@ -189,6 +243,7 @@ def build_vote_embed(
     guild: Optional[discord.Guild], riddle: dict, submitter_id: int,
     submitter_name: str, submitter_avatar_url: Optional[str], submitted_answer: str,
 ) -> discord.Embed:
+    xp = max(0, to_int(riddle.get("xp"), 0))
     e = discord.Embed(
         title="📜 New Solution Submitted",
         description=clamp_embed_description(riddle.get("text") or "*No riddle text*"),
@@ -200,8 +255,9 @@ def build_vote_embed(
         e.set_author(name=submitter_name)
     e.add_field(name="🧠 User Answer", value=clamp_embed_value(submitted_answer or "*empty*"), inline=False)
     e.add_field(name="✅ Correct Solution", value=clamp_embed_value(riddle.get("solution") or "*Not set*"), inline=False)
-    e.add_field(name="🏆 Award", value=f"{max(0, to_int(riddle.get('xp'), 0))} XP", inline=True)
-    e.add_field(name="🆔 User ID", value=str(submitter_id), inline=True)
+    e.add_field(name="🏆 Award",   value=f"{xp} XP",         inline=True)
+    e.add_field(name="🎚️ Level",  value=level_badge(xp),    inline=True)
+    e.add_field(name="🆔 User ID", value=str(submitter_id),  inline=True)
     r_img = riddle.get("image_url")
     if is_http_url(r_img):
         e.set_thumbnail(url=r_img)
@@ -223,9 +279,10 @@ def build_xp_reminder_embed(
         ),
         color=discord.Color.gold(),
     )
-    e.add_field(name="Command (by name)", value=f"`/xp add {xp} {safe_name}`", inline=False)
+    e.add_field(name="Command (by name)",    value=f"`/xp add {xp} {safe_name}`",      inline=False)
     e.add_field(name="Command (by mention)", value=f"`/xp add {xp} {solver_mention}`", inline=False)
-    e.add_field(name="Amount", value=f"**{xp} XP**", inline=True)
+    e.add_field(name="Amount",   value=f"**{xp} XP**",   inline=True)
+    e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
     if solver_avatar_url:
         e.set_thumbnail(url=solver_avatar_url)
     e.set_footer(text=footer_text(guild))
@@ -724,6 +781,7 @@ class VoteButtons(LoggedPersistentView):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
+
 # riddle_ui.py  (Teil 2/2)
 
 # =============================================================================
@@ -908,10 +966,11 @@ class RiddleAdminPanelView(View):
             shown_no = solved_cached + slot
             extras = parse_csv_role_ids(row.get("mention_role_ids"))
             xp = to_int(row.get("xp"), 0)
+            lvl = level_badge(xp)
             preview = _first_line(row.get("solution"), 80)
             active_tag = " · 👉" if slot == 1 else ""
             lines.append(
-                f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · +{len(extras)} roles{active_tag} — _{preview}_"
+                f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · {lvl} · +{len(extras)} roles{active_tag} — _{preview}_"
             )
         main.add_field(
             name="Slots",
@@ -927,6 +986,7 @@ class RiddleAdminPanelView(View):
             shown_no = solved_cached + self.selected_slot
             r_url = clean_value(row.get("image_url"))
             s_url = clean_value(row.get("solution_url"))
+            xp_val = to_int(row.get("xp"), 0)
 
             if self.show_full_preview:
                 # ----- FULL detail preview -----
@@ -942,7 +1002,8 @@ class RiddleAdminPanelView(View):
                     value=f"**Base:** <@&{RIDDLE_ROLE_ID}>\n**Extra:** {extra_mentions}",
                     inline=False,
                 )
-                preview.add_field(name="🏆 XP", value=str(to_int(row.get("xp"), 0)), inline=True)
+                preview.add_field(name="🏆 XP",        value=str(xp_val),          inline=True)
+                preview.add_field(name="🎚️ Level",    value=level_badge(xp_val),  inline=True)
                 preview.add_field(name="🆔 Riddle ID", value=str(to_int(row.get("id"), 0)), inline=True)
                 sol = row.get("solution")
                 preview.add_field(
@@ -977,9 +1038,13 @@ class RiddleAdminPanelView(View):
                 first_line = _first_line(row.get("solution"), 200)
                 preview = discord.Embed(
                     title=f"🔍 Slot {self.selected_slot} · Riddle No.{shown_no}",
-                    description=clamp_embed_description(f"**Solution (1st line):**\n{first_line}"),
+                    description=clamp_embed_description(
+                        f"**Solution (1st line):**\n{first_line}"
+                    ),
                     color=discord.Color.blurple(),
                 )
+                preview.add_field(name="🏆 XP",     value=str(xp_val),         inline=True)
+                preview.add_field(name="🎚️ Level", value=level_badge(xp_val), inline=True)
                 if is_http_url(s_url):
                     preview.set_thumbnail(url=s_url)
                 preview.set_footer(text=f"Compact preview · riddle_id={to_int(row.get('id'), 0)}")
