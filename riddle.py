@@ -1,4 +1,4 @@
-# riddle.py  (Teil 1/2)
+# riddle.py
 from __future__ import annotations
 
 import asyncio
