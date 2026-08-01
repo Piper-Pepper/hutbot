@@ -1,13 +1,14 @@
 # venice_shared.py
 """
-Gemeinsame Infrastruktur für alle Venice-Cogs.
+Shared infrastructure for all Venice cogs.
 
-REGELN:
-- Quota-Stores NUR über get_quota_store() holen. Direkte Instanziierung
-  umgeht die Path-Registry und damit den gemeinsamen asyncio.Lock ->
-  Race Conditions bei geteilten Dateien.
-- TIER_RULES ist hier die einzige Wahrheit. Nirgendwo sonst duplizieren.
-- Jeder Cog mit Starter-Menü registriert sich per register_starter_reposter().
+RULES:
+- Get quota stores ONLY via get_quota_store().
+- TIER_RULES is the single source of truth.
+- Cogs register themselves via register_starter_reposter().
+- Progress embeds use build_progress_embed(quota_state=state).
+- Success messages use build_generation_success_text(state, kind=...).
+  -> All future changes to reset/feedback go HERE, never inside the cogs.
 """
 from __future__ import annotations
 
@@ -52,6 +53,11 @@ def env_bool(name: str, default: bool) -> bool:
     return default if not raw else raw in ("1", "true", "yes", "on")
 
 
+def env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    return raw.strip() if raw and raw.strip() else default
+
+
 DISCORD_UPLOAD_LIMIT_FORCE_MB = env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)
 DISCORD_UPLOAD_LIMIT_FALLBACK_MB = env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)
 DISCORD_UPLOAD_SAFETY_BYTES = env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
@@ -68,9 +74,8 @@ def utc_now() -> datetime:
 # =================================================
 class RollingQuotaStore:
     """
-    24h-Rolling-Window-Kontingent, persistiert als JSON.
-    Atomares Schreiben (temp + os.replace), File-I/O im Thread damit
-    der Event-Loop nicht blockiert.
+    24h rolling window quota, persisted as JSON.
+    File I/O runs in a worker thread to avoid blocking the event loop.
     """
 
     def __init__(self, file_path: str | Path, window_seconds: int = DEFAULT_WINDOW_SECONDS):
@@ -122,18 +127,30 @@ class RollingQuotaStore:
         return {"start": start, "used": max(0, used)}
 
     def _state(self, entry: dict[str, int], limit: int, now_ts: int) -> dict[str, int]:
+        """
+        reset_at is the absolute Unix timestamp for the end of the current window.
+        When start == 0 (no window running yet), reset_in falls back to window_seconds
+        so user feedback never displays a bogus "0s".
+        """
         used, start = entry["used"], entry["start"]
+        if start > 0:
+            reset_at = start + self.window_seconds
+            reset_in = max(0, reset_at - now_ts)
+        else:
+            reset_at = 0
+            reset_in = self.window_seconds
         return {
             "used": used,
             "limit": limit,
             "remaining": max(0, limit - used),
             "start": start,
-            "reset_in": max(0, self.window_seconds - (now_ts - start)) if start > 0 else 0,
+            "reset_in": reset_in,
+            "reset_at": reset_at,
         }
 
     # ---------- api ----------
     async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
-        """Nur lesen, kein Disk-Write."""
+        """Read-only view of the current quota state."""
         now_ts = int(time.time())
         limit = max(0, int(limit))
         async with self.lock:
@@ -187,7 +204,7 @@ class RollingQuotaStore:
             key = self._key(guild_id, user_id)
             entry = self._normalize(db.get(key, {}), now_ts)
 
-            # Nur zurückbuchen wenn es noch dasselbe Fenster ist
+            # Only refund if we're still inside the same window as the reservation.
             if entry["start"] == token_start and entry["used"] > 0:
                 entry["used"] = max(0, entry["used"] - amount)
                 if entry["used"] == 0:
@@ -196,7 +213,7 @@ class RollingQuotaStore:
                 await self._write(db)
 
     async def prune(self) -> int:
-        """Abgelaufene Einträge entfernen."""
+        """Drop entries whose 24h window has fully expired."""
         now_ts = int(time.time())
         async with self.lock:
             db = await self._read()
@@ -213,7 +230,7 @@ _stores: dict[str, RollingQuotaStore] = {}
 def get_quota_store(
     file_path: str | Path, window_seconds: int = DEFAULT_WINDOW_SECONDS
 ) -> RollingQuotaStore:
-    """Pro Pfad immer dieselbe Instanz -> gemeinsamer Lock über alle Cogs."""
+    """Same instance per path - guarantees a shared lock across all cogs."""
     resolved = str(Path(file_path).expanduser().resolve())
     store = _stores.get(resolved)
     if store is None:
@@ -222,14 +239,14 @@ def get_quota_store(
         logger.info("Quota store registered: %s (window=%ss)", resolved, window_seconds)
     elif store.window_seconds != int(window_seconds):
         logger.warning(
-            "Quota store %s bereits mit window=%ss registriert; %ss ignoriert.",
+            "Quota store %s already registered with window=%ss; %ss ignored.",
             resolved, store.window_seconds, window_seconds,
         )
     return store
 
 
 # =================================================
-# TIERS - EINZIGE WAHRHEIT
+# TIERS - SINGLE SOURCE OF TRUTH
 # =================================================
 TIER_RULES: dict[int, dict[str, int]] = {
     1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10,  "video_budget_sec": 10},
@@ -292,6 +309,14 @@ def video_tier_line() -> str:
     return " • ".join(f"T{t}:{cfg['video_budget_sec']}s" for t, cfg in tiers_asc())
 
 
+def tier_for_role_id(role_id: int) -> Optional[tuple[int, dict[str, int]]]:
+    """Return the tier that owns this role id, if any."""
+    for t, cfg in tiers_asc():
+        if cfg["role_id"] == role_id:
+            return t, cfg
+    return None
+
+
 # =================================================
 # TEXT HELPERS
 # =================================================
@@ -323,6 +348,18 @@ def seconds_human(sec: int) -> str:
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
+
+
+def format_reset_line(state: dict[str, int], prefix: str = "Resets") -> str:
+    """
+    Unified reset display. Uses Discord relative + absolute timestamps so every
+    user sees their local time. Falls back to a friendly message when the
+    24h window has not started yet.
+    """
+    reset_at = int(state.get("reset_at", 0) or 0)
+    if reset_at <= 0:
+        return "Fresh 24h window starts with your next generation."
+    return f"{prefix} <t:{reset_at}:R> (<t:{reset_at}:t>)"
 
 
 def sanitize_error_text(text: str, limit: int = 300) -> str:
@@ -539,7 +576,7 @@ async def send_image_with_compression(
     filename_prompt: str,
     filename_fallback: str = "image",
 ) -> Optional[discord.Message]:
-    """Postet ein Bild, verkleinert bei 413 stufenweise."""
+    """Post an image, downscaling stepwise on HTTP 413."""
     upload_limit = discord_upload_limit_bytes(interaction)
 
     for scale in (1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.22, 0.18):
@@ -711,8 +748,8 @@ async def add_rating_reactions(
     reactions: Optional[list[str]] = None,
 ) -> int:
     """
-    Setzt Bewertungs-Reactions. Emojis, die dauerhaft fehlschlagen
-    (gelöscht / kein Zugriff), werden einmal geloggt und danach übersprungen.
+    Add rating reactions. Emojis that permanently fail (deleted / no access)
+    are logged once and skipped afterwards.
     """
     if message is None:
         return 0
@@ -728,23 +765,23 @@ async def add_rating_reactions(
             code = getattr(e, "code", None)
             if code in (10014, 50001):  # Unknown Emoji / Missing Access
                 _dead_reactions.add(emo)
-                logger.warning("Reaction %r nicht verfügbar (code=%s), übersprungen.", emo, code)
+                logger.warning("Reaction %r not available (code=%s), skipping.", emo, code)
             elif e.status == 403:
-                logger.warning("Keine Reaction-Berechtigung in #%s", message.channel)
+                logger.warning("No reaction permission in #%s", message.channel)
                 return ok
         except Exception as e:
-            logger.debug("add_reaction(%r) fehlgeschlagen: %s", emo, e)
+            logger.debug("add_reaction(%r) failed: %s", emo, e)
     return ok
 
 
 # =================================================
-# QUOTA MESSAGES
+# QUOTA / LOCKED MESSAGES
 # =================================================
 def build_image_quota_text(member: Optional[discord.Member], state: dict[str, int]) -> str:
     tier = get_member_tier(member)
     lines = [
         f"⛔ Daily image limit reached: **{state['used']}/{state['limit']}** in this 24h window.",
-        f"⏳ Reset in **{seconds_human(int(state['reset_in']))}**.",
+        f"⏳ {format_reset_line(state)}",
         (f"Current: **Tier {tier}** → **{state['limit']} images/24h**" if tier > 0
          else f"Current: **No Tier** → **{state['limit']} images/24h**"),
     ]
@@ -783,6 +820,27 @@ async def send_tier_locked_message(
     )
 
 
+async def send_role_locked_message(
+    interaction: discord.Interaction,
+    required_role_id: int,
+    feature: str = "This feature",
+):
+    """
+    For cogs that require a SINGLE mandatory role instead of the tier system.
+    If the role happens to be a tier role, tier + level are included for clarity.
+    """
+    match = tier_for_role_id(required_role_id)
+    if match:
+        tier, cfg = match
+        text = (
+            f"🔒 You need **Tier {tier}**, **Level {cfg['level']}** and the Role "
+            f"<@&{required_role_id}> to access this feature."
+        )
+    else:
+        text = f"🔒 You need the Role <@&{required_role_id}> to access this feature."
+    await send_ephemeral(interaction, text)
+
+
 async def send_resolution_lock_message(
     interaction: discord.Interaction,
     resolution: str,
@@ -802,7 +860,7 @@ async def send_resolution_lock_message(
 
 
 # =================================================
-# PROGRESS EMBED (einmalig, war 3x fast identisch)
+# PROGRESS EMBED
 # =================================================
 def build_progress_embed(
     *,
@@ -813,13 +871,19 @@ def build_progress_embed(
     percent: int,
     status_lines: list[str],
     quota_name: str,
-    quota_used: int,
-    quota_limit: int,
-    quota_remaining: int,
+    quota_state: dict[str, int],
     quota_unit: str = "",
     footer: Optional[str] = None,
     footer_icon: Optional[str] = None,
 ) -> discord.Embed:
+    """
+    Unified progress embed. Takes the full state dict from the quota store:
+    the reset line is attached automatically.
+    """
+    used = int(quota_state.get("used", 0))
+    limit = int(quota_state.get("limit", 0))
+    remaining = int(quota_state.get("remaining", 0))
+
     emb = discord.Embed(
         title=title,
         description=user.mention,
@@ -833,17 +897,55 @@ def build_progress_embed(
         value="\n".join(f"• {ln}" for ln in status_lines if ln),
         inline=False,
     )
-    emb.add_field(
-        name=quota_name,
-        value=(
-            f"• Used: `{quota_used}/{quota_limit}{quota_unit}`\n"
-            f"• Remaining: `{quota_remaining}{quota_unit}`"
-        ),
-        inline=False,
+    quota_value = (
+        f"• Used: `{used}/{limit}{quota_unit}`\n"
+        f"• Remaining: `{remaining}{quota_unit}`\n"
+        f"• {format_reset_line(quota_state)}"
     )
+    emb.add_field(name=quota_name, value=quota_value, inline=False)
     if footer:
         emb.set_footer(text=footer, icon_url=footer_icon)
     return emb
+
+
+# =================================================
+# GENERATION SUCCESS TEXT
+# =================================================
+_SUCCESS_HEADERS = {
+    "image": "🖼️ Image created",
+    "face_image": "🎭 Face image created",
+    "video": "🎬 Animation completed",
+}
+
+
+def build_generation_success_text(
+    state: dict[str, int],
+    *,
+    kind: str = "image",
+    unit: str = "",
+    extra: str = "",
+    quota_label: str = "Remaining in 24h",
+) -> str:
+    """
+    Unified success text after every generation.
+
+    kind:  image | face_image | video   (unknown values fall back to a generic header)
+    unit:  '' for images, 's' for video seconds
+    extra: optional trailing line (e.g. "Use the button below to animate...")
+
+    This is the ONE place to change future success feedback wording.
+    """
+    header = _SUCCESS_HEADERS.get(kind, "✅ Done")
+    remaining = int(state.get("remaining", 0))
+    limit = int(state.get("limit", 0))
+    lines = [
+        f"✅ {header}.",
+        f"{quota_label}: **{remaining}{unit}** of **{limit}{unit}**.",
+        f"⏳ {format_reset_line(state)}",
+    ]
+    if extra:
+        lines.append(extra)
+    return "\n".join(lines)
 
 
 # =================================================
@@ -897,7 +999,6 @@ class OwnerLockedView(discord.ui.View):
 
 # =================================================
 # STARTER REPOST REGISTRY
-# Behebt: Video-Cog postete im Face-Channel das Image-Menü.
 # =================================================
 _starter_reposters: dict[int, Callable[[discord.TextChannel], Awaitable[None]]] = {}
 
@@ -918,7 +1019,7 @@ def has_starter_reposter(channel_id: int) -> bool:
 
 
 async def repost_starter_for_channel(channel: discord.abc.Messageable) -> bool:
-    """Postet das für DIESEN Channel registrierte Starter-Menü neu."""
+    """Repost the starter view registered for this specific channel."""
     if not isinstance(channel, discord.TextChannel):
         return False
     fn = _starter_reposters.get(channel.id)
@@ -943,7 +1044,7 @@ async def refresh_starter_message(
     matcher: Callable[[discord.Message], bool],
     scan_limit: int = 12,
 ) -> None:
-    """Löscht alte Starter-Posts im Scan-Fenster und postet einen neuen."""
+    """Delete existing starter posts in the scan window, then post a fresh one."""
     async with get_channel_lock(channel.id):
         try:
             async for msg in channel.history(limit=scan_limit):
@@ -958,11 +1059,21 @@ async def refresh_starter_message(
 
 
 # =================================================
-# VIDEO CONSTANTS + ANIMATE UI (war 2x dupliziert)
+# VIDEO CONSTANTS + ANIMATE UI
 # =================================================
 MAX_VIDEO_RENDER_SECONDS = 15
 VIDEO_DURATION_CHOICES = [5, 10, 15]
 VIDEO_ALLOWED_ASPECTS = {"1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"}
+
+# Two model variants for the animate flow.
+# ENHANCED = WAN 2.7 Enhanced (audio, uncensored model set)
+# STANDARD = WAN 2.7          (no audio, uncensored model set)
+VENICE_VIDEO_I2V_MODEL_ENHANCED = env_str(
+    "VENICE_VIDEO_I2V_MODEL_ENHANCED", "wan-2-7-enhanced-image-to-video"
+)
+VENICE_VIDEO_I2V_MODEL_STANDARD = env_str(
+    "VENICE_VIDEO_I2V_MODEL_STANDARD", "wan-2-7-image-to-video"
+)
 
 
 class AnimatePromptModal(discord.ui.Modal):
@@ -973,12 +1084,14 @@ class AnimatePromptModal(discord.ui.Modal):
         source_message_id: int,
         base_prompt: str,
         ratio: str,
+        model_id: str,
     ):
         self.owner_id = owner_id
         self.source_channel_id = source_channel_id
         self.source_message_id = source_message_id
         self.base_prompt = (base_prompt or "").strip()
         self.ratio = ratio
+        self.model_id = model_id
         super().__init__(title="🎬 Animate Image • Video Prompt")
 
         self.video_prompt = discord.ui.TextInput(
@@ -1030,7 +1143,7 @@ class AnimatePromptModal(discord.ui.Modal):
             await send_ephemeral(
                 interaction,
                 f"⛔ Video seconds exhausted for this 24h window: **{info['used']}/{budget}s**.\n"
-                f"⏳ Reset in **{seconds_human(int(info['reset_in']))}**.\n"
+                f"⏳ {format_reset_line(info)}\n"
                 f"Current tier: **T{info['tier']}**.\n"
                 f"Tier budgets: `{video_tier_line()}`",
             )
@@ -1050,6 +1163,7 @@ class AnimatePromptModal(discord.ui.Modal):
                 prompt_text=final_prompt,
                 ratio=self.ratio,
                 allowed_durations=allowed,
+                model_id=self.model_id,
             ),
         )
 
@@ -1063,12 +1177,14 @@ class AnimateDurationView(OwnerLockedView):
         prompt_text: str,
         ratio: str,
         allowed_durations: list[int],
+        model_id: str,
     ):
         super().__init__(owner_id=owner_id, timeout=300)
         self.source_channel_id = source_channel_id
         self.source_message_id = source_message_id
         self.prompt_text = prompt_text
         self.ratio = ratio
+        self.model_id = model_id
         self.allowed_durations = sorted({d for d in allowed_durations if d > 0})
 
         if not self.allowed_durations:
@@ -1160,11 +1276,18 @@ class AnimateDurationView(OwnerLockedView):
             aspect=aspect,
             seconds=seconds,
             target_channel=channel,
+            model_id=self.model_id,
         )
         await cleanup_user_ephemerals(interaction)
 
 
 class AnimateEphemeralView(OwnerLockedView):
+    """
+    Two buttons:
+      🔞 Animate  -> VENICE_VIDEO_I2V_MODEL_ENHANCED  (audio, uncensored)
+      🎬 Animate  -> VENICE_VIDEO_I2V_MODEL_STANDARD  (no audio, uncensored)
+    """
+
     def __init__(
         self,
         owner_id: int,
@@ -1179,8 +1302,8 @@ class AnimateEphemeralView(OwnerLockedView):
         self.prompt_text = prompt_text
         self.ratio = ratio
 
-    @discord.ui.button(label="🎬 Animate this image", style=discord.ButtonStyle.primary)
-    async def animate(self, interaction: discord.Interaction, _: discord.ui.Button):
+    @discord.ui.button(label="🔞 Animate", style=discord.ButtonStyle.danger)
+    async def animate_enhanced(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not interaction.guild:
             await send_ephemeral(interaction, "❌ This action is server-only.")
             return
@@ -1191,5 +1314,22 @@ class AnimateEphemeralView(OwnerLockedView):
                 source_message_id=self.source_message_id,
                 base_prompt=self.prompt_text,
                 ratio=self.ratio,
+                model_id=VENICE_VIDEO_I2V_MODEL_ENHANCED,
+            )
+        )
+
+    @discord.ui.button(label="🎬 Animate", style=discord.ButtonStyle.primary)
+    async def animate_standard(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
+            await send_ephemeral(interaction, "❌ This action is server-only.")
+            return
+        await interaction.response.send_modal(
+            AnimatePromptModal(
+                owner_id=self.owner_id,
+                source_channel_id=self.source_channel_id,
+                source_message_id=self.source_message_id,
+                base_prompt=self.prompt_text,
+                ratio=self.ratio,
+                model_id=VENICE_VIDEO_I2V_MODEL_STANDARD,
             )
         )

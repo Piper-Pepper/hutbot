@@ -1,4 +1,4 @@
-# video_cog.py
+# venice_video_cog.py
 import asyncio
 import contextlib
 import io
@@ -18,13 +18,17 @@ from dotenv import load_dotenv
 from venice_shared import (
     MAX_VIDEO_RENDER_SECONDS,
     SERVER_ANIM_ICON,
+    VENICE_VIDEO_I2V_MODEL_ENHANCED,
+    VENICE_VIDEO_I2V_MODEL_STANDARD,
     VIDEO_DURATION_CHOICES,
     add_rating_reactions,
+    build_generation_success_text,
     build_progress_embed,
     bytes_to_b64,
     bytes_to_data_url,
     codeblock_safe,
     extract_urls_from_payload,
+    format_reset_line,
     get_member_tier,
     get_quota_store,
     get_video_budget_for_member,
@@ -34,7 +38,6 @@ from venice_shared import (
     repost_starter_for_channel,
     safe_int,
     sanitize_error_text,
-    seconds_human,
     send_ephemeral,
     trim,
     utc_now,
@@ -50,8 +53,12 @@ logger = logging.getLogger("venice_video_cog")
 VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 VENICE_VIDEO_QUEUE_URL = os.getenv("VENICE_VIDEO_QUEUE_URL")
 VENICE_VIDEO_RETRIEVE_URL = os.getenv("VENICE_VIDEO_RETRIEVE_URL")
-VENICE_VIDEO_I2V_MODEL = os.getenv("VENICE_VIDEO_I2V_MODEL", "wan-2-7-image-to-video")
 VENICE_VIDEO_RESOLUTION = os.getenv("VENICE_VIDEO_RESOLUTION", "720p")
+
+# Legacy fallback when animate_image_to_video is called without an explicit model_id.
+VENICE_VIDEO_I2V_MODEL_DEFAULT = os.getenv(
+    "VENICE_VIDEO_I2V_MODEL", VENICE_VIDEO_I2V_MODEL_ENHANCED
+)
 
 # =================================================
 # SETTINGS
@@ -63,7 +70,8 @@ VIDEO_MAX_CONSECUTIVE_5XX = 8
 VIDEO_5XX_WINDOW_SECONDS = 180
 
 VIDEO_MODEL_RENAMES = {
-    "wan-2-7-enhanced-image-to-video": "WAN27-Enh",
+    "wan-2-7-enhanced-image-to-video": "WAN27-Enh 🔞",
+    "wan-2-7-image-to-video": "WAN27",
 }
 
 VIDEO_QUOTA_FILE = os.getenv("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
@@ -179,6 +187,7 @@ class VeniceVideoCog(commands.Cog):
             "limit": int(state["limit"]),
             "remaining": int(state["remaining"]),
             "reset_in": int(state["reset_in"]),
+            "reset_at": int(state.get("reset_at", 0) or 0),
         }
 
     # ---------- embeds ----------
@@ -190,6 +199,7 @@ class VeniceVideoCog(commands.Cog):
         elapsed_sec: int,
         stage_text: str,
         quota: dict[str, int],
+        model_id: str,
     ) -> discord.Embed:
         return build_progress_embed(
             title=PROGRESS_EMBED_TITLE,
@@ -199,14 +209,13 @@ class VeniceVideoCog(commands.Cog):
             percent=percent,
             status_lines=[stage_text, f"Elapsed: `{elapsed_sec}s`"],
             quota_name="Quota (24h)",
-            quota_used=int(quota["used"]),
-            quota_limit=int(quota["limit"]),
-            quota_remaining=int(quota["remaining"]),
+            quota_state=quota,
             quota_unit="s",
+            footer=f"🎞️ {_video_model_label(model_id)} • 📺 {VENICE_VIDEO_RESOLUTION}",
         )
 
     def _result_embed(
-        self, prompt: str, seconds: int, guild_icon_url: Optional[str]
+        self, prompt: str, seconds: int, model_id: str, guild_icon_url: Optional[str]
     ) -> discord.Embed:
         embed = discord.Embed(color=discord.Color.dark_magenta(), timestamp=utc_now())
         embed.add_field(
@@ -216,7 +225,7 @@ class VeniceVideoCog(commands.Cog):
         )
         embed.set_footer(
             text=(
-                f"🎞️ {_video_model_label(VENICE_VIDEO_I2V_MODEL)} "
+                f"🎞️ {_video_model_label(model_id)} "
                 f"• 📺 {VENICE_VIDEO_RESOLUTION} • ⏱️ {seconds}s"
             ),
             icon_url=guild_icon_url,
@@ -308,6 +317,7 @@ class VeniceVideoCog(commands.Cog):
     # ---------- provider: queue ----------
     async def _queue_i2v(
         self,
+        model_id: str,
         image_url: str,
         image_bytes: Optional[bytes],
         prompt: str,
@@ -318,8 +328,7 @@ class VeniceVideoCog(commands.Cog):
         if not VENICE_API_KEY:
             return None, None, "VENICE_API_KEY is missing.", "noid"
 
-        # FIX: image_bytes wurde vorher komplett ignoriert - der Bytes-Fallback
-        # lief ins Nichts, obwohl beide Cogs ihn aufwendig beschaffen.
+        # Try multiple image transports until one is accepted by the provider.
         image_variants: list[dict[str, Any]] = []
         if image_url and image_url.startswith("http"):
             image_variants.append({"image_url": image_url})
@@ -339,7 +348,7 @@ class VeniceVideoCog(commands.Cog):
         }
         request_id = uuid.uuid4().hex[:8]
         base_payload = {
-            "model": VENICE_VIDEO_I2V_MODEL,
+            "model": model_id,
             "prompt": prompt,
             "resolution": VENICE_VIDEO_RESOLUTION,
             "duration": f"{seconds}s",
@@ -357,16 +366,16 @@ class VeniceVideoCog(commands.Cog):
                     ) as resp:
                         text = await resp.text()
                         logger.info(
-                            "[VID %s] queue status=%s attempt=%s variant=%s(%s)",
+                            "[VID %s] queue status=%s attempt=%s variant=%s(%s) model=%s",
                             request_id, resp.status, attempt + 1,
-                            variant_idx, next(iter(variant)),
+                            variant_idx, next(iter(variant)), model_id,
                         )
 
                         if resp.status in (400, 415, 422):
                             last_error = (
                                 f"Queue error ({resp.status}): {sanitize_error_text(text)}"
                             )
-                            # Nächste Bild-Variante probieren
+                            # Try the next image transport variant.
                             if variant_idx < len(image_variants) - 1:
                                 continue
                             return None, {"raw": text}, last_error, request_id
@@ -412,9 +421,10 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None, last_error, request_id
 
-    # ---------- provider: poll ----------
+# ---------- provider: poll ----------
     async def _wait_for_result(
         self,
+        model_id: str,
         queue_id: str,
         progress_message: Optional[discord.Message],
         user: discord.abc.User,
@@ -458,7 +468,7 @@ class VeniceVideoCog(commands.Cog):
                 async with self.session.post(
                     VENICE_VIDEO_RETRIEVE_URL,
                     headers=headers,
-                    json={"model": VENICE_VIDEO_I2V_MODEL, "queue_id": queue_id},
+                    json={"model": model_id, "queue_id": queue_id},
                     timeout=timeout,
                 ) as response:
                     ctype = (response.headers.get("content-type") or "").lower()
@@ -483,7 +493,7 @@ class VeniceVideoCog(commands.Cog):
                                 self._progress_embed(
                                     user, prompt, p, elapsed_sec,
                                     f"Provider error {response.status} (retry {total_5xx})...",
-                                    quota,
+                                    quota, model_id,
                                 ),
                             )
                             last_percent = p
@@ -570,7 +580,7 @@ class VeniceVideoCog(commands.Cog):
                             progress_message,
                             self._progress_embed(
                                 user, prompt, p, elapsed_sec,
-                                "Finalizing file delivery...", quota,
+                                "Finalizing file delivery...", quota, model_id,
                             ),
                         )
                         last_percent = p
@@ -589,7 +599,7 @@ class VeniceVideoCog(commands.Cog):
                         await self._safe_edit_progress(
                             progress_message,
                             self._progress_embed(
-                                user, prompt, percent, elapsed_sec, "Rendering...", quota
+                                user, prompt, percent, elapsed_sec, "Rendering...", quota, model_id,
                             ),
                         )
                         last_percent = percent
@@ -601,16 +611,17 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None, "Generation timed out."
 
-    # ---------- public api (von Image-/Face-Cog aufgerufen) ----------
+    # ---------- public api (called by image / face cogs) ----------
     async def animate_image_to_video(
         self,
         interaction: discord.Interaction,
         image_url: str,
         image_bytes: Optional[bytes],
         prompt: str,
-        aspect: str,  # Kompatibilität, wird nicht im Output angezeigt
+        aspect: str,  # kept for signature compatibility, not surfaced in output
         seconds: int,
         target_channel: discord.abc.Messageable,
+        model_id: Optional[str] = None,
     ) -> bool:
         if not VENICE_API_KEY:
             await send_ephemeral(interaction, "❌ VENICE_API_KEY is missing.")
@@ -633,6 +644,12 @@ class VeniceVideoCog(commands.Cog):
         if seconds not in VIDEO_DURATION_CHOICES:
             allowed = ", ".join(str(s) for s in VIDEO_DURATION_CHOICES)
             await send_ephemeral(interaction, f"❌ Allowed durations are {allowed} seconds.")
+            return False
+
+        # If no model was passed, fall back to the legacy .env default.
+        effective_model_id = (model_id or VENICE_VIDEO_I2V_MODEL_DEFAULT).strip()
+        if not effective_model_id:
+            await send_ephemeral(interaction, "❌ No video model configured.")
             return False
 
         has_url = bool(image_url and image_url.startswith("http"))
@@ -667,7 +684,7 @@ class VeniceVideoCog(commands.Cog):
                 f"⛔ Not enough video seconds left in your 24h window.\n"
                 f"Used: **{state_q['used']}/{state_q['limit']}s** "
                 f"• Remaining: **{state_q['remaining']}s**\n"
-                f"⏳ Reset in **{seconds_human(int(state_q['reset_in']))}**.\n"
+                f"⏳ {format_reset_line(state_q)}\n"
                 f"Current tier: **T{tier}**."
             )
             nxt = next_tier(tier)
@@ -701,12 +718,14 @@ class VeniceVideoCog(commands.Cog):
         try:
             progress_message = await target_channel.send(
                 embed=self._progress_embed(
-                    interaction.user, prompt, 5, 0, "Sending queue request...", state_q
+                    interaction.user, prompt, 5, 0, "Sending queue request...",
+                    state_q, effective_model_id,
                 )
             )
             keep_ids.add(progress_message.id)
 
             queue_id, queue_response, queue_error, request_id = await self._queue_i2v(
+                model_id=effective_model_id,
                 image_url=image_url,
                 image_bytes=image_bytes,
                 prompt=prompt,
@@ -730,11 +749,12 @@ class VeniceVideoCog(commands.Cog):
                 progress_message,
                 self._progress_embed(
                     interaction.user, prompt, 8, 1,
-                    "Queue accepted. Rendering started.", state_q,
+                    "Queue accepted. Rendering started.", state_q, effective_model_id,
                 ),
             )
 
             media_data, media_type, error_message = await self._wait_for_result(
+                model_id=effective_model_id,
                 queue_id=queue_id,
                 progress_message=progress_message,
                 user=interaction.user,
@@ -777,7 +797,7 @@ class VeniceVideoCog(commands.Cog):
                     f"{SERVER_ANIM_ICON} 🎬 **Video** • {interaction.user.mention} "
                     f"• ▶ **CLICK TO PLAY**"
                 ),
-                embed=self._result_embed(prompt, seconds, guild_icon_url),
+                embed=self._result_embed(prompt, seconds, effective_model_id, guild_icon_url),
                 file=discord.File(io.BytesIO(media_data), filename="AI_video.mp4"),
                 allowed_mentions=discord.AllowedMentions(
                     users=True, roles=False, everyone=False
@@ -791,9 +811,12 @@ class VeniceVideoCog(commands.Cog):
             info = await self.get_remaining_info(interaction.guild.id, interaction.user)
             await send_ephemeral(
                 interaction,
-                f"✅ Animation completed.\n"
-                f"Remaining today: **{info['remaining']}s** of **{info['limit']}s** "
-                f"(resets in **{seconds_human(info['reset_in'])}**).",
+                build_generation_success_text(
+                    info,
+                    kind="video",
+                    unit="s",
+                    quota_label="Remaining today",
+                ),
             )
             return True
 
@@ -820,8 +843,7 @@ class VeniceVideoCog(commands.Cog):
                 await self._cleanup_progress_leaks(
                     target_channel, keep_ids=keep_ids, limit=25
                 )
-                # FIX: postet jetzt das für DIESEN Channel registrierte Menü,
-                # nicht mehr blind das Image-Menü.
+                # Repost the starter view registered for THIS channel.
                 with contextlib.suppress(Exception):
                     await repost_starter_for_channel(target_channel)
 

@@ -30,6 +30,7 @@ from venice_shared import (
     AnimateEphemeralView,
     OwnerLockedView,
     add_rating_reactions,
+    build_generation_success_text,
     build_progress_embed,
     bytes_to_b64,
     codeblock_safe,
@@ -44,7 +45,6 @@ from venice_shared import (
     repost_starter_for_channel,
     run_with_progress,
     sanitize_error_text,
-    seconds_human,
     send_ephemeral,
     send_image_quota_message,
     send_image_with_compression,
@@ -91,7 +91,7 @@ LEGACY_STARTER_TEXTS = {
 RECENT_SCAN_LIMIT = 12
 
 # =================================================
-# QUOTA (geteilt mit Face-Cog über die Registry)
+# QUOTA (shared with the face cog via the store registry)
 # =================================================
 IMAGE_QUOTA_FILE = os.getenv("IMAGE_QUOTA_FILE", "goonhut_image_quota.json")
 image_quota = get_quota_store(IMAGE_QUOTA_FILE)
@@ -149,11 +149,11 @@ UPSCALE_BASE_SECONDS = {2: 10.0, 4: 22.0}
 UPSCALE_TARGET_FACTOR = {"2K": 1.10, "4K": 1.35}
 
 DEFAULT_API_TIMEOUT = 150.0
-# Auflösung wirkt beim Timeout stärker als bei der ETA-Schätzung,
-# weil hier nach oben abgesichert wird statt geschätzt.
+# Resolution affects the timeout more strongly than the ETA estimate because
+# here we secure an upper bound instead of guessing an average.
 RES_TIMEOUT_MULT = {"1K": 1.0, "2K": 1.6, "4K": 2.6}
-# Harte Obergrenze: Discord-Interaction-Tokens verfallen nach 15 Minuten,
-# danach ist die ephemere Progress-Nachricht nicht mehr editierbar.
+# Hard cap: Discord interaction tokens expire after 15 minutes, after which
+# the ephemeral progress message can no longer be edited.
 MAX_API_TIMEOUT = 780.0
 UPSCALE_API_TIMEOUT = 240.0
 
@@ -294,8 +294,8 @@ def snap_to_divisor(value: int, divisor: int) -> int:
 
 
 def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -> tuple[int, int]:
-    # FIX: war r"^(\d+):(\d+)\$" - das \$ matchte ein Dollarzeichen statt
-    # Zeilenende, also griff NIE ein Ratio und alles wurde 1024x1024.
+    # Regex fix: was r"^(\d+):(\d+)\$" - that matched a literal '$' instead of
+    # end-of-string, so no ratio ever matched and every image ended up 1024x1024.
     m = re.match(r"^(\d+):(\d+)$", ratio) if ratio != "auto" else None
     if not m:
         side = snap_to_divisor(base_long_side, divisor)
@@ -333,8 +333,6 @@ def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str
             return "1K", 4
         return None, 4
     return None, None
-
-
 def build_generate_payload(
     model_id: str,
     ratio: str,
@@ -402,7 +400,7 @@ def estimate_upscale_seconds(scale: Optional[int], target_resolution: str) -> fl
 
 
 def model_api_timeout(model_id: str, generation_resolution: Optional[str]) -> float:
-    """Request-Timeout je Modell und Zielauflösung, hart gedeckelt."""
+    """Per-model, per-resolution request timeout with a hard cap."""
     cfg = MODEL_CONFIG.get(model_id, {})
     base = float(cfg.get("api_timeout", DEFAULT_API_TIMEOUT))
     mult = RES_TIMEOUT_MULT.get(generation_resolution or "1K", 1.0)
@@ -453,9 +451,7 @@ def _image_progress_embed(
         percent=percent,
         status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
         quota_name="Quota (24h, shared)",
-        quota_used=int(quota["used"]),
-        quota_limit=int(quota["limit"]),
-        quota_remaining=int(quota["remaining"]),
+        quota_state=quota,
         footer=f"{model_label} • {ASPECT_LABELS.get(ratio, ratio)} • {resolution}",
     )
 
@@ -482,16 +478,16 @@ async def venice_generate(
     retries: int = 2,
 ) -> tuple[Optional[bytes], Optional[str]]:
     """
-    Gibt (bytes, None) bei Erfolg, sonst (None, Fehlertext).
+    Returns (bytes, None) on success, or (None, error_text).
 
-    Timeouts werden NICHT wiederholt: bei einem langsamen Modell würde das
-    nur ein Mehrfaches der Wartezeit verbrennen, ohne die Ursache zu ändern.
+    Timeouts are NOT retried: a slow model would just burn multiple times the
+    wait budget without changing the root cause.
     """
     headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
     req_id = os.urandom(4).hex()
     model = payload.get("model")
 
-    # sock_read nahe an total: Blocking-Renders senden lange gar keine Bytes.
+    # sock_read close to total: blocking renders send no bytes for a long time.
     timeout = aiohttp.ClientTimeout(
         total=timeout_total,
         connect=20,
@@ -549,7 +545,7 @@ async def venice_generate(
             )
             return None, (
                 f"The model did not respond within {int(timeout_total)}s.\n"
-                f"This model is slow at this resolution — try **1K** "
+                f"This model is slow at this resolution - try **1K** "
                 f"or pick a faster model."
             )
         except aiohttp.ClientError as e:
@@ -822,8 +818,6 @@ class EasyModeModal(discord.ui.Modal):
             ),
             view=ResolutionSelectView(self.session, generation_data),
         )
-
-
 class GenerationModal(discord.ui.Modal):
     def __init__(
         self,
@@ -1013,7 +1007,7 @@ class ResolutionSelectView(OwnerLockedView):
         token_quota: Optional[dict[str, int]] = None
 
         async def drop_progress():
-            """Progress-Nachricht sofort entfernen (idempotent)."""
+            """Delete the progress message immediately (idempotent)."""
             nonlocal progress_msg
             if progress_msg is not None:
                 msg, progress_msg = progress_msg, None
@@ -1051,7 +1045,7 @@ class ResolutionSelectView(OwnerLockedView):
             api_timeout = model_api_timeout(model_id, effective_gen_res)
             gen_cap = 82 if upscale_factor in (2, 4) else 97
 
-            # Ephemere Progress-Nachricht: nur für den auslösenden User sichtbar
+            # Ephemeral progress message: visible only to the triggering user.
             progress_msg = await send_ephemeral(
                 interaction,
                 embed=_image_progress_embed(
@@ -1116,11 +1110,11 @@ class ResolutionSelectView(OwnerLockedView):
                 await send_ephemeral(interaction, "❌ Channel unavailable.")
                 return
 
-            # Progress-Nachricht VOR dem öffentlichen Post entfernen,
-            # damit der Balken nicht neben dem fertigen Bild stehen bleibt.
+            # Drop progress BEFORE posting the public result so the bar doesn't
+            # linger next to the finished image.
             await drop_progress()
 
-            # Backslash muss vor den f-string raus (Python < 3.12)
+            # Backslash must not appear inside an f-string (Python < 3.12).
             prompt_preview = codeblock_safe(
                 trim((prompt_text or "").replace("\n\n", "\n"), 1600)
             )
@@ -1182,12 +1176,10 @@ class ResolutionSelectView(OwnerLockedView):
             )
             await send_ephemeral(
                 interaction,
-                content=(
-                    f"✅ Image created.\n"
-                    f"Remaining in 24h (shared): "
-                    f"**{quota_now['remaining']} / {quota_now['limit']}** "
-                    f"(reset in **{seconds_human(int(quota_now['reset_in']))}**).\n"
-                    f"Use the button below if you want to animate this image."
+                content=build_generation_success_text(
+                    quota_now,
+                    kind="image",
+                    extra="Use the buttons below if you want to animate this image.",
                 ),
                 view=AnimateEphemeralView(
                     owner_id=interaction.user.id,
@@ -1199,7 +1191,7 @@ class ResolutionSelectView(OwnerLockedView):
             )
 
         finally:
-            # Sicherheitsnetz: falls oben ein Pfad das Löschen übersprungen hat
+            # Safety net if any code path skipped the explicit delete above.
             await drop_progress()
 
             if not quota_success:
@@ -1272,13 +1264,13 @@ class VeniceImageCog(commands.Cog):
     @commands.command(name="venice_timeouts")
     @commands.has_permissions(administrator=True)
     async def venice_timeouts(self, ctx: commands.Context):
-        """Zeigt die konfigurierten Timeouts je Modell und Auflösung."""
+        """Show configured timeouts per model and resolution."""
         lines = []
         for mid in get_active_model_ids():
             t1 = model_api_timeout(mid, "1K")
             t2 = model_api_timeout(mid, "2K")
             t4 = model_api_timeout(mid, "4K")
-            lines.append(f"`{mid}` → 1K:{t1:.0f}s 2K:{t2:.0f}s 4K:{t4:.0f}s")
+            lines.append(f"`{mid}` -> 1K:{t1:.0f}s 2K:{t2:.0f}s 4K:{t4:.0f}s")
 
         chunk = ""
         for line in lines:

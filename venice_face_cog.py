@@ -10,7 +10,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import aiohttp
 import discord
@@ -22,25 +22,23 @@ from venice_shared import (
     SERVER_ANIM_ICON,
     AnimateEphemeralView,
     add_rating_reactions,
+    build_generation_success_text,
     build_progress_embed,
     bytes_to_b64,
     bytes_to_data_url,
     codeblock_safe,
+    env_int,
     eta_text,
     extract_image_from_response,
-    get_image_limit_for_member,
-    get_member_tier,
     get_quota_store,
     looks_like_image,
     refresh_starter_message,
     register_starter_reposter,
-    role_ids_for_tier_and_above,
     run_with_progress,
-    seconds_human,
     send_ephemeral,
     send_image_quota_message,
     send_image_with_compression,
-    send_tier_locked_message,
+    send_role_locked_message,
     trim,
 )
 
@@ -74,10 +72,11 @@ FACE_REFERENCE_URL = os.getenv("FACE_REFERENCE_URL", "")
 FACE_POOL_FILE = os.getenv("FACE_POOL_FILE", "venice_face_pool.json")
 FACE_POOL_DIR = Path(os.getenv("FACE_POOL_DIR", "assets/face_pool"))
 
-FACE_REQUIRED_TIER = 2
-REQUIRED_ROLE_IDS: set[int] = set(role_ids_for_tier_and_above(FACE_REQUIRED_TIER))
+# SINGLE mandatory role for the face cog (no tier system).
+# Configurable via .env, defaults to the previous Tier 2 role id.
+FACE_REQUIRED_ROLE_ID = env_int("FACE_REQUIRED_ROLE_ID", 1375147276413964408)
 
-# --- Hidden Prompt Suffixe -----------------------
+# --- Hidden prompt suffixes -----------------------
 PROMPT_HIDDEN_SUFFIX = (
     " photorealistic, sharp focus, cinematic lighting, high detail."
     " Piper: 20years old woman with pale skin, freckles, green eyes and red bangs."
@@ -88,17 +87,17 @@ PROMPT_HIDDEN_SUFFIX = (
     " professional photography."
 )
 
-# Bei Single-Edit (nur Gesicht):
+# For single-edit modes (face only):
 FACE_ONLY_INSTRUCTION_SUFFIX = (
-    " IMPORTANT: The reference image shows Piper's face and identity — "
+    " IMPORTANT: The reference image shows Piper's face and identity - "
     "same facial features, same eyes, nose, mouth, skin tone and hair must be preserved perfectly."
 )
 
-# Bei Multi-Edit (Clothed Wardrobe — Face + Clothing):
+# For multi-edit mode (Clothed Wardrobe - face + clothing):
 WARDROBE_INSTRUCTION_SUFFIX = (
-    " IMPORTANT: The FIRST reference image shows Piper's face and identity — "
+    " IMPORTANT: The FIRST reference image shows Piper's face and identity - "
     "preserve her facial features, eyes, nose, mouth, skin tone and hair perfectly."
-    " The SECOND reference image shows Piper's exact clothing/outfit — "
+    " The SECOND reference image shows Piper's exact clothing/outfit - "
     "she MUST wear exactly this outfit in the scene, matching colors, fabric, cut and style precisely."
 )
 
@@ -137,7 +136,13 @@ def get_model_label(model_id: str) -> str:
 
 
 # =================================================
-# MODES — 4 sichtbare Buttons
+# MODES - 4 visible buttons
+#
+# API mapping:
+#   - The FIRST THREE modes (Nude V1, Nude V2, Clothed Free) send ONLY the face
+#     reference to the single-edit endpoint (VENICE_IMAGE_EDIT_URL).
+#   - The FOURTH mode (Clothed Wardrobe) additionally sends a random clothing
+#     reference to the multi-edit endpoint (VENICE_IMAGE_MULTI_EDIT_URL).
 # =================================================
 MODES: dict[str, dict[str, Any]] = {
     "nude_v1": {
@@ -215,6 +220,12 @@ IMAGE_STYLE_ORDER = (IMAGE_STYLE_RAW, IMAGE_STYLE_DATAURL)
 
 
 class ModelCapsStore:
+    """
+    Learns which optional API parameters a given edit model actually accepts.
+    When the provider rejects a param with 400/415/422, we mark it as blocked
+    for that model and retry without it.
+    """
+
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
         self._data: dict[str, dict[str, Any]] = {}
@@ -373,7 +384,7 @@ def _build_single_edit_payload(model_id: str, prompt: str, face_bytes: bytes) ->
 def _build_multi_edit_payload(
     model_id: str, prompt: str, face_bytes: bytes, secondary_bytes: bytes
 ) -> dict[str, Any]:
-    """Face zuerst = base identity image. Zweites Bild = Wardrobe/Outfit."""
+    """Face image first = base identity. Second image = wardrobe/outfit."""
     blocked = model_caps.blocked(model_id)
     style = model_caps.image_style(model_id)
     payload: dict[str, Any] = {
@@ -399,13 +410,24 @@ def _model_param_footer(model_id: str) -> str:
 
 
 def user_has_required_role(member: Optional[discord.Member]) -> bool:
+    """Face cog requires ONE specific role (configured via .env). No tier logic."""
     if not isinstance(member, discord.Member):
         return False
-    return get_member_tier(member) >= FACE_REQUIRED_TIER
+    return any(r.id == FACE_REQUIRED_ROLE_ID for r in member.roles)
+
+
+async def send_face_role_locked_message(interaction: discord.Interaction):
+    """
+    Show 'You need Tier X, Level Y and the Role <@&...> to access this feature'
+    (only the tier line is emitted; no full tier ladder).
+    """
+    await send_role_locked_message(
+        interaction, FACE_REQUIRED_ROLE_ID, "The face-consistent image generator"
+    )
 
 
 # =================================================
-# LEGACY REF CACHE (Fallback wenn Face-Pool leer)
+# LEGACY REFERENCE CACHE (fallback when the face pool is empty)
 # =================================================
 class FaceReferenceCache:
     def __init__(self, local_path: str | Path, url: str = ""):
@@ -443,15 +465,13 @@ class FaceReferenceCache:
                     self._raw = raw
                     return self._raw
             except Exception as e:
-                logger.error("Legacy ref load error: %s", e)
+                logger.error("Legacy reference load error: %s", e)
                 return None
 
 
 face_ref_cache = FaceReferenceCache(FACE_REFERENCE_FILE, FACE_REFERENCE_URL)
-
-
 # =================================================
-# FACE POOL STORE — 3 Face + 3 Clothing Slots
+# FACE POOL STORE - 3 face + 3 clothing slots
 # =================================================
 class FacePoolStore:
     def __init__(self, config_file: Path | str, storage_dir: Path | str):
@@ -481,12 +501,11 @@ class FacePoolStore:
                 if isinstance(slots, list) and len(slots) == 3:
                     self._data["face_slots"] = [s if isinstance(s, str) else None for s in slots]
 
-                # neue Struktur: clothing_slots (Liste)
                 clothing = data.get("clothing_slots")
                 if isinstance(clothing, list) and len(clothing) == 3:
                     self._data["clothing_slots"] = [s if isinstance(s, str) else None for s in clothing]
                 else:
-                    # Legacy-Migration: altes einzelnes clothing_slot
+                    # Legacy migration: single clothing_slot -> first list slot.
                     legacy = data.get("clothing_slot")
                     if isinstance(legacy, str):
                         self._data["clothing_slots"] = [legacy, None, None]
@@ -595,7 +614,7 @@ face_pool = FacePoolStore(FACE_POOL_FILE, FACE_POOL_DIR)
 
 
 # =================================================
-# VENICE EDIT — dual endpoint (single + multi) with fallback
+# VENICE EDIT - dual endpoint (single + multi) with fallback
 # =================================================
 async def venice_edit(
     session: aiohttp.ClientSession,
@@ -656,7 +675,7 @@ async def venice_edit(
                             heals += 1
                             continue
 
-                    # Multi-Edit versagt? Fallback auf Single-Edit.
+                    # Multi-edit rejected? Fall back to single-edit.
                     if use_multi and (
                         "images" in body.lower()
                         or "maxinputimages" in body.lower()
@@ -710,14 +729,8 @@ async def venice_edit(
     return None, last_error or "All attempts failed"
 
 
-async def send_role_locked_message(interaction: discord.Interaction):
-    await send_tier_locked_message(
-        interaction, FACE_REQUIRED_TIER, "The face-consistent image generator"
-    )
-# venice_face_cog.py — Part 2/2
-
 # =================================================
-# MODULE-LEVEL COG REFERENCE (für Starter-Repost aus Generation-Flow)
+# MODULE-LEVEL COG REFERENCE (for starter repost from generation flow)
 # =================================================
 _cog_instance: Optional["VeniceFaceCog"] = None
 
@@ -748,15 +761,13 @@ def _face_progress_embed(user, prompt, mode_id, model_id, percent, eta_sec, stag
         user=user, prompt=prompt, percent=percent,
         status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
         quota_name="Quota (24h, shared)",
-        quota_used=int(quota["used"]),
-        quota_limit=int(quota["limit"]),
-        quota_remaining=int(quota["remaining"]),
+        quota_state=quota,
         footer=f"{get_mode_label(mode_id)} • {get_model_label(model_id)} • {_model_param_footer(model_id)}",
     )
 
 
 # =================================================
-# STARTER BUTTONS — 4 Modes
+# STARTER BUTTONS - 4 modes
 # =================================================
 class StarterModeButton(discord.ui.Button):
     def __init__(self, session_ref, channel_id: int, mode_id: str, row: int):
@@ -774,7 +785,7 @@ class StarterModeButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if not user_has_required_role(member):
-            await send_role_locked_message(interaction)
+            await send_face_role_locked_message(interaction)
             return
         if self.mode_id not in MODES:
             await send_ephemeral(interaction, "❌ Unknown mode.")
@@ -835,7 +846,7 @@ class FacePromptModal(discord.ui.Modal):
             return
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if not user_has_required_role(member):
-            await send_role_locked_message(interaction)
+            await send_face_role_locked_message(interaction)
             return
         user_prompt = (self.prompt.value or "").strip()
         if not user_prompt:
@@ -863,7 +874,7 @@ async def run_face_generation(
 
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if not user_has_required_role(member):
-        await send_role_locked_message(interaction)
+        await send_face_role_locked_message(interaction)
         return
 
     mode_cfg = MODES[mode_id]
@@ -874,8 +885,24 @@ async def run_face_generation(
     quota_success = False
     token_quota = None
 
+    # Face cog uses the same shared image quota file as the image cog.
+    # Limit is determined by the tier of the *required* face role.
+    from venice_shared import TIER_RULES, DEFAULT_IMAGE_LIMIT_24H
+    face_role_tier = None
+    for t, cfg in TIER_RULES.items():
+        if cfg["role_id"] == FACE_REQUIRED_ROLE_ID:
+            face_role_tier = (t, cfg)
+            break
+
     try:
-        image_limit = get_image_limit_for_member(member)
+        # Use the tier that the face role belongs to; if the configured role
+        # is NOT a tier role, fall back to the member's actual tier limit.
+        if face_role_tier is not None:
+            image_limit = int(face_role_tier[1]["image_limit"])
+        else:
+            from venice_shared import get_image_limit_for_member
+            image_limit = get_image_limit_for_member(member)
+
         ok, state, token_quota = await image_quota.reserve(
             interaction.guild.id, interaction.user.id, image_limit, 1
         )
@@ -883,7 +910,7 @@ async def run_face_generation(
             await send_image_quota_message(interaction, member, state)
             return
 
-        # === RANDOM FACE FROM POOL ===
+        # === Random face from pool ===
         face_bytes, chosen_face_slot = await face_pool.read_random_face()
         if face_bytes is None:
             face_bytes = await face_ref_cache.get_bytes(session)
@@ -895,7 +922,7 @@ async def run_face_generation(
             )
             return
 
-        # === RANDOM CLOTHING (nur bei Wardrobe-Mode) ===
+        # === Random clothing (wardrobe mode only) ===
         secondary_bytes: Optional[bytes] = None
         chosen_cloth_slot: Optional[int] = None
         if use_wardrobe:
@@ -916,7 +943,7 @@ async def run_face_generation(
             (chosen_cloth_slot + 1) if chosen_cloth_slot is not None else "none",
         )
 
-        # === PROMPT BAUEN ===
+        # === Build full prompt ===
         if use_wardrobe:
             full_prompt = (
                 f"{user_prompt.strip()}"
@@ -969,7 +996,7 @@ async def run_face_generation(
                     ),
                 )
 
-        # === EMBED FÜR POST ===
+        # === Result embed ===
         embed = discord.Embed(
             title="🎭 Face Image",
             color=discord.Color.purple(),
@@ -1013,12 +1040,10 @@ async def run_face_generation(
         )
         await send_ephemeral(
             interaction,
-            content=(
-                f"✅ Face image created ({get_mode_label(mode_id)}).\n"
-                f"Remaining in 24h (shared): "
-                f"**{quota_now['remaining']} / {quota_now['limit']}** "
-                f"(reset in **{seconds_human(int(quota_now['reset_in']))}**).\n"
-                f"Use the button below if you want to animate this image."
+            content=build_generation_success_text(
+                quota_now,
+                kind="face_image",
+                extra="Use the buttons below if you want to animate this image.",
             ),
             view=AnimateEphemeralView(
                 owner_id=interaction.user.id,
@@ -1035,14 +1060,14 @@ async def run_face_generation(
                 await progress_msg.delete()
         if not quota_success:
             await image_quota.rollback(token_quota)
-        # === STARTER-BUTTONS neu ans Ende des Channels ===
+        # Repost starter buttons back to the channel bottom.
         if _cog_instance and interaction.channel:
             with contextlib.suppress(Exception):
                 await _cog_instance.ensure_starter_message(interaction.channel)
 
 
 # =================================================
-# CONFIG PANEL — mit Bild-Previews
+# CONFIG PANEL - with image previews
 # =================================================
 _PREVIEW_MAX_BYTES = 500_000
 
@@ -1113,13 +1138,12 @@ async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]
     for i, p in enumerate(cloth_slots):
         add_preview(f"👗 Clothing {i+1}", p, f"cloth_{i+1}", discord.Color.green())
 
-    # Discord-Limit: max 10 Embeds pro Nachricht
+    # Discord limit: max 10 embeds per message.
     if len(embeds) > 10:
         embeds = embeds[:10]
         files = files[: max(0, 10 - 1)]
 
     return embeds, files
-
 
 class FaceConfigView(discord.ui.View):
     """
@@ -1202,7 +1226,7 @@ class FaceConfigView(discord.ui.View):
             await msg.delete()
 
         await interaction.followup.send(
-            f"✅ **{label}** saved → `{Path(path).name}` ({len(img_bytes):,} bytes).",
+            f"✅ **{label}** saved -> `{Path(path).name}` ({len(img_bytes):,} bytes).",
             ephemeral=True,
         )
         await self._refresh(interaction, response=False)
@@ -1309,9 +1333,7 @@ class VeniceFaceCog(commands.Cog):
             asyncio.create_task(self.session.close())
 
     async def ensure_starter_message(self, channel: discord.TextChannel):
-        """
-        Räumt alte Starter-Buttons weg und postet frische unten im Channel.
-        """
+        """Clean old starter posts and post a fresh one at the channel bottom."""
         await self._ensure_session()
         await refresh_starter_message(
             channel=channel,
@@ -1323,7 +1345,7 @@ class VeniceFaceCog(commands.Cog):
         )
 
     # =========================================
-    # SLASH — Owner-only
+    # SLASH - owner only
     # =========================================
     @app_commands.command(
         name="face_config",
@@ -1367,6 +1389,7 @@ class VeniceFaceCog(commands.Cog):
             f"✅ Face cog reloaded.\n"
             f"• Legacy reference: {ref_state}\n"
             f"• Pool: {pool_state}\n"
+            f"• Required role id: `{FACE_REQUIRED_ROLE_ID}`\n"
             f"• Starter messages reposted: {reposted}"
         )
 
@@ -1384,7 +1407,7 @@ class VeniceFaceCog(commands.Cog):
             model_caps.reset(model_id)
             await ctx.send(f"♻️ Learned capabilities for `{model_id}` cleared.")
             return
-        lines = [f"`{mid}` → {model_caps.describe(mid)}" for mid in MODEL_ORDER]
+        lines = [f"`{mid}` -> {model_caps.describe(mid)}" for mid in MODEL_ORDER]
         await ctx.send("🧠 **Learned model capabilities**\n" + "\n".join(lines))
 
     @commands.command(name="face_test")
@@ -1415,9 +1438,9 @@ class VeniceFaceCog(commands.Cog):
             )
             tag = " [multi]" if secondary else " [single]"
             if img:
-                results.append(f"✅ `{mode_id}` ({model_id}){tag} → {len(img)} bytes")
+                results.append(f"✅ `{mode_id}` ({model_id}){tag} -> {len(img)} bytes")
             else:
-                results.append(f"❌ `{mode_id}` ({model_id}){tag} → {trim(err or 'unknown', 160)}")
+                results.append(f"❌ `{mode_id}` ({model_id}){tag} -> {trim(err or 'unknown', 160)}")
 
         with contextlib.suppress(Exception):
             await status.delete()
