@@ -8,7 +8,9 @@ RULES:
 - Cogs register themselves via register_starter_reposter().
 - Progress embeds use build_progress_embed(quota_state=state).
 - Success messages use build_generation_success_text(state, kind=...).
-  -> All future changes to reset/feedback go HERE, never inside the cogs.
+- Video model config lives in VIDEO_MODEL_PROFILES. Add a new animate button
+  by adding one entry there. No cog change required.
+- All future changes to reset/feedback/animate buttons go HERE.
 """
 from __future__ import annotations
 
@@ -83,7 +85,6 @@ class RollingQuotaStore:
         self.window_seconds = int(window_seconds)
         self.lock = asyncio.Lock()
 
-    # ---------- io ----------
     def _read_sync(self) -> dict[str, Any]:
         if not self.file_path.exists():
             return {}
@@ -113,7 +114,6 @@ class RollingQuotaStore:
     async def _write(self, data: dict[str, Any]) -> None:
         await asyncio.to_thread(self._write_sync, data)
 
-    # ---------- window ----------
     def _key(self, guild_id: int, user_id: int) -> str:
         return f"{guild_id}:{user_id}"
 
@@ -148,9 +148,7 @@ class RollingQuotaStore:
             "reset_at": reset_at,
         }
 
-    # ---------- api ----------
     async def peek(self, guild_id: int, user_id: int, limit: int) -> dict[str, int]:
-        """Read-only view of the current quota state."""
         now_ts = int(time.time())
         limit = max(0, int(limit))
         async with self.lock:
@@ -204,7 +202,6 @@ class RollingQuotaStore:
             key = self._key(guild_id, user_id)
             entry = self._normalize(db.get(key, {}), now_ts)
 
-            # Only refund if we're still inside the same window as the reservation.
             if entry["start"] == token_start and entry["used"] > 0:
                 entry["used"] = max(0, entry["used"] - amount)
                 if entry["used"] == 0:
@@ -213,7 +210,6 @@ class RollingQuotaStore:
                 await self._write(db)
 
     async def prune(self) -> int:
-        """Drop entries whose 24h window has fully expired."""
         now_ts = int(time.time())
         async with self.lock:
             db = await self._read()
@@ -230,7 +226,6 @@ _stores: dict[str, RollingQuotaStore] = {}
 def get_quota_store(
     file_path: str | Path, window_seconds: int = DEFAULT_WINDOW_SECONDS
 ) -> RollingQuotaStore:
-    """Same instance per path - guarantees a shared lock across all cogs."""
     resolved = str(Path(file_path).expanduser().resolve())
     store = _stores.get(resolved)
     if store is None:
@@ -249,12 +244,12 @@ def get_quota_store(
 # TIERS - SINGLE SOURCE OF TRUTH
 # =================================================
 TIER_RULES: dict[int, dict[str, int]] = {
-    1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10,  "video_budget_sec": 10},
-    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 15,  "video_budget_sec": 20},
-    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 20,  "video_budget_sec": 30},
-    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 25,  "video_budget_sec": 35},
-    5: {"role_id": 1375666588404940830, "level": 43, "image_limit": 30,  "video_budget_sec": 40},
-    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 50},
+    1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10,  "video_budget_sec": 12},
+    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 15,  "video_budget_sec": 24},
+    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 20,  "video_budget_sec": 36},
+    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 25,  "video_budget_sec": 42},
+    5: {"role_id": 1375666588404940830, "level": 42, "image_limit": 42,  "video_budget_sec": 54},
+    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 66},
     7: {"role_id": 1346414581643219029, "level": 99, "image_limit": 300, "video_budget_sec": 300},
 }
 
@@ -310,7 +305,6 @@ def video_tier_line() -> str:
 
 
 def tier_for_role_id(role_id: int) -> Optional[tuple[int, dict[str, int]]]:
-    """Return the tier that owns this role id, if any."""
     for t, cfg in tiers_asc():
         if cfg["role_id"] == role_id:
             return t, cfg
@@ -351,11 +345,6 @@ def seconds_human(sec: int) -> str:
 
 
 def format_reset_line(state: dict[str, int], prefix: str = "Resets") -> str:
-    """
-    Unified reset display. Uses Discord relative + absolute timestamps so every
-    user sees their local time. Falls back to a friendly message when the
-    24h window has not started yet.
-    """
     reset_at = int(state.get("reset_at", 0) or 0)
     if reset_at <= 0:
         return "Fresh 24h window starts with your next generation."
@@ -379,8 +368,6 @@ def make_safe_filename(prompt: str, ext: str = "png", fallback: str = "image") -
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)[:60] or fallback
     ext = (ext or "png").lower().strip(".")
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.{ext}"
-
-
 # =================================================
 # BINARY / IMAGE HELPERS
 # =================================================
@@ -576,7 +563,6 @@ async def send_image_with_compression(
     filename_prompt: str,
     filename_fallback: str = "image",
 ) -> Optional[discord.Message]:
-    """Post an image, downscaling stepwise on HTTP 413."""
     upload_limit = discord_upload_limit_bytes(interaction)
 
     for scale in (1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.22, 0.18):
@@ -709,19 +695,37 @@ async def cleanup_user_ephemerals(interaction: discord.Interaction, delay: float
 async def send_ephemeral(
     interaction: discord.Interaction,
     content: Optional[str] = None,
+    *,
+    track: Optional[bool] = None,
     **kwargs,
 ) -> Optional[discord.Message]:
+    """
+    Send an ephemeral message.
+
+    A view can opt out of automatic cleanup by declaring the class attribute
+    `persistent_ephemeral = True`. Those messages are never added to the
+    tracking list and survive cleanup_user_ephemerals(), so their buttons stay
+    clickable for the full view timeout.
+
+    You can also force behaviour explicitly via track=True/False.
+    """
     payload = dict(kwargs)
     payload["ephemeral"] = True
     if content is not None:
         payload["content"] = content
+
+    if track is None:
+        view = payload.get("view")
+        track = not getattr(view, "persistent_ephemeral", False)
+
     try:
         if interaction.response.is_done():
             msg = await interaction.followup.send(wait=True, **payload)
         else:
             await interaction.response.send_message(**payload)
             msg = await interaction.original_response()
-        await track_ephemeral_message(interaction, msg)
+        if track:
+            await track_ephemeral_message(interaction, msg)
         return msg
     except Exception:
         return None
@@ -747,10 +751,6 @@ async def add_rating_reactions(
     message: Optional[discord.Message],
     reactions: Optional[list[str]] = None,
 ) -> int:
-    """
-    Add rating reactions. Emojis that permanently fail (deleted / no access)
-    are logged once and skipped afterwards.
-    """
     if message is None:
         return 0
 
@@ -763,7 +763,7 @@ async def add_rating_reactions(
             ok += 1
         except discord.HTTPException as e:
             code = getattr(e, "code", None)
-            if code in (10014, 50001):  # Unknown Emoji / Missing Access
+            if code in (10014, 50001):
                 _dead_reactions.add(emo)
                 logger.warning("Reaction %r not available (code=%s), skipping.", emo, code)
             elif e.status == 403:
@@ -825,10 +825,6 @@ async def send_role_locked_message(
     required_role_id: int,
     feature: str = "This feature",
 ):
-    """
-    For cogs that require a SINGLE mandatory role instead of the tier system.
-    If the role happens to be a tier role, tier + level are included for clarity.
-    """
     match = tier_for_role_id(required_role_id)
     if match:
         tier, cfg = match
@@ -876,10 +872,6 @@ def build_progress_embed(
     footer: Optional[str] = None,
     footer_icon: Optional[str] = None,
 ) -> discord.Embed:
-    """
-    Unified progress embed. Takes the full state dict from the quota store:
-    the reset line is attached automatically.
-    """
     used = int(quota_state.get("used", 0))
     limit = int(quota_state.get("limit", 0))
     remaining = int(quota_state.get("remaining", 0))
@@ -926,15 +918,6 @@ def build_generation_success_text(
     extra: str = "",
     quota_label: str = "Remaining in 24h",
 ) -> str:
-    """
-    Unified success text after every generation.
-
-    kind:  image | face_image | video   (unknown values fall back to a generic header)
-    unit:  '' for images, 's' for video seconds
-    extra: optional trailing line (e.g. "Use the button below to animate...")
-
-    This is the ONE place to change future success feedback wording.
-    """
     header = _SUCCESS_HEADERS.get(kind, "✅ Done")
     remaining = int(state.get("remaining", 0))
     limit = int(state.get("limit", 0))
@@ -1019,7 +1002,6 @@ def has_starter_reposter(channel_id: int) -> bool:
 
 
 async def repost_starter_for_channel(channel: discord.abc.Messageable) -> bool:
-    """Repost the starter view registered for this specific channel."""
     if not isinstance(channel, discord.TextChannel):
         return False
     fn = _starter_reposters.get(channel.id)
@@ -1044,7 +1026,6 @@ async def refresh_starter_message(
     matcher: Callable[[discord.Message], bool],
     scan_limit: int = 12,
 ) -> None:
-    """Delete existing starter posts in the scan window, then post a fresh one."""
     async with get_channel_lock(channel.id):
         try:
             async for msg in channel.history(limit=scan_limit):
@@ -1057,25 +1038,80 @@ async def refresh_starter_message(
         except Exception as e:
             logger.warning("refresh_starter_message failed (%s): %s", channel.id, e)
 
-
 # =================================================
-# VIDEO CONSTANTS + ANIMATE UI
+# VIDEO MODEL CATALOG
 # =================================================
 MAX_VIDEO_RENDER_SECONDS = 15
-VIDEO_DURATION_CHOICES = [5, 10, 15]
 VIDEO_ALLOWED_ASPECTS = {"1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"}
 
-# Two model variants for the animate flow.
-# ENHANCED = WAN 2.7 Enhanced (audio, uncensored model set)
-# STANDARD = WAN 2.7          (no audio, uncensored model set)
+# Model IDs (overridable via .env).
 VENICE_VIDEO_I2V_MODEL_ENHANCED = env_str(
     "VENICE_VIDEO_I2V_MODEL_ENHANCED", "wan-2-7-enhanced-image-to-video"
 )
 VENICE_VIDEO_I2V_MODEL_STANDARD = env_str(
     "VENICE_VIDEO_I2V_MODEL_STANDARD", "wan-2-7-image-to-video"
 )
+VENICE_VIDEO_I2V_MODEL_LTX = env_str(
+    "VENICE_VIDEO_I2V_MODEL_LTX", "ltx-2-v2-3-full-image-to-video"
+)
+
+# Single source of truth for the animate flow.
+# To add another animate button in the future: add ONE entry here.
+# No cog code needs to change.
+#
+# button_label   -> label shown on the ephemeral animate button
+# button_style   -> discord.ButtonStyle
+# resolution     -> resolution string sent to the video queue endpoint
+# durations      -> list of allowed durations (seconds); duration picker
+#                   surfaces only these values
+VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
+    VENICE_VIDEO_I2V_MODEL_ENHANCED: {
+        "button_label": "🔞 Animate",
+        "button_style": discord.ButtonStyle.danger,
+        "resolution": "720p",
+        "durations": [5, 10, 15],
+    },
+    VENICE_VIDEO_I2V_MODEL_STANDARD: {
+        "button_label": "🎬 Animate",
+        "button_style": discord.ButtonStyle.primary,
+        "resolution": "720p",
+        "durations": [5, 10, 15],
+    },
+    VENICE_VIDEO_I2V_MODEL_LTX: {
+        "button_label": "💎 Animate HQ",
+        "button_style": discord.ButtonStyle.success,
+        "resolution": "1080p",
+        "durations": [6, 8, 10],
+    },
+}
+
+# Union of all durations across all profiles (used by legacy validation paths).
+VIDEO_DURATION_CHOICES: list[int] = sorted(
+    {d for prof in VIDEO_MODEL_PROFILES.values() for d in prof["durations"]}
+)
 
 
+def get_video_profile(model_id: str) -> dict[str, Any]:
+    """Return the profile for a video model, with sane fallbacks if unknown."""
+    return VIDEO_MODEL_PROFILES.get(model_id) or {
+        "button_label": "🎬 Animate",
+        "button_style": discord.ButtonStyle.primary,
+        "resolution": None,  # video_cog will fall back to its env default
+        "durations": [5, 10, 15],
+    }
+
+
+def get_model_durations(model_id: str) -> list[int]:
+    return list(get_video_profile(model_id)["durations"])
+
+
+def get_model_resolution(model_id: str) -> Optional[str]:
+    return get_video_profile(model_id).get("resolution")
+
+
+# =================================================
+# ANIMATE UI
+# =================================================
 class AnimatePromptModal(discord.ui.Modal):
     def __init__(
         self,
@@ -1137,12 +1173,17 @@ class AnimatePromptModal(discord.ui.Modal):
             return
 
         remaining = int(info["remaining"])
-        allowed = [s for s in VIDEO_DURATION_CHOICES if s <= min(MAX_VIDEO_RENDER_SECONDS, remaining)]
+        model_durations = get_model_durations(self.model_id)
+        cap = min(MAX_VIDEO_RENDER_SECONDS, remaining)
+        allowed = [s for s in model_durations if s <= cap]
 
         if not allowed:
+            min_dur = min(model_durations) if model_durations else 0
             await send_ephemeral(
                 interaction,
-                f"⛔ Video seconds exhausted for this 24h window: **{info['used']}/{budget}s**.\n"
+                f"⛔ Not enough seconds for this model.\n"
+                f"Used **{info['used']}/{budget}s** • remaining **{remaining}s**.\n"
+                f"This model requires at least **{min_dur}s** per render.\n"
                 f"⏳ {format_reset_line(info)}\n"
                 f"Current tier: **T{info['tier']}**.\n"
                 f"Tier budgets: `{video_tier_line()}`",
@@ -1197,7 +1238,7 @@ class AnimateDurationView(OwnerLockedView):
 
         for idx, sec in enumerate(self.allowed_durations):
             style = (
-                discord.ButtonStyle.success if sec <= 10
+                discord.ButtonStyle.success if sec <= 6
                 else discord.ButtonStyle.danger if sec >= 15
                 else discord.ButtonStyle.primary
             )
@@ -1283,10 +1324,18 @@ class AnimateDurationView(OwnerLockedView):
 
 class AnimateEphemeralView(OwnerLockedView):
     """
-    Two buttons:
-      🔞 Animate  -> VENICE_VIDEO_I2V_MODEL_ENHANCED  (audio, uncensored)
-      🎬 Animate  -> VENICE_VIDEO_I2V_MODEL_STANDARD  (no audio, uncensored)
+    Ephemeral view attached to a successful image/face-image post.
+
+    Buttons are built dynamically from VIDEO_MODEL_PROFILES, so adding a new
+    animate variant is a single-line edit in that table - no cog change needed.
+
+    persistent_ephemeral = True means send_ephemeral does NOT add this message
+    to the ephemeral tracking list. Therefore cleanup_user_ephemerals() will
+    NOT delete it after a video render, and the buttons remain clickable for
+    the full 30 minute view timeout. The user can start further animations of
+    the same source image (or with a different model) from the same ephemeral.
     """
+    persistent_ephemeral = True
 
     def __init__(
         self,
@@ -1302,34 +1351,30 @@ class AnimateEphemeralView(OwnerLockedView):
         self.prompt_text = prompt_text
         self.ratio = ratio
 
-    @discord.ui.button(label="🔞 Animate", style=discord.ButtonStyle.danger)
-    async def animate_enhanced(self, interaction: discord.Interaction, _: discord.ui.Button):
-        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
-            await send_ephemeral(interaction, "❌ This action is server-only.")
-            return
-        await interaction.response.send_modal(
-            AnimatePromptModal(
-                owner_id=self.owner_id,
-                source_channel_id=self.source_channel_id,
-                source_message_id=self.source_message_id,
-                base_prompt=self.prompt_text,
-                ratio=self.ratio,
-                model_id=VENICE_VIDEO_I2V_MODEL_ENHANCED,
+        for idx, (model_id, profile) in enumerate(VIDEO_MODEL_PROFILES.items()):
+            btn = discord.ui.Button(
+                label=profile["button_label"],
+                style=profile["button_style"],
+                row=idx // 5,
             )
-        )
+            btn.callback = self._make_callback(model_id)
+            self.add_item(btn)
 
-    @discord.ui.button(label="🎬 Animate", style=discord.ButtonStyle.primary)
-    async def animate_standard(self, interaction: discord.Interaction, _: discord.ui.Button):
-        if not isinstance(interaction.user, discord.Member) or not interaction.guild:
-            await send_ephemeral(interaction, "❌ This action is server-only.")
-            return
-        await interaction.response.send_modal(
-            AnimatePromptModal(
-                owner_id=self.owner_id,
-                source_channel_id=self.source_channel_id,
-                source_message_id=self.source_message_id,
-                base_prompt=self.prompt_text,
-                ratio=self.ratio,
-                model_id=VENICE_VIDEO_I2V_MODEL_STANDARD,
+    def _make_callback(self, model_id: str):
+        async def _cb(interaction: discord.Interaction):
+            if not isinstance(interaction.user, discord.Member) or not interaction.guild:
+                await send_ephemeral(interaction, "❌ This action is server-only.")
+                return
+            await interaction.response.send_modal(
+                AnimatePromptModal(
+                    owner_id=self.owner_id,
+                    source_channel_id=self.source_channel_id,
+                    source_message_id=self.source_message_id,
+                    base_prompt=self.prompt_text,
+                    ratio=self.ratio,
+                    model_id=model_id,
+                )
             )
-        )
+        return _cb
+
+    

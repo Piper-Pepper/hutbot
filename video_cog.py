@@ -19,8 +19,9 @@ from venice_shared import (
     MAX_VIDEO_RENDER_SECONDS,
     SERVER_ANIM_ICON,
     VENICE_VIDEO_I2V_MODEL_ENHANCED,
+    VENICE_VIDEO_I2V_MODEL_LTX,
     VENICE_VIDEO_I2V_MODEL_STANDARD,
-    VIDEO_DURATION_CHOICES,
+    VIDEO_MODEL_PROFILES,
     add_rating_reactions,
     build_generation_success_text,
     build_progress_embed,
@@ -30,8 +31,11 @@ from venice_shared import (
     extract_urls_from_payload,
     format_reset_line,
     get_member_tier,
+    get_model_durations,
+    get_model_resolution,
     get_quota_store,
     get_video_budget_for_member,
+    get_video_profile,
     looks_like_image,
     looks_like_video,
     next_tier,
@@ -53,9 +57,11 @@ logger = logging.getLogger("venice_video_cog")
 VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 VENICE_VIDEO_QUEUE_URL = os.getenv("VENICE_VIDEO_QUEUE_URL")
 VENICE_VIDEO_RETRIEVE_URL = os.getenv("VENICE_VIDEO_RETRIEVE_URL")
-VENICE_VIDEO_RESOLUTION = os.getenv("VENICE_VIDEO_RESOLUTION", "720p")
 
-# Legacy fallback when animate_image_to_video is called without an explicit model_id.
+# Global fallback resolution for models not listed in VIDEO_MODEL_PROFILES.
+VENICE_VIDEO_RESOLUTION_FALLBACK = os.getenv("VENICE_VIDEO_RESOLUTION", "720p")
+
+# Legacy fallback when animate_image_to_video is called without model_id.
 VENICE_VIDEO_I2V_MODEL_DEFAULT = os.getenv(
     "VENICE_VIDEO_I2V_MODEL", VENICE_VIDEO_I2V_MODEL_ENHANCED
 )
@@ -69,9 +75,11 @@ VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 720
 VIDEO_MAX_CONSECUTIVE_5XX = 8
 VIDEO_5XX_WINDOW_SECONDS = 180
 
+# Display renames for known model IDs.
 VIDEO_MODEL_RENAMES = {
-    "wan-2-7-enhanced-image-to-video": "WAN27-Enh 🔞",
-    "wan-2-7-image-to-video": "WAN27",
+    VENICE_VIDEO_I2V_MODEL_ENHANCED: "WAN27-Enh 🔞",
+    VENICE_VIDEO_I2V_MODEL_STANDARD: "WAN27",
+    VENICE_VIDEO_I2V_MODEL_LTX: "LTX 2.3 HQ",
 }
 
 VIDEO_QUOTA_FILE = os.getenv("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
@@ -118,6 +126,11 @@ def _extract_queue_id(payload: Any) -> Optional[str]:
 def _video_model_label(model_name: str) -> str:
     key = (model_name or "").strip()
     return VIDEO_MODEL_RENAMES.get(key, key)
+
+
+def _resolution_for_model(model_id: str) -> str:
+    """Per-model resolution from the shared profile table, with env fallback."""
+    return get_model_resolution(model_id) or VENICE_VIDEO_RESOLUTION_FALLBACK
 
 
 # =================================================
@@ -211,7 +224,10 @@ class VeniceVideoCog(commands.Cog):
             quota_name="Quota (24h)",
             quota_state=quota,
             quota_unit="s",
-            footer=f"🎞️ {_video_model_label(model_id)} • 📺 {VENICE_VIDEO_RESOLUTION}",
+            footer=(
+                f"🎞️ {_video_model_label(model_id)} "
+                f"• 📺 {_resolution_for_model(model_id)}"
+            ),
         )
 
     def _result_embed(
@@ -226,7 +242,7 @@ class VeniceVideoCog(commands.Cog):
         embed.set_footer(
             text=(
                 f"🎞️ {_video_model_label(model_id)} "
-                f"• 📺 {VENICE_VIDEO_RESOLUTION} • ⏱️ {seconds}s"
+                f"• 📺 {_resolution_for_model(model_id)} • ⏱️ {seconds}s"
             ),
             icon_url=guild_icon_url,
         )
@@ -328,7 +344,6 @@ class VeniceVideoCog(commands.Cog):
         if not VENICE_API_KEY:
             return None, None, "VENICE_API_KEY is missing.", "noid"
 
-        # Try multiple image transports until one is accepted by the provider.
         image_variants: list[dict[str, Any]] = []
         if image_url and image_url.startswith("http"):
             image_variants.append({"image_url": image_url})
@@ -347,10 +362,11 @@ class VeniceVideoCog(commands.Cog):
             "Content-Type": "application/json",
         }
         request_id = uuid.uuid4().hex[:8]
+        resolution = _resolution_for_model(model_id)
         base_payload = {
             "model": model_id,
             "prompt": prompt,
-            "resolution": VENICE_VIDEO_RESOLUTION,
+            "resolution": resolution,
             "duration": f"{seconds}s",
         }
 
@@ -366,16 +382,15 @@ class VeniceVideoCog(commands.Cog):
                     ) as resp:
                         text = await resp.text()
                         logger.info(
-                            "[VID %s] queue status=%s attempt=%s variant=%s(%s) model=%s",
+                            "[VID %s] queue status=%s attempt=%s variant=%s(%s) model=%s res=%s",
                             request_id, resp.status, attempt + 1,
-                            variant_idx, next(iter(variant)), model_id,
+                            variant_idx, next(iter(variant)), model_id, resolution,
                         )
 
                         if resp.status in (400, 415, 422):
                             last_error = (
                                 f"Queue error ({resp.status}): {sanitize_error_text(text)}"
                             )
-                            # Try the next image transport variant.
                             if variant_idx < len(image_variants) - 1:
                                 continue
                             return None, {"raw": text}, last_error, request_id
@@ -611,7 +626,7 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None, "Generation timed out."
 
-    # ---------- public api (called by image / face cogs) ----------
+    # ---------- public api (called by image / face cogs + shared animate UI) ----------
     async def animate_image_to_video(
         self,
         interaction: discord.Interaction,
@@ -641,15 +656,20 @@ class VeniceVideoCog(commands.Cog):
                 f"❌ Max duration per render is {MAX_VIDEO_RENDER_SECONDS} seconds.",
             )
             return False
-        if seconds not in VIDEO_DURATION_CHOICES:
-            allowed = ", ".join(str(s) for s in VIDEO_DURATION_CHOICES)
-            await send_ephemeral(interaction, f"❌ Allowed durations are {allowed} seconds.")
-            return False
 
-        # If no model was passed, fall back to the legacy .env default.
+        # Resolve effective model + per-model duration validation.
         effective_model_id = (model_id or VENICE_VIDEO_I2V_MODEL_DEFAULT).strip()
         if not effective_model_id:
             await send_ephemeral(interaction, "❌ No video model configured.")
+            return False
+
+        model_durations = get_model_durations(effective_model_id)
+        if seconds not in model_durations:
+            allowed = ", ".join(f"{s}s" for s in model_durations)
+            await send_ephemeral(
+                interaction,
+                f"❌ Allowed durations for this model are {allowed}.",
+            )
             return False
 
         has_url = bool(image_url and image_url.startswith("http"))
@@ -843,10 +863,13 @@ class VeniceVideoCog(commands.Cog):
                 await self._cleanup_progress_leaks(
                     target_channel, keep_ids=keep_ids, limit=25
                 )
-                # Repost the starter view registered for THIS channel.
                 with contextlib.suppress(Exception):
                     await repost_starter_for_channel(target_channel)
 
+            # NOTE: cleanup_user_ephemerals wipes tracked ephemerals only.
+            # AnimateEphemeralView is declared persistent_ephemeral=True in
+            # venice_shared, so its 🔞 / 🎬 / 💎 buttons stay clickable and
+            # the user can queue further animations of the same source image.
             asyncio.create_task(self._cleanup_user_ephemerals_delayed(interaction))
 
     async def _cleanup_user_ephemerals_delayed(
@@ -861,6 +884,19 @@ class VeniceVideoCog(commands.Cog):
     async def video_quota_prune(self, ctx: commands.Context):
         pruned = await self.video_quota.prune()
         await ctx.send(f"✅ Pruned {pruned} expired video quota entr(ies).")
+
+    @commands.command(name="video_profiles")
+    @commands.has_permissions(administrator=True)
+    async def video_profiles(self, ctx: commands.Context):
+        """Show the current animate button configuration."""
+        lines = ["🎞️ **Animate button profiles**"]
+        for model_id, profile in VIDEO_MODEL_PROFILES.items():
+            durations = ", ".join(f"{d}s" for d in profile["durations"])
+            lines.append(
+                f"• `{model_id}` -> {profile['button_label']} "
+                f"({profile['resolution']}, {durations})"
+            )
+        await ctx.send("\n".join(lines))
 
 
 async def setup(bot: commands.Bot):
