@@ -223,8 +223,8 @@ def build_xp_reminder_embed(
         ),
         color=discord.Color.gold(),
     )
-    e.add_field(name="Command (by name)", value=f"`/xp app {xp} {safe_name}`", inline=False)
-    e.add_field(name="Command (by mention)", value=f"`/xp app {xp} {solver_mention}`", inline=False)
+    e.add_field(name="Command (by name)", value=f"`/xp add {xp} {safe_name}`", inline=False)
+    e.add_field(name="Command (by mention)", value=f"`/xp add {xp} {solver_mention}`", inline=False)
     e.add_field(name="Amount", value=f"**{xp} XP**", inline=True)
     if solver_avatar_url:
         e.set_thumbnail(url=solver_avatar_url)
