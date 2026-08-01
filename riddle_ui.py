@@ -909,7 +909,7 @@ class RiddleAdminPanelView(View):
             extras = parse_csv_role_ids(row.get("mention_role_ids"))
             xp = to_int(row.get("xp"), 0)
             preview = _first_line(row.get("solution"), 80)
-            active_tag = " · ⭐ ACTIVE" if slot == 1 else ""
+            active_tag = " · 👉" if slot == 1 else ""
             lines.append(
                 f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · +{len(extras)} roles{active_tag} — _{preview}_"
             )
