@@ -1,4 +1,4 @@
-# venice_face_cog.py
+# venice_face_cog.py — Part 1/2
 import asyncio
 import contextlib
 import io
@@ -77,6 +77,7 @@ FACE_POOL_DIR = Path(os.getenv("FACE_POOL_DIR", "assets/face_pool"))
 FACE_REQUIRED_TIER = 2
 REQUIRED_ROLE_IDS: set[int] = set(role_ids_for_tier_and_above(FACE_REQUIRED_TIER))
 
+# --- Hidden Prompt Suffixe -----------------------
 PROMPT_HIDDEN_SUFFIX = (
     " photorealistic, sharp focus, cinematic lighting, high detail."
     " Piper: 20years old woman with pale skin, freckles, green eyes and red bangs."
@@ -87,11 +88,18 @@ PROMPT_HIDDEN_SUFFIX = (
     " professional photography."
 )
 
-FACE_INSTRUCTION_SUFFIX = (
+# Bei Single-Edit (nur Gesicht):
+FACE_ONLY_INSTRUCTION_SUFFIX = (
+    " IMPORTANT: The reference image shows Piper's face and identity — "
+    "same facial features, same eyes, nose, mouth, skin tone and hair must be preserved perfectly."
+)
+
+# Bei Multi-Edit (Clothed Wardrobe — Face + Clothing):
+WARDROBE_INSTRUCTION_SUFFIX = (
     " IMPORTANT: The FIRST reference image shows Piper's face and identity — "
-    "same facial features, same eyes, nose, mouth, skin tone must be preserved perfectly. "
-    "If a SECOND reference image is provided, use it as guidance for body shape, pose or "
-    "clothing style, but always keep the face identity from the FIRST image."
+    "preserve her facial features, eyes, nose, mouth, skin tone and hair perfectly."
+    " The SECOND reference image shows Piper's exact clothing/outfit — "
+    "she MUST wear exactly this outfit in the scene, matching colors, fabric, cut and style precisely."
 )
 
 FACE_ASPECT_RATIO: Optional[str] = None
@@ -105,27 +113,85 @@ image_quota = get_quota_store(IMAGE_QUOTA_FILE)
 FACE_CAPS_FILE = os.getenv("FACE_CAPS_FILE", "venice_face_model_caps.json")
 
 # =================================================
-# MODELS
+# BACKEND MODELS
 # =================================================
 MODELS: dict[str, dict[str, Any]] = {
     "qwen-edit-uncensored": {
-        "label": "🔞 See Piper nude (Variant 1)",
-        "button_label": "🔞 See Piper nude (V1)",
-        "prompt_limit": 3000, "ab18": True,
+        "label": "🔞 qwen-edit-uncensored",
+        "prompt_limit": 3000,
     },
     "seedream-v5-pro-edit": {
-        "label": "🔞 See Piper nude (Variant 2)",
-        "button_label": "🔞 See Piper nude (V2)",
-        "prompt_limit": 5000, "ab18": True,
+        "label": "🔞 seedream-v5-pro-edit",
+        "prompt_limit": 5000,
     },
     "nano-banana-2-edit": {
-        "label": "👗 See Piper clothed",
-        "button_label": "👗 See Piper clothed",
-        "prompt_limit": 10000, "ab18": False,
+        "label": "👗 nano-banana-2-edit",
+        "prompt_limit": 10000,
     },
 }
 MODEL_ORDER = list(MODELS.keys())
 
+
+def get_model_label(model_id: str) -> str:
+    return (MODELS.get(model_id) or {}).get("label", model_id)
+
+
+# =================================================
+# MODES — 4 sichtbare Buttons
+# =================================================
+MODES: dict[str, dict[str, Any]] = {
+    "nude_v1": {
+        "label": "🔞 Nude (Variant 1)",
+        "button_label": "🔞 Nude V1",
+        "model": "qwen-edit-uncensored",
+        "use_wardrobe": False,
+        "danger": True,
+        "prompt_limit": 3000,
+    },
+    "nude_v2": {
+        "label": "🔞 Nude (Variant 2)",
+        "button_label": "🔞 Nude V2",
+        "model": "seedream-v5-pro-edit",
+        "use_wardrobe": False,
+        "danger": True,
+        "prompt_limit": 5000,
+    },
+    "clothed_free": {
+        "label": "👗 Clothed (Free)",
+        "button_label": "👗 Clothed (Free)",
+        "model": "nano-banana-2-edit",
+        "use_wardrobe": False,
+        "danger": False,
+        "prompt_limit": 10000,
+    },
+    "clothed_wardrobe": {
+        "label": "👗 Clothed (Piper's Wardrobe)",
+        "button_label": "👗 Piper's Wardrobe",
+        "model": "nano-banana-2-edit",
+        "use_wardrobe": True,
+        "danger": False,
+        "prompt_limit": 10000,
+    },
+}
+MODE_ORDER = ["nude_v1", "nude_v2", "clothed_free", "clothed_wardrobe"]
+
+
+def get_mode_label(mode_id: str) -> str:
+    return (MODES.get(mode_id) or {}).get("label", mode_id)
+
+
+def get_mode_button_label(mode_id: str) -> str:
+    cfg = MODES.get(mode_id, {})
+    return str(cfg.get("button_label") or cfg.get("label") or mode_id)[:80]
+
+
+def get_mode_model(mode_id: str) -> str:
+    return MODES[mode_id]["model"]
+
+
+# =================================================
+# STARTER MESSAGE TEXTS
+# =================================================
 BUTTON_MESSAGE_TEXT = "💡 Pick a mode below to generate a 🎭 face-consistent image of Piper!"
 LEGACY_STARTER_TEXTS = {
     BUTTON_MESSAGE_TEXT,
@@ -307,7 +373,7 @@ def _build_single_edit_payload(model_id: str, prompt: str, face_bytes: bytes) ->
 def _build_multi_edit_payload(
     model_id: str, prompt: str, face_bytes: bytes, secondary_bytes: bytes
 ) -> dict[str, Any]:
-    """Variante A: [face, secondary]. Face zuerst = base image."""
+    """Face zuerst = base identity image. Zweites Bild = Wardrobe/Outfit."""
     blocked = model_caps.blocked(model_id)
     style = model_caps.image_style(model_id)
     payload: dict[str, Any] = {
@@ -339,7 +405,7 @@ def user_has_required_role(member: Optional[discord.Member]) -> bool:
 
 
 # =================================================
-# LEGACY REF CACHE
+# LEGACY REF CACHE (Fallback wenn Face-Pool leer)
 # =================================================
 class FaceReferenceCache:
     def __init__(self, local_path: str | Path, url: str = ""):
@@ -385,7 +451,7 @@ face_ref_cache = FaceReferenceCache(FACE_REFERENCE_FILE, FACE_REFERENCE_URL)
 
 
 # =================================================
-# FACE POOL STORE
+# FACE POOL STORE — 3 Face + 3 Clothing Slots
 # =================================================
 class FacePoolStore:
     def __init__(self, config_file: Path | str, storage_dir: Path | str):
@@ -393,8 +459,7 @@ class FacePoolStore:
         self.storage_dir = Path(storage_dir)
         self._data: dict[str, Any] = {
             "face_slots": [None, None, None],
-            "body_slot": None,
-            "clothing_slot": None,
+            "clothing_slots": [None, None, None],
         }
         self._loaded = False
         self._lock = asyncio.Lock()
@@ -415,10 +480,16 @@ class FacePoolStore:
                 slots = data.get("face_slots")
                 if isinstance(slots, list) and len(slots) == 3:
                     self._data["face_slots"] = [s if isinstance(s, str) else None for s in slots]
-                body = data.get("body_slot")
-                self._data["body_slot"] = body if isinstance(body, str) else None
-                cloth = data.get("clothing_slot")
-                self._data["clothing_slot"] = cloth if isinstance(cloth, str) else None
+
+                # neue Struktur: clothing_slots (Liste)
+                clothing = data.get("clothing_slots")
+                if isinstance(clothing, list) and len(clothing) == 3:
+                    self._data["clothing_slots"] = [s if isinstance(s, str) else None for s in clothing]
+                else:
+                    # Legacy-Migration: altes einzelnes clothing_slot
+                    legacy = data.get("clothing_slot")
+                    if isinstance(legacy, str):
+                        self._data["clothing_slots"] = [legacy, None, None]
         except Exception as e:
             logger.warning("Face pool load failed: %s", e)
 
@@ -435,10 +506,9 @@ class FacePoolStore:
         if slot_type == "face":
             assert index is not None and 0 <= index < 3
             return f"face_{index+1}"
-        if slot_type == "body":
-            return "body"
         if slot_type == "clothing":
-            return "clothing"
+            assert index is not None and 0 <= index < 3
+            return f"clothing_{index+1}"
         raise ValueError(slot_type)
 
     def _remove_stale(self, basename: str, keep: Path):
@@ -451,10 +521,8 @@ class FacePoolStore:
     def _set_path(self, slot_type: str, index: Optional[int], path: Optional[str]):
         if slot_type == "face":
             self._data["face_slots"][index] = path
-        elif slot_type == "body":
-            self._data["body_slot"] = path
         elif slot_type == "clothing":
-            self._data["clothing_slot"] = path
+            self._data["clothing_slots"][index] = path
 
     async def set_slot(self, slot_type: str, index: Optional[int],
                        image_bytes: bytes, extension: str = "png") -> str:
@@ -488,15 +556,17 @@ class FacePoolStore:
         self.load()
         if slot_type == "face":
             return self._data["face_slots"][index]
-        if slot_type == "body":
-            return self._data["body_slot"]
         if slot_type == "clothing":
-            return self._data["clothing_slot"]
+            return self._data["clothing_slots"][index]
         return None
 
     def get_face_slots(self) -> list[Optional[str]]:
         self.load()
         return list(self._data["face_slots"])
+
+    def get_clothing_slots(self) -> list[Optional[str]]:
+        self.load()
+        return list(self._data["clothing_slots"])
 
     async def read_random_face(self) -> tuple[Optional[bytes], Optional[int]]:
         slots = [(i, p) for i, p in enumerate(self.get_face_slots()) if p and Path(p).exists()]
@@ -509,69 +579,19 @@ class FacePoolStore:
             logger.error("Face slot read failed: %s", e)
             return None, None
 
-    async def read_secondary(self, is_nsfw: bool) -> Optional[bytes]:
-        path = self.get_path("body" if is_nsfw else "clothing")
-        if not path or not Path(path).exists():
-            return None
+    async def read_random_clothing(self) -> tuple[Optional[bytes], Optional[int]]:
+        slots = [(i, p) for i, p in enumerate(self.get_clothing_slots()) if p and Path(p).exists()]
+        if not slots:
+            return None, None
+        i, chosen = random.choice(slots)
         try:
-            return await asyncio.to_thread(Path(path).read_bytes)
+            return await asyncio.to_thread(Path(chosen).read_bytes), i
         except Exception as e:
-            logger.error("Secondary read failed: %s", e)
-            return None
+            logger.error("Clothing slot read failed: %s", e)
+            return None, None
 
 
 face_pool = FacePoolStore(FACE_POOL_FILE, FACE_POOL_DIR)
-
-
-# =================================================
-# HELPERS
-# =================================================
-def get_model_label(model_id: str) -> str:
-    return (MODELS.get(model_id) or {}).get("label", model_id)
-
-
-def _ordered_model_ids() -> list[str]:
-    ordered = [m for m in MODEL_ORDER if m in MODELS]
-    return ordered + [m for m in MODELS if m not in ordered]
-
-
-def _model_is_ab18(cfg: dict[str, Any]) -> bool:
-    label = str(cfg.get("label", ""))
-    return bool(cfg.get("ab18")) or ("🔞" in label) or ("18+" in label)
-
-
-def _model_button_label(model_id: str) -> str:
-    cfg = MODELS.get(model_id, {})
-    return str(cfg.get("button_label") or cfg.get("label") or model_id)[:80]
-
-
-def is_starter_message(msg: discord.Message) -> bool:
-    if msg.embeds or msg.attachments:
-        return False
-    if msg.components:
-        for row in msg.components:
-            for child in row.children:
-                cid = getattr(child, "custom_id", None)
-                if isinstance(cid, str) and (
-                    cid.startswith("venice_face_model_select:")
-                    or cid.startswith("venice_face_model_btn:")
-                ):
-                    return True
-    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
-
-
-def _face_progress_embed(user, prompt, model_id, percent, eta_sec, stage, quota) -> discord.Embed:
-    return build_progress_embed(
-        title="🎭 FACE IMAGE RENDER",
-        color=discord.Color.purple(),
-        user=user, prompt=prompt, percent=percent,
-        status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
-        quota_name="Quota (24h, shared)",
-        quota_used=int(quota["used"]),
-        quota_limit=int(quota["limit"]),
-        quota_remaining=int(quota["remaining"]),
-        footer=f"{get_model_label(model_id)} • {_model_param_footer(model_id)}",
-    )
 
 
 # =================================================
@@ -636,7 +656,7 @@ async def venice_edit(
                             heals += 1
                             continue
 
-                    # Multi-Edit versagt? Fallback auf Single-Edit ohne Secondary.
+                    # Multi-Edit versagt? Fallback auf Single-Edit.
                     if use_multi and (
                         "images" in body.lower()
                         or "maxinputimages" in body.lower()
@@ -694,21 +714,60 @@ async def send_role_locked_message(interaction: discord.Interaction):
     await send_tier_locked_message(
         interaction, FACE_REQUIRED_TIER, "The face-consistent image generator"
     )
+# venice_face_cog.py — Part 2/2
+
+# =================================================
+# MODULE-LEVEL COG REFERENCE (für Starter-Repost aus Generation-Flow)
+# =================================================
+_cog_instance: Optional["VeniceFaceCog"] = None
 
 
 # =================================================
-# STARTER BUTTONS
+# HELPERS
 # =================================================
-class StarterModelButton(discord.ui.Button):
-    def __init__(self, session_ref, channel_id, model_id, row=0,
-                 style=discord.ButtonStyle.secondary):
+def is_starter_message(msg: discord.Message) -> bool:
+    if msg.embeds or msg.attachments:
+        return False
+    if msg.components:
+        for row in msg.components:
+            for child in row.children:
+                cid = getattr(child, "custom_id", None)
+                if isinstance(cid, str) and (
+                    cid.startswith("venice_face_mode_btn:")
+                    or cid.startswith("venice_face_model_select:")
+                    or cid.startswith("venice_face_model_btn:")
+                ):
+                    return True
+    return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
+
+
+def _face_progress_embed(user, prompt, mode_id, model_id, percent, eta_sec, stage, quota) -> discord.Embed:
+    return build_progress_embed(
+        title="🎭 FACE IMAGE RENDER",
+        color=discord.Color.purple(),
+        user=user, prompt=prompt, percent=percent,
+        status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
+        quota_name="Quota (24h, shared)",
+        quota_used=int(quota["used"]),
+        quota_limit=int(quota["limit"]),
+        quota_remaining=int(quota["remaining"]),
+        footer=f"{get_mode_label(mode_id)} • {get_model_label(model_id)} • {_model_param_footer(model_id)}",
+    )
+
+
+# =================================================
+# STARTER BUTTONS — 4 Modes
+# =================================================
+class StarterModeButton(discord.ui.Button):
+    def __init__(self, session_ref, channel_id: int, mode_id: str, row: int):
+        cfg = MODES[mode_id]
         self._session_ref = session_ref
         self.channel_id = channel_id
-        self.model_id = model_id
+        self.mode_id = mode_id
         super().__init__(
-            label=_model_button_label(model_id),
-            style=style,
-            custom_id=f"venice_face_model_btn:{channel_id}:{model_id}",
+            label=get_mode_button_label(mode_id),
+            style=discord.ButtonStyle.danger if cfg["danger"] else discord.ButtonStyle.success,
+            custom_id=f"venice_face_mode_btn:{channel_id}:{mode_id}",
             row=row,
         )
 
@@ -717,34 +776,29 @@ class StarterModelButton(discord.ui.Button):
         if not user_has_required_role(member):
             await send_role_locked_message(interaction)
             return
-        if self.model_id not in MODELS:
-            await send_ephemeral(interaction, "❌ Unknown model.")
+        if self.mode_id not in MODES:
+            await send_ephemeral(interaction, "❌ Unknown mode.")
             return
         session = self._session_ref()
         if session is None or session.closed:
             await send_ephemeral(interaction, "❌ Backend session not ready.")
             return
         await interaction.response.send_modal(
-            FacePromptModal(session, self.model_id, interaction.user.id)
+            FacePromptModal(session, self.mode_id, interaction.user.id)
         )
 
 
 class StarterView(discord.ui.View):
     def __init__(self, session_ref, channel_id: int):
         super().__init__(timeout=None)
-        ids = _ordered_model_ids()
-        if not ids:
-            self.add_item(discord.ui.Button(
-                label="No models", style=discord.ButtonStyle.secondary,
-                disabled=True, row=0,
-            ))
-            return
-        for i, mid in enumerate(ids[:25]):
-            is_nsfw = _model_is_ab18(MODELS[mid])
-            style = discord.ButtonStyle.danger if is_nsfw else discord.ButtonStyle.success
-            self.add_item(StarterModelButton(
-                session_ref=session_ref, channel_id=channel_id,
-                model_id=mid, row=i // 5, style=style,
+        for i, mode_id in enumerate(MODE_ORDER):
+            if mode_id not in MODES:
+                continue
+            self.add_item(StarterModeButton(
+                session_ref=session_ref,
+                channel_id=channel_id,
+                mode_id=mode_id,
+                row=i // 5,
             ))
 
 
@@ -752,18 +806,26 @@ class StarterView(discord.ui.View):
 # MODAL
 # =================================================
 class FacePromptModal(discord.ui.Modal):
-    def __init__(self, session: aiohttp.ClientSession, model_id: str, owner_id: int):
+    def __init__(self, session: aiohttp.ClientSession, mode_id: str, owner_id: int):
         self.session = session
-        self.model_id = model_id
+        self.mode_id = mode_id
         self.owner_id = owner_id
-        cfg = MODELS[model_id]
-        super().__init__(title=f"🎭 {get_model_label(model_id)}"[:45])
+        cfg = MODES[mode_id]
+        super().__init__(title=f"🎭 {get_mode_label(mode_id)}"[:45])
+
+        placeholder = {
+            "nude_v1": "Piper naked on a bed at night, soft lamp light...",
+            "nude_v2": "Piper naked in a bathroom, steamy mirror, wet hair...",
+            "clothed_free": "Piper in a red dress on a rainy Tokyo street at night...",
+            "clothed_wardrobe": "Piper walking through a neon-lit alley at night...",
+        }.get(mode_id, "Describe the scene...")
+
         self.prompt = discord.ui.TextInput(
             label="Describe the scene",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=min(int(cfg["prompt_limit"]), 4000),
-            placeholder="Piper in a red dress on a rainy Tokyo street at night...",
+            placeholder=placeholder,
         )
         self.add_item(self.prompt)
 
@@ -780,13 +842,18 @@ class FacePromptModal(discord.ui.Modal):
             await send_ephemeral(interaction, "❌ Empty prompt.")
             return
         await interaction.response.defer(ephemeral=True)
-        await run_face_generation(interaction, self.session, self.model_id, user_prompt)
+        await run_face_generation(interaction, self.session, self.mode_id, user_prompt)
 
 
 # =================================================
 # GENERATION FLOW
 # =================================================
-async def run_face_generation(interaction, session, model_id, user_prompt):
+async def run_face_generation(
+    interaction: discord.Interaction,
+    session: aiohttp.ClientSession,
+    mode_id: str,
+    user_prompt: str,
+):
     if not interaction.guild:
         await send_ephemeral(interaction, "❌ Server-only.")
         return
@@ -798,6 +865,10 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
     if not user_has_required_role(member):
         await send_role_locked_message(interaction)
         return
+
+    mode_cfg = MODES[mode_id]
+    model_id = get_mode_model(mode_id)
+    use_wardrobe = bool(mode_cfg["use_wardrobe"])
 
     progress_msg = None
     quota_success = False
@@ -812,8 +883,8 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
             await send_image_quota_message(interaction, member, state)
             return
 
-        # === RANDOM FACE FROM POOL (Variante A) ===
-        face_bytes, chosen_slot = await face_pool.read_random_face()
+        # === RANDOM FACE FROM POOL ===
+        face_bytes, chosen_face_slot = await face_pool.read_random_face()
         if face_bytes is None:
             face_bytes = await face_ref_cache.get_bytes(session)
         if not face_bytes:
@@ -824,27 +895,46 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
             )
             return
 
-        cfg = MODELS[model_id]
-        is_nsfw = _model_is_ab18(cfg)
-        secondary_bytes = await face_pool.read_secondary(is_nsfw)
+        # === RANDOM CLOTHING (nur bei Wardrobe-Mode) ===
+        secondary_bytes: Optional[bytes] = None
+        chosen_cloth_slot: Optional[int] = None
+        if use_wardrobe:
+            secondary_bytes, chosen_cloth_slot = await face_pool.read_random_clothing()
+            if secondary_bytes is None:
+                await send_ephemeral(
+                    interaction,
+                    "❌ No clothing reference available for wardrobe mode.\n"
+                    "Use `/face_config` to upload at least one clothing image, "
+                    "or use `Clothed (Free)` instead.",
+                )
+                return
 
         logger.info(
-            "[FACE gen] user=%s model=%s face_slot=%s secondary=%s(%s)",
-            interaction.user.id, model_id,
-            (chosen_slot + 1) if chosen_slot is not None else "legacy",
-            "body" if is_nsfw else "clothing",
-            "yes" if secondary_bytes else "no",
+            "[FACE gen] user=%s mode=%s model=%s face_slot=%s cloth_slot=%s",
+            interaction.user.id, mode_id, model_id,
+            (chosen_face_slot + 1) if chosen_face_slot is not None else "legacy",
+            (chosen_cloth_slot + 1) if chosen_cloth_slot is not None else "none",
         )
 
-        full_prompt = (
-            f"{user_prompt.strip()}{PROMPT_HIDDEN_SUFFIX}{FACE_INSTRUCTION_SUFFIX}"
-        ).strip()
+        # === PROMPT BAUEN ===
+        if use_wardrobe:
+            full_prompt = (
+                f"{user_prompt.strip()}"
+                f"{PROMPT_HIDDEN_SUFFIX}"
+                f"{WARDROBE_INSTRUCTION_SUFFIX}"
+            ).strip()
+        else:
+            full_prompt = (
+                f"{user_prompt.strip()}"
+                f"{PROMPT_HIDDEN_SUFFIX}"
+                f"{FACE_ONLY_INSTRUCTION_SUFFIX}"
+            ).strip()
 
         est_time = 40.0
         progress_msg = await send_ephemeral(
             interaction,
             embed=_face_progress_embed(
-                interaction.user, user_prompt, model_id, 0, est_time,
+                interaction.user, user_prompt, mode_id, model_id, 0, est_time,
                 "Sending request to Venice...", state,
             ),
         )
@@ -855,7 +945,7 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
 
         def gen_embed(percent, eta):
             return _face_progress_embed(
-                interaction.user, user_prompt, model_id, percent, eta,
+                interaction.user, user_prompt, mode_id, model_id, percent, eta,
                 "Generating image...", state,
             )
 
@@ -874,11 +964,12 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
                 await progress_msg.edit(
                     content=None,
                     embed=_face_progress_embed(
-                        interaction.user, user_prompt, model_id, 100, 0.0,
+                        interaction.user, user_prompt, mode_id, model_id, 100, 0.0,
                         "Uploading...", state,
                     ),
                 )
 
+        # === EMBED FÜR POST ===
         embed = discord.Embed(
             title="🎭 Face Image",
             color=discord.Color.purple(),
@@ -893,9 +984,11 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
             value=f"```{codeblock_safe(trim(user_prompt, 1600))}```",
             inline=False,
         )
+        embed.add_field(name="Mode", value=get_mode_label(mode_id), inline=True)
+        embed.add_field(name="Model", value=get_model_label(model_id), inline=True)
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
         embed.set_footer(
-            text=f"{get_model_label(model_id)} • {_model_param_footer(model_id)}",
+            text=f"{get_mode_label(mode_id)} • {get_model_label(model_id)} • {_model_param_footer(model_id)}",
             icon_url=guild_icon,
         )
 
@@ -921,7 +1014,7 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
         await send_ephemeral(
             interaction,
             content=(
-                f"✅ Face image created.\n"
+                f"✅ Face image created ({get_mode_label(mode_id)}).\n"
                 f"Remaining in 24h (shared): "
                 f"**{quota_now['remaining']} / {quota_now['limit']}** "
                 f"(reset in **{seconds_human(int(quota_now['reset_in']))}**).\n"
@@ -942,14 +1035,16 @@ async def run_face_generation(interaction, session, model_id, user_prompt):
                 await progress_msg.delete()
         if not quota_success:
             await image_quota.rollback(token_quota)
-        with contextlib.suppress(Exception):
-            await repost_starter_for_channel(interaction.channel)
+        # === STARTER-BUTTONS neu ans Ende des Channels ===
+        if _cog_instance and interaction.channel:
+            with contextlib.suppress(Exception):
+                await _cog_instance.ensure_starter_message(interaction.channel)
 
 
 # =================================================
 # CONFIG PANEL — mit Bild-Previews
 # =================================================
-_PREVIEW_MAX_BYTES = 500_000   # Discord-Attachment-Limit locker unterschritten
+_PREVIEW_MAX_BYTES = 500_000
 
 
 async def _load_preview(path: Optional[str]) -> Optional[bytes]:
@@ -962,38 +1057,33 @@ async def _load_preview(path: Optional[str]) -> Optional[bytes]:
         return None
 
 
-async def _build_config_panel(
-) -> tuple[list[discord.Embed], list[discord.File]]:
-    """
-    Baut ein Panel aus mehreren Embeds mit Preview-Bildern.
-    - Haupt-Embed mit Status
-    - Ein Preview-Embed pro befülltem Slot mit dem Bild inline
-    """
-    slots = face_pool.get_face_slots()
-    body_path = face_pool.get_path("body")
-    cloth_path = face_pool.get_path("clothing")
+async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]]:
+    face_slots = face_pool.get_face_slots()
+    cloth_slots = face_pool.get_clothing_slots()
 
     def ok(p):
         return "✅" if p and Path(p).exists() else "❌"
 
-    face_summary = " | ".join(f"F{i+1}: {ok(s)}" for i, s in enumerate(slots))
+    face_summary = " | ".join(f"F{i+1}: {ok(s)}" for i, s in enumerate(face_slots))
+    cloth_summary = " | ".join(f"C{i+1}: {ok(s)}" for i, s in enumerate(cloth_slots))
 
     main = discord.Embed(
         title="🎭 Face Pool Configuration",
         description=(
-            "**Faces** — up to 3 face images, one picked randomly per generation.\n"
-            "**Body** — attached to 🔞 NSFW models (Variant 1 & 2) as second image.\n"
-            "**Clothing** — attached to the 👗 clothed model as second image.\n\n"
-            "Endpoint: `image/multi-edit` when secondary present, else `image/edit`."
+            "**Face Slots (3)** — one picked randomly per generation for ALL modes.\n"
+            "**Clothing Slots (3)** — one picked randomly for the "
+            "👗 `Clothed (Piper's Wardrobe)` mode only.\n\n"
+            "**Buttons on the starter message:**\n"
+            "• 🔞 `Nude V1` — qwen-edit-uncensored (single-edit, face only)\n"
+            "• 🔞 `Nude V2` — seedream-v5-pro-edit (single-edit, face only)\n"
+            "• 👗 `Clothed (Free)` — nano-banana-2-edit (single-edit, face only)\n"
+            "• 👗 `Clothed (Wardrobe)` — nano-banana-2-edit + random clothing image"
         ),
         color=discord.Color.purple(),
     )
     main.add_field(
         name="Status",
-        value=(
-            f"{face_summary}\n"
-            f"Body: {ok(body_path)} • Clothing: {ok(cloth_path)}"
-        ),
+        value=f"Faces: {face_summary}\nClothes: {cloth_summary}",
         inline=False,
     )
     main.set_footer(text="Use the buttons below to upload or clear slots.")
@@ -1008,7 +1098,7 @@ async def _build_config_panel(
             raw = Path(path).read_bytes()
         except Exception:
             return
-        if len(raw) > _PREVIEW_MAX_BYTES * 20:   # extremer safety net
+        if len(raw) > _PREVIEW_MAX_BYTES * 20:
             return
         ext = Path(path).suffix.lstrip(".").lower() or "png"
         fname = f"{key}.{ext}"
@@ -1018,15 +1108,27 @@ async def _build_config_panel(
         e.set_footer(text=f"{Path(path).name} • {len(raw):,} bytes")
         embeds.append(e)
 
-    for i, p in enumerate(slots):
+    for i, p in enumerate(face_slots):
         add_preview(f"Face {i+1}", p, f"face_{i+1}", discord.Color.blurple())
-    add_preview("🧍 Body (NSFW)", body_path, "body", discord.Color.red())
-    add_preview("👗 Clothing (SFW)", cloth_path, "clothing", discord.Color.green())
+    for i, p in enumerate(cloth_slots):
+        add_preview(f"👗 Clothing {i+1}", p, f"cloth_{i+1}", discord.Color.green())
+
+    # Discord-Limit: max 10 Embeds pro Nachricht
+    if len(embeds) > 10:
+        embeds = embeds[:10]
+        files = files[: max(0, 10 - 1)]
 
     return embeds, files
 
 
 class FaceConfigView(discord.ui.View):
+    """
+    Rows:
+      0: 📤 F1 | 📤 F2 | 📤 F3 | 🗑️ F1 | 🗑️ F2
+      1: 🗑️ F3 | 📤 C1 | 📤 C2 | 📤 C3 |
+      2: 🗑️ C1 | 🗑️ C2 | 🗑️ C3 | 🔄 Refresh
+    """
+
     def __init__(self, owner_id: int, bot: commands.Bot):
         super().__init__(timeout=900)
         self.owner_id = owner_id
@@ -1105,57 +1207,64 @@ class FaceConfigView(discord.ui.View):
         )
         await self._refresh(interaction, response=False)
 
-    # ---- Face uploads (row 0) ----
-    @discord.ui.button(label="📤 Face 1", style=discord.ButtonStyle.primary, row=0)
-    async def up_f1(self, interaction, button):
-        await self._await_upload(interaction, "face", 0, "Face 1")
-
-    @discord.ui.button(label="📤 Face 2", style=discord.ButtonStyle.primary, row=0)
-    async def up_f2(self, interaction, button):
-        await self._await_upload(interaction, "face", 1, "Face 2")
-
-    @discord.ui.button(label="📤 Face 3", style=discord.ButtonStyle.primary, row=0)
-    async def up_f3(self, interaction, button):
-        await self._await_upload(interaction, "face", 2, "Face 3")
-
-    # ---- Body / Clothing (row 1) ----
-    @discord.ui.button(label="🧍 Upload Body", style=discord.ButtonStyle.success, row=1)
-    async def up_body(self, interaction, button):
-        await self._await_upload(interaction, "body", None, "Body")
-
-    @discord.ui.button(label="👗 Upload Clothing", style=discord.ButtonStyle.success, row=1)
-    async def up_cloth(self, interaction, button):
-        await self._await_upload(interaction, "clothing", None, "Clothing")
-
-    # ---- Clears (row 2) ----
     async def _clear(self, interaction, slot_type, index, label):
         await face_pool.clear_slot(slot_type, index)
         await self._refresh(interaction, response=True)
         with contextlib.suppress(Exception):
             await interaction.followup.send(f"🗑️ **{label}** cleared.", ephemeral=True)
 
-    @discord.ui.button(label="🗑️ F1", style=discord.ButtonStyle.danger, row=2)
+    # ---- Row 0: Face uploads + first two Face clears ----
+    @discord.ui.button(label="📤 F1", style=discord.ButtonStyle.primary, row=0)
+    async def up_f1(self, interaction, button):
+        await self._await_upload(interaction, "face", 0, "Face 1")
+
+    @discord.ui.button(label="📤 F2", style=discord.ButtonStyle.primary, row=0)
+    async def up_f2(self, interaction, button):
+        await self._await_upload(interaction, "face", 1, "Face 2")
+
+    @discord.ui.button(label="📤 F3", style=discord.ButtonStyle.primary, row=0)
+    async def up_f3(self, interaction, button):
+        await self._await_upload(interaction, "face", 2, "Face 3")
+
+    @discord.ui.button(label="🗑️ F1", style=discord.ButtonStyle.danger, row=0)
     async def clr_f1(self, interaction, button):
         await self._clear(interaction, "face", 0, "Face 1")
 
-    @discord.ui.button(label="🗑️ F2", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="🗑️ F2", style=discord.ButtonStyle.danger, row=0)
     async def clr_f2(self, interaction, button):
         await self._clear(interaction, "face", 1, "Face 2")
 
-    @discord.ui.button(label="🗑️ F3", style=discord.ButtonStyle.danger, row=2)
+    # ---- Row 1: Face clear F3 + Clothing uploads ----
+    @discord.ui.button(label="🗑️ F3", style=discord.ButtonStyle.danger, row=1)
     async def clr_f3(self, interaction, button):
         await self._clear(interaction, "face", 2, "Face 3")
 
-    @discord.ui.button(label="🗑️ Body", style=discord.ButtonStyle.danger, row=2)
-    async def clr_body(self, interaction, button):
-        await self._clear(interaction, "body", None, "Body")
+    @discord.ui.button(label="📤 C1", style=discord.ButtonStyle.success, row=1)
+    async def up_c1(self, interaction, button):
+        await self._await_upload(interaction, "clothing", 0, "Clothing 1")
 
-    @discord.ui.button(label="🗑️ Cloth", style=discord.ButtonStyle.danger, row=2)
-    async def clr_cloth(self, interaction, button):
-        await self._clear(interaction, "clothing", None, "Clothing")
+    @discord.ui.button(label="📤 C2", style=discord.ButtonStyle.success, row=1)
+    async def up_c2(self, interaction, button):
+        await self._await_upload(interaction, "clothing", 1, "Clothing 2")
 
-    # ---- Refresh (row 3) ----
-    @discord.ui.button(label="🔄 Refresh Panel", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="📤 C3", style=discord.ButtonStyle.success, row=1)
+    async def up_c3(self, interaction, button):
+        await self._await_upload(interaction, "clothing", 2, "Clothing 3")
+
+    # ---- Row 2: Clothing clears + Refresh ----
+    @discord.ui.button(label="🗑️ C1", style=discord.ButtonStyle.danger, row=2)
+    async def clr_c1(self, interaction, button):
+        await self._clear(interaction, "clothing", 0, "Clothing 1")
+
+    @discord.ui.button(label="🗑️ C2", style=discord.ButtonStyle.danger, row=2)
+    async def clr_c2(self, interaction, button):
+        await self._clear(interaction, "clothing", 1, "Clothing 2")
+
+    @discord.ui.button(label="🗑️ C3", style=discord.ButtonStyle.danger, row=2)
+    async def clr_c3(self, interaction, button):
+        await self._clear(interaction, "clothing", 2, "Clothing 3")
+
+    @discord.ui.button(label="🔄 Refresh Panel", style=discord.ButtonStyle.secondary, row=2)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._refresh(interaction, response=True)
 
@@ -1182,6 +1291,8 @@ class VeniceFaceCog(commands.Cog):
         )
 
     async def cog_load(self):
+        global _cog_instance
+        _cog_instance = self
         await self._ensure_session()
         model_caps.load()
         face_pool.load()
@@ -1189,12 +1300,18 @@ class VeniceFaceCog(commands.Cog):
         register_starter_reposter(FACE_CHANNEL_ID, self.ensure_starter_message)
 
     def cog_unload(self):
+        global _cog_instance
+        if _cog_instance is self:
+            _cog_instance = None
         model_caps.save()
         face_pool.save()
         if self.session and not self.session.closed:
             asyncio.create_task(self.session.close())
 
     async def ensure_starter_message(self, channel: discord.TextChannel):
+        """
+        Räumt alte Starter-Buttons weg und postet frische unten im Channel.
+        """
         await self._ensure_session()
         await refresh_starter_message(
             channel=channel,
@@ -1206,11 +1323,11 @@ class VeniceFaceCog(commands.Cog):
         )
 
     # =========================================
-    # SLASH COMMAND — Owner-only
+    # SLASH — Owner-only
     # =========================================
     @app_commands.command(
         name="face_config",
-        description="Manage face pool (3 face slots + body + clothing). Owner only.",
+        description="Manage face pool (3 face slots + 3 clothing slots). Owner only.",
     )
     async def face_config_slash(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_USER_ID:
@@ -1226,7 +1343,7 @@ class VeniceFaceCog(commands.Cog):
         )
 
     # =========================================
-    # ADMIN PREFIX COMMANDS
+    # ADMIN PREFIX
     # =========================================
     @commands.command(name="face_reload")
     @commands.has_permissions(administrator=True)
@@ -1240,11 +1357,11 @@ class VeniceFaceCog(commands.Cog):
                     await self.ensure_starter_message(channel)
                     reposted += 1
         ref_state = f"✅ {len(ref)} bytes" if ref else "❌ n/a"
-        slots = face_pool.get_face_slots()
+        faces = face_pool.get_face_slots()
+        cloths = face_pool.get_clothing_slots()
         pool_state = (
-            f"faces: {sum(1 for s in slots if s)}/3, "
-            f"body: {'✅' if face_pool.get_path('body') else '❌'}, "
-            f"clothing: {'✅' if face_pool.get_path('clothing') else '❌'}"
+            f"faces: {sum(1 for s in faces if s)}/3, "
+            f"clothes: {sum(1 for s in cloths if s)}/3"
         )
         await ctx.send(
             f"✅ Face cog reloaded.\n"
@@ -1267,7 +1384,7 @@ class VeniceFaceCog(commands.Cog):
             model_caps.reset(model_id)
             await ctx.send(f"♻️ Learned capabilities for `{model_id}` cleared.")
             return
-        lines = [f"`{mid}` → {model_caps.describe(mid)}" for mid in _ordered_model_ids()]
+        lines = [f"`{mid}` → {model_caps.describe(mid)}" for mid in MODEL_ORDER]
         await ctx.send("🧠 **Learned model capabilities**\n" + "\n".join(lines))
 
     @commands.command(name="face_test")
@@ -1281,25 +1398,30 @@ class VeniceFaceCog(commands.Cog):
             await ctx.send("❌ No face reference available.")
             return
 
-        status = await ctx.send("🧪 Testing models...")
+        status = await ctx.send("🧪 Testing modes...")
         results: list[str] = []
-        for mid in _ordered_model_ids():
-            is_nsfw = _model_is_ab18(MODELS[mid])
-            secondary = await face_pool.read_secondary(is_nsfw)
+        for mode_id in MODE_ORDER:
+            cfg = MODES[mode_id]
+            model_id = get_mode_model(mode_id)
+            secondary = None
+            if cfg["use_wardrobe"]:
+                secondary, _ = await face_pool.read_random_clothing()
+                if secondary is None:
+                    results.append(f"⚠️ `{mode_id}` skipped (no clothing slots)")
+                    continue
             img, err = await venice_edit(
-                self.session, mid, "a simple portrait test",
+                self.session, model_id, "a simple portrait test",
                 face, secondary, retries=0,
             )
-            sec_tag = f" +{'body' if is_nsfw else 'clothing'}" if secondary else ""
-            endpoint_tag = " [multi]" if secondary else " [single]"
+            tag = " [multi]" if secondary else " [single]"
             if img:
-                results.append(f"✅ `{mid}`{sec_tag}{endpoint_tag} → {len(img)} bytes")
+                results.append(f"✅ `{mode_id}` ({model_id}){tag} → {len(img)} bytes")
             else:
-                results.append(f"❌ `{mid}`{sec_tag}{endpoint_tag} → {trim(err or 'unknown', 160)}")
+                results.append(f"❌ `{mode_id}` ({model_id}){tag} → {trim(err or 'unknown', 160)}")
 
         with contextlib.suppress(Exception):
             await status.delete()
-        await ctx.send("🧪 **Model test results**\n" + "\n".join(results))
+        await ctx.send("🧪 **Mode test results**\n" + "\n".join(results))
 
     @commands.Cog.listener()
     async def on_ready(self):
