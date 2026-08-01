@@ -127,11 +127,6 @@ class RollingQuotaStore:
         return {"start": start, "used": max(0, used)}
 
     def _state(self, entry: dict[str, int], limit: int, now_ts: int) -> dict[str, int]:
-        """
-        reset_at is the absolute Unix timestamp for the end of the current window.
-        When start == 0 (no window running yet), reset_in falls back to window_seconds
-        so user feedback never displays a bogus "0s".
-        """
         used, start = entry["used"], entry["start"]
         if start > 0:
             reset_at = start + self.window_seconds
@@ -244,12 +239,12 @@ def get_quota_store(
 # TIERS - SINGLE SOURCE OF TRUTH
 # =================================================
 TIER_RULES: dict[int, dict[str, int]] = {
-    1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10,  "video_budget_sec": 12},
-    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 15,  "video_budget_sec": 24},
-    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 20,  "video_budget_sec": 36},
-    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 25,  "video_budget_sec": 42},
-    5: {"role_id": 1375666588404940830, "level": 42, "image_limit": 42,  "video_budget_sec": 54},
-    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 66},
+    1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 10,  "video_budget_sec": 10},
+    2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 15,  "video_budget_sec": 20},
+    3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 20,  "video_budget_sec": 30},
+    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 25,  "video_budget_sec": 35},
+    5: {"role_id": 1375666588404940830, "level": 43, "image_limit": 30,  "video_budget_sec": 40},
+    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 50},
     7: {"role_id": 1346414581643219029, "level": 99, "image_limit": 300, "video_budget_sec": 300},
 }
 
@@ -342,6 +337,31 @@ def seconds_human(sec: int) -> str:
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
+
+
+def closest_aspect_ratio(aspect: str, allowed: list[str]) -> str:
+    """
+    Pick the ratio in `allowed` that best matches `aspect` (W:H string).
+    Falls back to the first allowed value if parsing fails or `allowed` is empty.
+    Used by video models that require a strict aspect_ratio (e.g. LTX only
+    accepts 16:9 or 9:16).
+    """
+    if not allowed:
+        return aspect
+    try:
+        w, h = aspect.split(":")
+        target = int(w) / int(h)
+    except Exception:
+        return allowed[0]
+
+    def _val(s: str) -> float:
+        try:
+            aw, ah = s.split(":")
+            return int(aw) / int(ah)
+        except Exception:
+            return 1.0
+
+    return min(allowed, key=lambda s: abs(_val(s) - target))
 
 
 def format_reset_line(state: dict[str, int], prefix: str = "Resets") -> str:
@@ -706,8 +726,6 @@ async def send_ephemeral(
     `persistent_ephemeral = True`. Those messages are never added to the
     tracking list and survive cleanup_user_ephemerals(), so their buttons stay
     clickable for the full view timeout.
-
-    You can also force behaviour explicitly via track=True/False.
     """
     payload = dict(kwargs)
     payload["ephemeral"] = True
@@ -1059,33 +1077,43 @@ VENICE_VIDEO_I2V_MODEL_LTX = env_str(
 # To add another animate button in the future: add ONE entry here.
 # No cog code needs to change.
 #
-# button_label   -> label shown on the ephemeral animate button
-# button_style   -> discord.ButtonStyle
-# resolution     -> resolution string sent to the video queue endpoint
-# durations      -> list of allowed durations (seconds); duration picker
-#                   surfaces only these values
+# button_label            -> label shown on the ephemeral animate button
+# button_style            -> discord.ButtonStyle
+# resolution              -> resolution string sent to the video queue endpoint
+# durations               -> list of allowed durations (seconds); duration picker
+#                            surfaces only these values
+# require_aspect_ratio    -> when True, aspect_ratio MUST be sent in the payload
+# allowed_aspect_ratios   -> list of aspect ratios the model accepts; the value
+#                            closest to the source image's ratio is chosen at
+#                            request time via closest_aspect_ratio()
 VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     VENICE_VIDEO_I2V_MODEL_ENHANCED: {
         "button_label": "🔞 Animate",
         "button_style": discord.ButtonStyle.danger,
         "resolution": "720p",
         "durations": [5, 10, 15],
+        "require_aspect_ratio": False,
+        "allowed_aspect_ratios": None,
     },
     VENICE_VIDEO_I2V_MODEL_STANDARD: {
         "button_label": "🎬 Animate",
         "button_style": discord.ButtonStyle.primary,
         "resolution": "720p",
         "durations": [5, 10, 15],
+        "require_aspect_ratio": False,
+        "allowed_aspect_ratios": None,
     },
     VENICE_VIDEO_I2V_MODEL_LTX: {
         "button_label": "💎 Animate HQ",
         "button_style": discord.ButtonStyle.success,
         "resolution": "1080p",
         "durations": [6, 8, 10],
+        "require_aspect_ratio": True,
+        "allowed_aspect_ratios": ["16:9", "9:16"],
     },
 }
 
-# Union of all durations across all profiles (used by legacy validation paths).
+# Union of all durations across profiles (used by legacy validation paths).
 VIDEO_DURATION_CHOICES: list[int] = sorted(
     {d for prof in VIDEO_MODEL_PROFILES.values() for d in prof["durations"]}
 )
@@ -1096,8 +1124,10 @@ def get_video_profile(model_id: str) -> dict[str, Any]:
     return VIDEO_MODEL_PROFILES.get(model_id) or {
         "button_label": "🎬 Animate",
         "button_style": discord.ButtonStyle.primary,
-        "resolution": None,  # video_cog will fall back to its env default
+        "resolution": None,
         "durations": [5, 10, 15],
+        "require_aspect_ratio": False,
+        "allowed_aspect_ratios": None,
     }
 
 
@@ -1332,8 +1362,7 @@ class AnimateEphemeralView(OwnerLockedView):
     persistent_ephemeral = True means send_ephemeral does NOT add this message
     to the ephemeral tracking list. Therefore cleanup_user_ephemerals() will
     NOT delete it after a video render, and the buttons remain clickable for
-    the full 30 minute view timeout. The user can start further animations of
-    the same source image (or with a different model) from the same ephemeral.
+    the full 30 minute view timeout.
     """
     persistent_ephemeral = True
 
@@ -1376,5 +1405,3 @@ class AnimateEphemeralView(OwnerLockedView):
                 )
             )
         return _cb
-
-    

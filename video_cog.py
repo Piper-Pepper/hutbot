@@ -1,4 +1,4 @@
-# venice_video_cog.py
+# video_cog.py
 import asyncio
 import contextlib
 import io
@@ -25,8 +25,8 @@ from venice_shared import (
     add_rating_reactions,
     build_generation_success_text,
     build_progress_embed,
-    bytes_to_b64,
     bytes_to_data_url,
+    closest_aspect_ratio,
     codeblock_safe,
     extract_urls_from_payload,
     format_reset_line,
@@ -131,6 +131,21 @@ def _video_model_label(model_name: str) -> str:
 def _resolution_for_model(model_id: str) -> str:
     """Per-model resolution from the shared profile table, with env fallback."""
     return get_model_resolution(model_id) or VENICE_VIDEO_RESOLUTION_FALLBACK
+
+
+def _resolve_aspect_ratio(model_id: str, source_aspect: str) -> Optional[str]:
+    """
+    For models that require aspect_ratio (e.g. LTX), pick the value from the
+    model's allowed list that best matches the source image's ratio. Returns
+    None for models that don't send an aspect_ratio field.
+    """
+    profile = get_video_profile(model_id)
+    if not profile.get("require_aspect_ratio"):
+        return None
+    allowed = profile.get("allowed_aspect_ratios") or []
+    if not allowed:
+        return None
+    return closest_aspect_ratio(source_aspect or "16:9", allowed)
 
 
 # =================================================
@@ -338,18 +353,21 @@ class VeniceVideoCog(commands.Cog):
         image_bytes: Optional[bytes],
         prompt: str,
         seconds: int,
+        aspect: str,
     ) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str], str]:
         if not VENICE_VIDEO_QUEUE_URL:
             return None, None, "VENICE_VIDEO_QUEUE_URL is missing.", "noid"
         if not VENICE_API_KEY:
             return None, None, "VENICE_API_KEY is missing.", "noid"
 
+        # Canonical field per Venice docs is 'image_url', which accepts both
+        # http URLs and data URLs. Strict validators (LTX) reject the legacy
+        # 'image' key, so we drop it entirely.
         image_variants: list[dict[str, Any]] = []
         if image_url and image_url.startswith("http"):
             image_variants.append({"image_url": image_url})
         if image_bytes and looks_like_image(image_bytes):
-            image_variants.append({"image": bytes_to_data_url(image_bytes)})
-            image_variants.append({"image": bytes_to_b64(image_bytes)})
+            image_variants.append({"image_url": bytes_to_data_url(image_bytes)})
 
         if not image_variants:
             return None, None, "No usable source image (neither URL nor bytes).", "noid"
@@ -363,12 +381,17 @@ class VeniceVideoCog(commands.Cog):
         }
         request_id = uuid.uuid4().hex[:8]
         resolution = _resolution_for_model(model_id)
-        base_payload = {
+        base_payload: dict[str, Any] = {
             "model": model_id,
             "prompt": prompt,
             "resolution": resolution,
             "duration": f"{seconds}s",
         }
+
+        # Some models (LTX) require aspect_ratio and restrict its allowed values.
+        aspect_for_payload = _resolve_aspect_ratio(model_id, aspect)
+        if aspect_for_payload:
+            base_payload["aspect_ratio"] = aspect_for_payload
 
         timeout = aiohttp.ClientTimeout(total=45, connect=10, sock_read=40)
         last_error = "Queue request failed."
@@ -382,9 +405,12 @@ class VeniceVideoCog(commands.Cog):
                     ) as resp:
                         text = await resp.text()
                         logger.info(
-                            "[VID %s] queue status=%s attempt=%s variant=%s(%s) model=%s res=%s",
+                            "[VID %s] queue status=%s attempt=%s variant=%s(%s) "
+                            "model=%s res=%s ar=%s",
                             request_id, resp.status, attempt + 1,
-                            variant_idx, next(iter(variant)), model_id, resolution,
+                            variant_idx, next(iter(variant)),
+                            model_id, resolution,
+                            base_payload.get("aspect_ratio", "-"),
                         )
 
                         if resp.status in (400, 415, 422):
@@ -633,7 +659,7 @@ class VeniceVideoCog(commands.Cog):
         image_url: str,
         image_bytes: Optional[bytes],
         prompt: str,
-        aspect: str,  # kept for signature compatibility, not surfaced in output
+        aspect: str,
         seconds: int,
         target_channel: discord.abc.Messageable,
         model_id: Optional[str] = None,
@@ -750,6 +776,7 @@ class VeniceVideoCog(commands.Cog):
                 image_bytes=image_bytes,
                 prompt=prompt,
                 seconds=seconds,
+                aspect=aspect,
             )
             if not queue_id:
                 await send_ephemeral(
@@ -892,9 +919,13 @@ class VeniceVideoCog(commands.Cog):
         lines = ["🎞️ **Animate button profiles**"]
         for model_id, profile in VIDEO_MODEL_PROFILES.items():
             durations = ", ".join(f"{d}s" for d in profile["durations"])
+            aspect_req = ""
+            if profile.get("require_aspect_ratio"):
+                allowed = profile.get("allowed_aspect_ratios") or []
+                aspect_req = f" • AR: {'/'.join(allowed)}"
             lines.append(
                 f"• `{model_id}` -> {profile['button_label']} "
-                f"({profile['resolution']}, {durations})"
+                f"({profile['resolution']}, {durations}{aspect_req})"
             )
         await ctx.send("\n".join(lines))
 
