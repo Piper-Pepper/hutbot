@@ -1,4 +1,4 @@
-# riddle_core.py  (Teil 1/2)
+# riddle_core.py
 from __future__ import annotations
 
 import os
