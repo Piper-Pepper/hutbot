@@ -918,8 +918,6 @@ class RiddleAdminPanelView(View):
             value=clamp_embed_value("\n".join(lines)) if lines else "*none*",
             inline=False,
         )
-        main.add_field(name="Status", value=clamp_embed_value(self.last_info), inline=False)
-        main.set_footer(text=footer_text(guild))
 
         embeds: list[discord.Embed] = [main]
 
