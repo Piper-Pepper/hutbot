@@ -1,10 +1,10 @@
 # venice_face_cog.py
 import asyncio
-import base64
 import contextlib
 import json
 import logging
 import os
+import random
 import re
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -32,7 +33,6 @@ from venice_shared import (
     looks_like_image,
     refresh_starter_message,
     register_starter_reposter,
-    repost_starter_for_channel,
     role_ids_for_tier_and_above,
     run_with_progress,
     seconds_human,
@@ -54,29 +54,23 @@ VENICE_IMAGE_EDIT_URL = os.getenv(
     "VENICE_IMAGE_EDIT_URL",
     "https://api.venice.ai/api/v1/image/edit",
 )
-
 if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env")
 
 # =================================================
-# CONFIG - ADJUST HERE
+# CONFIG
 # =================================================
 FACE_CHANNEL_ID = 1416468498305126522
+OWNER_USER_ID = 1292194320786522223
 
-# Referenzbild.
-# PRIMÄR: lokale Datei (empfohlen - läuft nie ab)
-# FALLBACK: URL. Signierte Discord-CDN-Links (?ex=...&hm=...) verfallen
-# nach ~24h! Nach einem Bot-Restart danach schlägt JEDE Generierung fehl.
-# Beim ersten erfolgreichen Download wird die Datei lokal gecacht.
+# Legacy-Fallback (falls Pool leer)
 FACE_REFERENCE_FILE = os.getenv("FACE_REFERENCE_FILE", "assets/piper_face_ref.jpg")
-FACE_REFERENCE_URL = os.getenv(
-    "FACE_REFERENCE_URL",
-    "https://cdn.discordapp.com/attachments/1383652563408392232/1532219730218450965/"
-    "piper_close_up-1_nude.jpg?ex=6a6c0e52&is=6a6abcd2&"
-    "hm=61096ebefe0fbc3d80dbb39d591cc55aefa042fb37997b4d6ecf669e64ed474e&",
-)
+FACE_REFERENCE_URL = os.getenv("FACE_REFERENCE_URL", "")
 
-# Mindest-Tier für den Face-Generator (nutzt zentrale TIER_RULES)
+# Pool-System
+FACE_POOL_FILE = os.getenv("FACE_POOL_FILE", "venice_face_pool.json")
+FACE_POOL_DIR = Path(os.getenv("FACE_POOL_DIR", "assets/face_pool"))
+
 FACE_REQUIRED_TIER = 2
 REQUIRED_ROLE_IDS: set[int] = set(role_ids_for_tier_and_above(FACE_REQUIRED_TIER))
 
@@ -91,57 +85,52 @@ PROMPT_HIDDEN_SUFFIX = (
 )
 
 FACE_INSTRUCTION_SUFFIX = (
-    " IMPORTANT: The reference image provided shows a specific woman's face. "
+    " IMPORTANT: The primary reference image shows a specific woman's face. "
     "Whenever a woman appears in the generated scene, she MUST have this exact face "
     "and identity - same facial features, same eyes, same nose, same mouth, same skin tone. "
-    "Preserve her facial identity perfectly. Only the environment, pose, clothing and "
-    "context should follow the text description; the face itself must remain identical "
-    "to the reference."
+    "Preserve her facial identity perfectly. If additional reference images are provided, "
+    "use them as guidance for body shape or clothing while keeping the face from the primary reference."
 )
 
-# Ausgabeparameter. None = Feld wird NICHT gesendet (Modell nutzt seinen Default).
-# aspect_ratio="auto" ist bei Edit-Endpoints meist KEIN gültiger Enum-Wert;
-# ohne das Feld übernimmt das Modell die Maße des Eingangsbildes.
 FACE_ASPECT_RATIO: Optional[str] = None
 FACE_RESOLUTION: Optional[str] = "1K"
 FACE_SAFE_MODE: Optional[bool] = False
 FACE_OUTPUT_FORMAT: Optional[str] = "png"
 
 # =================================================
-# QUOTA (geteilt mit Image-Cog über die Registry)
+# QUOTA
 # =================================================
 IMAGE_QUOTA_FILE = os.getenv("IMAGE_QUOTA_FILE", "goonhut_image_quota.json")
 image_quota = get_quota_store(IMAGE_QUOTA_FILE)
 
-# Gelernte Modell-Eigenheiten (überlebt Neustarts)
 FACE_CAPS_FILE = os.getenv("FACE_CAPS_FILE", "venice_face_model_caps.json")
 
 # =================================================
-# MODELS
-# Reihenfolge in MODEL_ORDER = Anzeigereihenfolge.
-# Neue Modelle hier eintragen -> Button erscheint automatisch und
-# die API-Eigenheiten werden beim ersten Aufruf selbst gelernt.
+# MODELS — hier stehen jetzt die neuen Button-Namen
 # =================================================
-AB18_ICON = "🔞"
 MODELS: dict[str, dict[str, Any]] = {
     "qwen-edit-uncensored": {
-        "label": f"🧠 Qwen Edit Uncensored {AB18_ICON}",
-        "prompt_limit": 3000, "short": "QEU", "icon": "🧠", "ab18": True,
+        "label": "🔞 See Piper nude (Variant 1)",
+        "button_label": "🔞 See Piper nude (V1)",
+        "prompt_limit": 3000, "ab18": True,
     },
     "seedream-v5-pro-edit": {
-        "label": f"🌊 Seedream V5 Pro Edit {AB18_ICON}",
-        "prompt_limit": 5000, "short": "SV5", "icon": "🌊", "ab18": True,
+        "label": "🔞 See Piper nude (Variant 2)",
+        "button_label": "🔞 See Piper nude (V2)",
+        "prompt_limit": 5000, "ab18": True,
     },
     "nano-banana-2-edit": {
-        "label": "🍌 Nano Banana 2 Edit",
-        "prompt_limit": 10000, "short": "NB2", "icon": "🍌", "ab18": False,
+        "label": "👗 See Piper clothed",
+        "button_label": "👗 See Piper clothed",
+        "prompt_limit": 10000, "ab18": False,
     },
 }
 MODEL_ORDER = list(MODELS.keys())
 
-BUTTON_MESSAGE_TEXT = "💡 Pick a model button for a 🎭 face-consistent image!"
+BUTTON_MESSAGE_TEXT = "💡 Pick a mode below to generate a 🎭 face-consistent image of Piper!"
 LEGACY_STARTER_TEXTS = {
     BUTTON_MESSAGE_TEXT,
+    "💡 Pick a model button for a 🎭 face-consistent image!",
     "💡 Choose a model for a 🎭 face-consistent image!",
     "💡 Choose Model for 🎭 face-consistent image!",
 }
@@ -149,18 +138,12 @@ RECENT_SCAN_LIMIT = 12
 
 
 # =================================================
-# MODEL CAPABILITY STORE (selbstheilender Payload)
+# MODEL CAPS STORE (self-healing payload)
 # =================================================
-# Nur diese Felder dürfen gestrichen werden. model/prompt/image nie.
 OPTIONAL_PARAM_KEYS: tuple[str, ...] = (
-    "aspect_ratio",
-    "resolution",
-    "safe_mode",
-    "output_format",
-    "seed",
-    "variants",
-    "negative_prompt",
-    "strength",
+    "aspect_ratio", "resolution", "safe_mode", "output_format",
+    "seed", "variants", "negative_prompt", "strength",
+    "reference_images",
 )
 
 IMAGE_STYLE_RAW = "raw"
@@ -169,13 +152,6 @@ IMAGE_STYLE_ORDER = (IMAGE_STYLE_RAW, IMAGE_STYLE_DATAURL)
 
 
 class ModelCapsStore:
-    """
-    Merkt sich pro Modell:
-      - blocked:     optionale Felder, die die API abgelehnt hat
-      - image_style: welches Bild-Encoding akzeptiert wurde
-    Persistiert als JSON, damit die Lernkurve Neustarts überlebt.
-    """
-
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
         self._data: dict[str, dict[str, Any]] = {}
@@ -198,12 +174,8 @@ class ModelCapsStore:
                     blocked = entry.get("blocked") or []
                     style = entry.get("image_style")
                     self._data[str(mid)] = {
-                        "blocked": {
-                            str(b) for b in blocked if str(b) in OPTIONAL_PARAM_KEYS
-                        },
-                        "image_style": (
-                            style if style in IMAGE_STYLE_ORDER else IMAGE_STYLE_RAW
-                        ),
+                        "blocked": {str(b) for b in blocked if str(b) in OPTIONAL_PARAM_KEYS},
+                        "image_style": style if style in IMAGE_STYLE_ORDER else IMAGE_STYLE_RAW,
                     }
             logger.info("Model caps loaded for %d model(s)", len(self._data))
         except Exception as e:
@@ -217,11 +189,8 @@ class ModelCapsStore:
             if parent and str(parent) != ".":
                 parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                mid: {
-                    "blocked": sorted(entry["blocked"]),
-                    "image_style": entry["image_style"],
-                }
-                for mid, entry in self._data.items()
+                mid: {"blocked": sorted(e["blocked"]), "image_style": e["image_style"]}
+                for mid, e in self._data.items()
             }
             tmp = self.file_path.with_suffix(self.file_path.suffix + f".tmp.{os.getpid()}")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -245,7 +214,6 @@ class ModelCapsStore:
         return self._entry(model_id)["image_style"]
 
     def block(self, model_id: str, keys: set[str]) -> set[str]:
-        """Streicht Felder. Gibt zurück, was davon neu war."""
         entry = self._entry(model_id)
         new = {k for k in keys if k in OPTIONAL_PARAM_KEYS} - entry["blocked"]
         if new:
@@ -277,10 +245,7 @@ class ModelCapsStore:
     def describe(self, model_id: str) -> str:
         entry = self._entry(model_id)
         blocked = sorted(entry["blocked"])
-        return (
-            f"style={entry['image_style']}, "
-            f"blocked={','.join(blocked) if blocked else 'none'}"
-        )
+        return f"style={entry['image_style']}, blocked={','.join(blocked) if blocked else 'none'}"
 
 
 model_caps = ModelCapsStore(FACE_CAPS_FILE)
@@ -299,13 +264,10 @@ def _keys_anywhere(node: Any, out: set[str], depth: int = 0) -> None:
 
 
 def _collect_rejected_params(body_text: str) -> set[str]:
-    """Findet heraus, welche optionalen Felder die API beanstandet hat."""
     bad: set[str] = set()
     found: set[str] = set()
-
     with contextlib.suppress(Exception):
         _keys_anywhere(json.loads(body_text), found)
-
     lowered = (body_text or "").lower()
     for key in OPTIONAL_PARAM_KEYS:
         if key in found:
@@ -320,17 +282,23 @@ def _mentions_image_field(body_text: str) -> bool:
     return bool(re.search(r"\b(image|image_url|input_image|base64|data url)\b", lowered))
 
 
-def _build_edit_payload(model_id: str, prompt: str, image_bytes: bytes) -> dict[str, Any]:
+def _encode_image(image_bytes: bytes, style: str) -> str:
+    return bytes_to_data_url(image_bytes) if style == IMAGE_STYLE_DATAURL else bytes_to_b64(image_bytes)
+
+
+def _build_edit_payload(
+    model_id: str,
+    prompt: str,
+    face_bytes: bytes,
+    secondary_bytes: Optional[bytes] = None,
+) -> dict[str, Any]:
     blocked = model_caps.blocked(model_id)
     style = model_caps.image_style(model_id)
 
     payload: dict[str, Any] = {
         "model": model_id,
         "prompt": prompt,
-        "image": (
-            bytes_to_data_url(image_bytes) if style == IMAGE_STYLE_DATAURL
-            else bytes_to_b64(image_bytes)
-        ),
+        "image": _encode_image(face_bytes, style),
     }
 
     optional: dict[str, Any] = {
@@ -343,11 +311,13 @@ def _build_edit_payload(model_id: str, prompt: str, image_bytes: bytes) -> dict[
         if v is not None and k not in blocked:
             payload[k] = v
 
+    if secondary_bytes and "reference_images" not in blocked:
+        payload["reference_images"] = [_encode_image(secondary_bytes, style)]
+
     return payload
 
 
 def _model_param_footer(model_id: str) -> str:
-    """Footer zeigt nur, was wirklich gesendet wurde."""
     blocked = model_caps.blocked(model_id)
     bits = []
     if FACE_ASPECT_RATIO and "aspect_ratio" not in blocked:
@@ -367,7 +337,7 @@ def user_has_required_role(member: Optional[discord.Member]) -> bool:
 
 
 # =================================================
-# FACE REFERENCE CACHE
+# LEGACY FACE REFERENCE CACHE (Fallback)
 # =================================================
 class FaceReferenceCache:
     def __init__(self, local_path: str | Path, url: str = ""):
@@ -376,61 +346,36 @@ class FaceReferenceCache:
         self._raw: Optional[bytes] = None
         self._lock = asyncio.Lock()
 
-    async def get_bytes(
-        self, session: Optional[aiohttp.ClientSession], force: bool = False
-    ) -> Optional[bytes]:
+    async def get_bytes(self, session: Optional[aiohttp.ClientSession], force: bool = False) -> Optional[bytes]:
         if self._raw and not force:
             return self._raw
         async with self._lock:
             if self._raw and not force:
                 return self._raw
-
-            # 1) Lokale Datei bevorzugen
             if self.local_path.exists():
                 try:
                     raw = await asyncio.to_thread(self.local_path.read_bytes)
                     if looks_like_image(raw):
                         self._raw = raw
-                        logger.info(
-                            "Face ref from file: %s (%d bytes)", self.local_path, len(raw)
-                        )
                         return self._raw
-                    logger.error("Face ref file is not an image: %s", self.local_path)
                 except Exception as e:
-                    logger.error("Face ref file unreadable (%s): %s", self.local_path, e)
-
-            # 2) URL-Fallback + lokal cachen
+                    logger.error("Legacy face ref unreadable: %s", e)
             if not self.url or session is None or session.closed:
-                logger.error("No face reference available (no file, no usable URL/session)")
                 return None
             try:
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with session.get(self.url, timeout=timeout) as resp:
+                async with session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status != 200:
-                        logger.error(
-                            "Face ref download HTTP %s - signed CDN link may have expired",
-                            resp.status,
-                        )
                         return None
                     raw = await resp.read()
                     if not looks_like_image(raw):
-                        logger.error("Face ref URL did not return an image")
                         return None
-
-                    def _persist():
-                        parent = self.local_path.parent
-                        if parent and str(parent) != ".":
-                            parent.mkdir(parents=True, exist_ok=True)
-                        self.local_path.write_bytes(raw)
-
                     with contextlib.suppress(Exception):
-                        await asyncio.to_thread(_persist)
-                        logger.info("Face ref cached locally: %s", self.local_path)
-
+                        self.local_path.parent.mkdir(parents=True, exist_ok=True)
+                        await asyncio.to_thread(self.local_path.write_bytes, raw)
                     self._raw = raw
                     return self._raw
             except Exception as e:
-                logger.error("Face ref load error: %s", e)
+                logger.error("Legacy face ref load error: %s", e)
                 return None
 
 
@@ -438,7 +383,159 @@ face_ref_cache = FaceReferenceCache(FACE_REFERENCE_FILE, FACE_REFERENCE_URL)
 
 
 # =================================================
-# MODEL LABEL HELPERS
+# FACE POOL STORE — die neue zentrale Verwaltung
+# =================================================
+class FacePoolStore:
+    """
+    3 Face-Slots + 1 Body-Slot + 1 Clothing-Slot.
+    Bilder liegen als Datei in FACE_POOL_DIR, Konfiguration in JSON.
+    """
+
+    def __init__(self, config_file: Path | str, storage_dir: Path | str):
+        self.config_file = Path(config_file)
+        self.storage_dir = Path(storage_dir)
+        self._data: dict[str, Any] = {
+            "face_slots": [None, None, None],
+            "body_slot": None,
+            "clothing_slot": None,
+        }
+        self._loaded = False
+        self._lock = asyncio.Lock()
+
+    def _ensure_dir(self):
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def load(self):
+        if self._loaded:
+            return
+        self._loaded = True
+        if not self.config_file.exists():
+            return
+        try:
+            raw = self.config_file.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw.strip() else {}
+            if isinstance(data, dict):
+                slots = data.get("face_slots")
+                if isinstance(slots, list) and len(slots) == 3:
+                    self._data["face_slots"] = [s if isinstance(s, str) else None for s in slots]
+                body = data.get("body_slot")
+                self._data["body_slot"] = body if isinstance(body, str) else None
+                cloth = data.get("clothing_slot")
+                self._data["clothing_slot"] = cloth if isinstance(cloth, str) else None
+        except Exception as e:
+            logger.warning("Face pool load failed: %s", e)
+
+    def save(self):
+        try:
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.config_file.with_suffix(f".tmp.{os.getpid()}")
+            tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, self.config_file)
+        except Exception as e:
+            logger.warning("Face pool save failed: %s", e)
+
+    def _slot_key(self, slot_type: str, index: Optional[int]) -> tuple[str, str]:
+        if slot_type == "face":
+            assert index is not None and 0 <= index < 3
+            return f"face_slots[{index}]", f"face_{index+1}"
+        if slot_type == "body":
+            return "body_slot", "body"
+        if slot_type == "clothing":
+            return "clothing_slot", "clothing"
+        raise ValueError(f"unknown slot: {slot_type}")
+
+    def _remove_stale_variants(self, basename: str, keep: Path):
+        for ext in ("png", "jpg", "jpeg", "webp"):
+            p = self.storage_dir / f"{basename}.{ext}"
+            if p != keep and p.exists():
+                with contextlib.suppress(Exception):
+                    p.unlink()
+
+    def _set_path(self, slot_type: str, index: Optional[int], path: Optional[str]):
+        if slot_type == "face":
+            self._data["face_slots"][index] = path
+        elif slot_type == "body":
+            self._data["body_slot"] = path
+        elif slot_type == "clothing":
+            self._data["clothing_slot"] = path
+
+    async def set_slot(
+        self, slot_type: str, index: Optional[int], image_bytes: bytes, extension: str = "png"
+    ) -> str:
+        async with self._lock:
+            self.load()
+            self._ensure_dir()
+            _, basename = self._slot_key(slot_type, index)
+            ext = extension.lower().lstrip(".")
+            if ext not in ("png", "jpg", "jpeg", "webp"):
+                ext = "png"
+            path = self.storage_dir / f"{basename}.{ext}"
+            await asyncio.to_thread(path.write_bytes, image_bytes)
+            self._remove_stale_variants(basename, path)
+            self._set_path(slot_type, index, str(path))
+            self.save()
+            return str(path)
+
+    async def clear_slot(self, slot_type: str, index: Optional[int] = None):
+        async with self._lock:
+            self.load()
+            _, basename = self._slot_key(slot_type, index)
+            current = self.get_path(slot_type, index)
+            if current:
+                with contextlib.suppress(Exception):
+                    Path(current).unlink()
+            for ext in ("png", "jpg", "jpeg", "webp"):
+                p = self.storage_dir / f"{basename}.{ext}"
+                if p.exists():
+                    with contextlib.suppress(Exception):
+                        p.unlink()
+            self._set_path(slot_type, index, None)
+            self.save()
+
+    def get_path(self, slot_type: str, index: Optional[int] = None) -> Optional[str]:
+        self.load()
+        if slot_type == "face":
+            return self._data["face_slots"][index]
+        if slot_type == "body":
+            return self._data["body_slot"]
+        if slot_type == "clothing":
+            return self._data["clothing_slot"]
+        return None
+
+    def get_face_slots(self) -> list[Optional[str]]:
+        self.load()
+        return list(self._data["face_slots"])
+
+    async def read_random_face_bytes(self) -> tuple[Optional[bytes], Optional[int]]:
+        """Wählt zufällig einen befüllten Face-Slot. Gibt (bytes, slot_index) zurück."""
+        slots = [(i, p) for i, p in enumerate(self.get_face_slots()) if p and Path(p).exists()]
+        if not slots:
+            return None, None
+        i, chosen = random.choice(slots)
+        try:
+            raw = await asyncio.to_thread(Path(chosen).read_bytes)
+            return raw, i
+        except Exception as e:
+            logger.error("Face slot read failed: %s", e)
+            return None, None
+
+    async def read_secondary_bytes(self, is_nsfw: bool) -> Optional[bytes]:
+        """NSFW → body, SFW → clothing."""
+        path = self.get_path("body" if is_nsfw else "clothing")
+        if not path or not Path(path).exists():
+            return None
+        try:
+            return await asyncio.to_thread(Path(path).read_bytes)
+        except Exception as e:
+            logger.error("Secondary slot read failed: %s", e)
+            return None
+
+
+face_pool = FacePoolStore(FACE_POOL_FILE, FACE_POOL_DIR)
+
+
+# =================================================
+# HELPERS
 # =================================================
 def get_model_label(model_id: str) -> str:
     return (MODELS.get(model_id) or {}).get("label", model_id)
@@ -455,39 +552,9 @@ def _model_is_ab18(cfg: dict[str, Any]) -> bool:
     return bool(cfg.get("ab18")) or ("🔞" in label) or ("18+" in label)
 
 
-def _model_icon(cfg: dict[str, Any]) -> str:
-    icon = str(cfg.get("icon", "")).strip()
-    if icon:
-        return icon
-    label = str(cfg.get("label", "")).strip()
-    first = label.split(" ", 1)[0] if label else ""
-    return first if first and not first[0].isalnum() else "🎭"
-
-
-def _model_short(model_id: str, cfg: dict[str, Any]) -> str:
-    short = str(cfg.get("short", "")).strip()
-    if short:
-        return short.upper()[:10]
-
-    parts = [p for p in re.split(r"[-_]+", model_id) if p]
-    if len(parts) > 1 and parts[-1].lower() == "edit":
-        parts = parts[:-1]
-
-    out: list[str] = []
-    for p in parts[:4]:
-        if re.fullmatch(r"v\d+", p, flags=re.IGNORECASE):
-            out.append(p.upper())
-        elif p.isdigit():
-            out.append(p)
-        else:
-            out.append(p[0].upper())
-    return ("".join(out) or model_id[:4].upper())[:8]
-
-
 def _model_button_label(model_id: str) -> str:
     cfg = MODELS.get(model_id, {})
-    ab = " 18+" if _model_is_ab18(cfg) else ""
-    return f"{_model_icon(cfg)} {_model_short(model_id, cfg)}{ab}".strip()[:80]
+    return str(cfg.get("button_label") or cfg.get("label") or model_id)[:80]
 
 
 def is_starter_message(msg: discord.Message) -> bool:
@@ -498,22 +565,14 @@ def is_starter_message(msg: discord.Message) -> bool:
             for child in row.children:
                 cid = getattr(child, "custom_id", None)
                 if isinstance(cid, str) and (
-                    cid.startswith("venice_face_model_select:")  # legacy select
-                    or cid.startswith("venice_face_model_btn:")  # button system
+                    cid.startswith("venice_face_model_select:")
+                    or cid.startswith("venice_face_model_btn:")
                 ):
                     return True
     return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
 
 
-def _face_progress_embed(
-    user: discord.abc.User,
-    prompt: str,
-    model_id: str,
-    percent: int,
-    eta_sec: float,
-    stage: str,
-    quota: dict[str, int],
-) -> discord.Embed:
+def _face_progress_embed(user, prompt, model_id, percent, eta_sec, stage, quota) -> discord.Embed:
     return build_progress_embed(
         title="🎭 FACE IMAGE RENDER",
         color=discord.Color.purple(),
@@ -530,13 +589,14 @@ def _face_progress_embed(
 
 
 # =================================================
-# API CALL - selbstheilend
+# API CALL — self-healing, jetzt mit optionalem secondary image
 # =================================================
 async def venice_edit(
     session: aiohttp.ClientSession,
     model_id: str,
     prompt: str,
-    image_bytes: bytes,
+    face_bytes: bytes,
+    secondary_bytes: Optional[bytes] = None,
     retries: int = 2,
 ) -> tuple[Optional[bytes], Optional[str]]:
     headers = {
@@ -552,11 +612,11 @@ async def venice_edit(
     attempt = 0
 
     while attempt <= retries and heals <= max_heals:
-        payload = _build_edit_payload(model_id, prompt, image_bytes)
+        payload = _build_edit_payload(model_id, prompt, face_bytes, secondary_bytes)
         logger.info(
-            "[FACE %s] -> POST model=%s keys=%s prompt_len=%d caps(%s)",
+            "[FACE %s] -> POST model=%s keys=%s prompt_len=%d secondary=%s caps(%s)",
             req_id, model_id, sorted(payload.keys()), len(prompt),
-            model_caps.describe(model_id),
+            "yes" if secondary_bytes else "no", model_caps.describe(model_id),
         )
         try:
             async with session.post(
@@ -579,42 +639,30 @@ async def venice_edit(
                     req_id, resp.status, sorted(payload.keys()), body[:1200],
                 )
 
-                # --- Selbstheilung bei Validierungsfehlern ---
                 if resp.status in (400, 415, 422):
                     rejected = _collect_rejected_params(body)
                     if rejected:
                         newly = model_caps.block(model_id, rejected)
                         if newly:
                             heals += 1
-                            logger.warning(
-                                "[FACE %s] model=%s rejects %s -> removed, retrying",
-                                req_id, model_id, sorted(newly),
-                            )
                             continue
 
-                    # Bild-Encoding umschalten
                     if _mentions_image_field(body):
                         current = model_caps.image_style(model_id)
+                        healed = False
                         for style in IMAGE_STYLE_ORDER:
                             if style != current and model_caps.set_image_style(model_id, style):
                                 heals += 1
-                                logger.warning(
-                                    "[FACE %s] model=%s image style %s -> %s, retrying",
-                                    req_id, model_id, current, style,
-                                )
+                                healed = True
                                 break
-                        else:
-                            return None, f"HTTP {resp.status}: {body[:400]}"
-                        continue
+                        if healed:
+                            continue
+                        return None, f"HTTP {resp.status}: {body[:400]}"
 
-                    # Kein Feldname erkennbar: minimalen Payload versuchen
                     remaining = set(OPTIONAL_PARAM_KEYS) - model_caps.blocked(model_id)
                     if remaining:
                         model_caps.block(model_id, remaining)
                         heals += 1
-                        logger.warning(
-                            "[FACE %s] model=%s: minimal payload attempt", req_id, model_id
-                        )
                         continue
 
                     return None, f"HTTP {resp.status}: {body[:400]}"
@@ -647,17 +695,11 @@ async def send_role_locked_message(interaction: discord.Interaction):
 
 
 # =================================================
-# UI - STARTER (ein Button pro Modell)
+# STARTER (Buttons) — unverändert in Logik, neue Labels
 # =================================================
 class StarterModelButton(discord.ui.Button):
-    def __init__(
-        self,
-        session_ref: Callable[[], Optional[aiohttp.ClientSession]],
-        channel_id: int,
-        model_id: str,
-        row: int = 0,
-        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
-    ):
+    def __init__(self, session_ref, channel_id, model_id, row=0,
+                 style=discord.ButtonStyle.secondary):
         self._session_ref = session_ref
         self.channel_id = channel_id
         self.model_id = model_id
@@ -673,54 +715,40 @@ class StarterModelButton(discord.ui.Button):
         if not user_has_required_role(member):
             await send_role_locked_message(interaction)
             return
-
         if self.model_id not in MODELS:
             await send_ephemeral(interaction, "❌ Unknown model.")
             return
-
         session = self._session_ref()
         if session is None or session.closed:
-            await send_ephemeral(
-                interaction, "❌ Backend session not ready. Try again in a moment."
-            )
+            await send_ephemeral(interaction, "❌ Backend session not ready. Try again in a moment.")
             return
-
         await interaction.response.send_modal(
             FacePromptModal(session, self.model_id, interaction.user.id)
         )
 
 
 class StarterView(discord.ui.View):
-    def __init__(
-        self,
-        session_ref: Callable[[], Optional[aiohttp.ClientSession]],
-        channel_id: int,
-    ):
+    def __init__(self, session_ref, channel_id: int):
         super().__init__(timeout=None)
-        model_ids = _ordered_model_ids()
-
-        if not model_ids:
+        ids = _ordered_model_ids()
+        if not ids:
             self.add_item(discord.ui.Button(
                 label="No models available",
                 style=discord.ButtonStyle.secondary,
-                disabled=True,
-                row=0,
+                disabled=True, row=0,
             ))
             return
-
-        # Discord max: 5 Reihen x 5 Buttons = 25
-        for i, mid in enumerate(model_ids[:25]):
+        for i, mid in enumerate(ids[:25]):
+            is_nsfw = _model_is_ab18(MODELS[mid])
+            style = discord.ButtonStyle.danger if is_nsfw else discord.ButtonStyle.success
             self.add_item(StarterModelButton(
-                session_ref=session_ref,
-                channel_id=channel_id,
-                model_id=mid,
-                row=i // 5,
-                style=discord.ButtonStyle.primary if i == 0 else discord.ButtonStyle.secondary,
+                session_ref=session_ref, channel_id=channel_id,
+                model_id=mid, row=i // 5, style=style,
             ))
 
 
 # =================================================
-# UI - MODAL
+# MODAL
 # =================================================
 class FacePromptModal(discord.ui.Modal):
     def __init__(self, session: aiohttp.ClientSession, model_id: str, owner_id: int):
@@ -729,13 +757,12 @@ class FacePromptModal(discord.ui.Modal):
         self.owner_id = owner_id
         cfg = MODELS[model_id]
         super().__init__(title=f"🎭 {get_model_label(model_id)}"[:45])
-
         self.prompt = discord.ui.TextInput(
             label="Describe the scene",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=min(int(cfg["prompt_limit"]), 4000),
-            placeholder="Woman in a red dress on a rainy Tokyo street at night...",
+            placeholder="Piper in a red dress on a rainy Tokyo street at night...",
         )
         self.add_item(self.prompt)
 
@@ -743,35 +770,25 @@ class FacePromptModal(discord.ui.Modal):
         if interaction.user.id != self.owner_id:
             await send_ephemeral(interaction, "🚫 This modal does not belong to you.")
             return
-
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if not user_has_required_role(member):
             await send_role_locked_message(interaction)
             return
-
         user_prompt = (self.prompt.value or "").strip()
         if not user_prompt:
             await send_ephemeral(interaction, "❌ Empty prompt.")
             return
-
         await interaction.response.defer(ephemeral=True)
         await run_face_generation(
-            interaction=interaction,
-            session=self.session,
-            model_id=self.model_id,
-            user_prompt=user_prompt,
+            interaction=interaction, session=self.session,
+            model_id=self.model_id, user_prompt=user_prompt,
         )
 
 
 # =================================================
-# GENERATION FLOW
+# GENERATION FLOW — jetzt mit Pool + Zufalls-Face + Secondary
 # =================================================
-async def run_face_generation(
-    interaction: discord.Interaction,
-    session: aiohttp.ClientSession,
-    model_id: str,
-    user_prompt: str,
-):
+async def run_face_generation(interaction, session, model_id, user_prompt):
     if not interaction.guild:
         await send_ephemeral(interaction, "❌ Server-only.")
         return
@@ -784,9 +801,9 @@ async def run_face_generation(
         await send_role_locked_message(interaction)
         return
 
-    progress_msg: Optional[discord.Message] = None
+    progress_msg = None
     quota_success = False
-    token_quota: Optional[dict[str, int]] = None
+    token_quota = None
 
     try:
         image_limit = get_image_limit_for_member(member)
@@ -797,15 +814,31 @@ async def run_face_generation(
             await send_image_quota_message(interaction, member, state)
             return
 
-        ref_bytes = await face_ref_cache.get_bytes(session)
-        if not ref_bytes:
+        # === ZUFÄLLIGE FACE-AUSWAHL AUS DEM POOL ===
+        face_bytes, chosen_slot = await face_pool.read_random_face_bytes()
+        if face_bytes is None:
+            # Fallback auf Legacy-Referenz
+            face_bytes = await face_ref_cache.get_bytes(session)
+        if not face_bytes:
             await send_ephemeral(
                 interaction,
-                "❌ Could not load the face reference image.\n"
-                f"Place it at `{FACE_REFERENCE_FILE}` "
-                "(signed Discord CDN links expire after ~24h).",
+                "❌ No face reference available.\n"
+                "Use `/face_config` to upload at least one face image.",
             )
             return
+
+        # === SECONDARY IMAGE: body für NSFW, clothing für SFW ===
+        cfg = MODELS[model_id]
+        is_nsfw = _model_is_ab18(cfg)
+        secondary_bytes = await face_pool.read_secondary_bytes(is_nsfw)
+
+        logger.info(
+            "[FACE gen] user=%s model=%s face_slot=%s secondary=%s(%s)",
+            interaction.user.id, model_id,
+            (chosen_slot + 1) if chosen_slot is not None else "legacy",
+            "body" if is_nsfw else "clothing",
+            "yes" if secondary_bytes else "no",
+        )
 
         full_prompt = (
             f"{user_prompt.strip()}{PROMPT_HIDDEN_SUFFIX}{FACE_INSTRUCTION_SUFFIX}"
@@ -821,10 +854,10 @@ async def run_face_generation(
         )
 
         gen_task = asyncio.create_task(
-            venice_edit(session, model_id, full_prompt, ref_bytes)
+            venice_edit(session, model_id, full_prompt, face_bytes, secondary_bytes)
         )
 
-        def gen_embed(percent: int, eta: float) -> discord.Embed:
+        def gen_embed(percent, eta):
             return _face_progress_embed(
                 interaction.user, user_prompt, model_id, percent, eta,
                 "Generating image with face reference...", state,
@@ -864,9 +897,7 @@ async def run_face_generation(
             value=f"```{codeblock_safe(trim(user_prompt, 1600))}```",
             inline=False,
         )
-        guild_icon = (
-            interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
-        )
+        guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
         embed.set_footer(
             text=f"{get_model_label(model_id)} • {_model_param_footer(model_id)}",
             icon_url=guild_icon,
@@ -913,12 +944,155 @@ async def run_face_generation(
         if progress_msg:
             with contextlib.suppress(Exception):
                 await progress_msg.delete()
-
         if not quota_success:
             await image_quota.rollback(token_quota)
-
         with contextlib.suppress(Exception):
             await repost_starter_for_channel(interaction.channel)
+
+
+# =================================================
+# /face_config — OWNER-ONLY GUI zum Slot-Management
+# =================================================
+def _build_config_embed() -> discord.Embed:
+    slots = face_pool.get_face_slots()
+    body = face_pool.get_path("body")
+    clothing = face_pool.get_path("clothing")
+
+    def show(p: Optional[str]) -> str:
+        return f"✅ `{Path(p).name}`" if p and Path(p).exists() else "❌ empty"
+
+    e = discord.Embed(
+        title="🎭 Face Pool Configuration",
+        description=(
+            "**Face slots** — up to 3 different face images. "
+            "One is picked randomly per generation.\n"
+            "**Body** — sent as reference to 🔞 NSFW models (Variant 1 & 2).\n"
+            "**Clothing** — sent as reference to the 👗 clothed model."
+        ),
+        color=discord.Color.purple(),
+    )
+    for i, s in enumerate(slots):
+        e.add_field(name=f"Face {i+1}", value=show(s), inline=True)
+    e.add_field(name="🧍 Body (NSFW)", value=show(body), inline=False)
+    e.add_field(name="👗 Clothing (SFW)", value=show(clothing), inline=False)
+    e.set_footer(text="Use the buttons below to upload or clear slots.")
+    return e
+
+
+class FaceConfigView(discord.ui.View):
+    def __init__(self, owner_id: int, bot: commands.Bot):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await send_ephemeral(interaction, "🚫 This panel is owner-only.")
+            return False
+        return True
+
+    async def _await_upload(
+        self, interaction: discord.Interaction, slot_type: str, index: Optional[int], slot_label: str,
+    ):
+        # Erst dem User sagen was er tun soll
+        await interaction.response.send_message(
+            f"📎 **Upload for {slot_label}**\n"
+            f"Send an image message (as attachment) in this channel within **90 seconds**.\n"
+            f"Your upload will be deleted right after processing.",
+            ephemeral=True,
+        )
+
+        def check(m: discord.Message) -> bool:
+            if m.author.id != self.owner_id:
+                return False
+            if m.channel.id != interaction.channel_id:
+                return False
+            if not m.attachments:
+                return False
+            att = m.attachments[0]
+            ct = (att.content_type or "").lower()
+            fn = (att.filename or "").lower()
+            return ct.startswith("image/") or any(fn.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp"))
+
+        try:
+            msg: discord.Message = await self.bot.wait_for("message", check=check, timeout=90.0)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏱️ Upload timeout. Try again.", ephemeral=True)
+            return
+
+        att = msg.attachments[0]
+        try:
+            img_bytes = await att.read()
+        except Exception as e:
+            await interaction.followup.send(f"❌ Read failed: {e}", ephemeral=True)
+            return
+
+        if not looks_like_image(img_bytes):
+            await interaction.followup.send("❌ That doesn't look like a valid image.", ephemeral=True)
+            return
+
+        # Extension aus Dateiname bestimmen
+        ext = "png"
+        fn_low = (att.filename or "").lower()
+        for e_ in ("jpeg", "jpg", "png", "webp"):
+            if fn_low.endswith(f".{e_}"):
+                ext = e_
+                break
+
+        try:
+            path = await face_pool.set_slot(slot_type, index, img_bytes, ext)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Save failed: {e}", ephemeral=True)
+            return
+
+        with contextlib.suppress(Exception):
+            await msg.delete()
+
+        await interaction.followup.send(
+            f"✅ **{slot_label}** saved → `{Path(path).name}` ({len(img_bytes):,} bytes).",
+            ephemeral=True,
+        )
+
+        # Panel aktualisieren
+        with contextlib.suppress(Exception):
+            await interaction.edit_original_response(embed=_build_config_embed(), view=self)
+
+    # ---- Face uploads (row 0) ----
+    @discord.ui.button(label="📤 Face 1", style=discord.ButtonStyle.primary, row=0)
+    async def up_f1(self, interaction, button): await self._await_upload(interaction, "face", 0, "Face 1")
+    @discord.ui.button(label="📤 Face 2", style=discord.ButtonStyle.primary, row=0)
+    async def up_f2(self, interaction, button): await self._await_upload(interaction, "face", 1, "Face 2")
+    @discord.ui.button(label="📤 Face 3", style=discord.ButtonStyle.primary, row=0)
+    async def up_f3(self, interaction, button): await self._await_upload(interaction, "face", 2, "Face 3")
+
+    # ---- Body / Clothing (row 1) ----
+    @discord.ui.button(label="🧍 Upload Body", style=discord.ButtonStyle.success, row=1)
+    async def up_body(self, interaction, button): await self._await_upload(interaction, "body", None, "Body")
+    @discord.ui.button(label="👗 Upload Clothing", style=discord.ButtonStyle.success, row=1)
+    async def up_cloth(self, interaction, button): await self._await_upload(interaction, "clothing", None, "Clothing")
+
+    # ---- Clear (row 2 + 3) ----
+    # ---- Clear helper + buttons ----
+    async def _clear(self, interaction: discord.Interaction, slot_type: str, index: Optional[int], label: str):
+        await face_pool.clear_slot(slot_type, index)
+        await interaction.response.edit_message(embed=_build_config_embed(), view=self)
+        await interaction.followup.send(f"🗑️ **{label}** cleared.", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ F1", style=discord.ButtonStyle.danger, row=2)
+    async def clr_f1(self, interaction, button): await self._clear(interaction, "face", 0, "Face 1")
+    @discord.ui.button(label="🗑️ F2", style=discord.ButtonStyle.danger, row=2)
+    async def clr_f2(self, interaction, button): await self._clear(interaction, "face", 1, "Face 2")
+    @discord.ui.button(label="🗑️ F3", style=discord.ButtonStyle.danger, row=2)
+    async def clr_f3(self, interaction, button): await self._clear(interaction, "face", 2, "Face 3")
+    @discord.ui.button(label="🗑️ Body", style=discord.ButtonStyle.danger, row=2)
+    async def clr_body(self, interaction, button): await self._clear(interaction, "body", None, "Body")
+    @discord.ui.button(label="🗑️ Cloth", style=discord.ButtonStyle.danger, row=2)
+    async def clr_cloth(self, interaction, button): await self._clear(interaction, "clothing", None, "Clothing")
+
+    # ---- Refresh (row 3) ----
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=3)
+    async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=_build_config_embed(), view=self)
 
 
 # =================================================
@@ -945,11 +1119,13 @@ class VeniceFaceCog(commands.Cog):
     async def cog_load(self):
         await self._ensure_session()
         model_caps.load()
+        face_pool.load()
         self.bot.add_view(StarterView(self._session_ref, FACE_CHANNEL_ID))
         register_starter_reposter(FACE_CHANNEL_ID, self.ensure_starter_message)
 
     def cog_unload(self):
         model_caps.save()
+        face_pool.save()
         if self.session and not self.session.closed:
             asyncio.create_task(self.session.close())
 
@@ -964,30 +1140,55 @@ class VeniceFaceCog(commands.Cog):
             scan_limit=RECENT_SCAN_LIMIT,
         )
 
+    # =========================================
+    # SLASH COMMAND — nur der Owner
+    # =========================================
+    @app_commands.command(
+        name="face_config",
+        description="Manage the face pool (3 face slots + body + clothing). Owner only.",
+    )
+    async def face_config_slash(self, interaction: discord.Interaction):
+        if interaction.user.id != OWNER_USER_ID:
+            await send_ephemeral(interaction, "🚫 This command is owner-only.")
+            return
+        view = FaceConfigView(owner_id=OWNER_USER_ID, bot=self.bot)
+        await interaction.response.send_message(
+            embed=_build_config_embed(),
+            view=view,
+            ephemeral=True,
+        )
+
+    # =========================================
+    # ADMIN PREFIX COMMANDS
+    # =========================================
     @commands.command(name="face_reload")
     @commands.has_permissions(administrator=True)
     async def face_reload(self, ctx: commands.Context):
         await self._ensure_session()
         ref = await face_ref_cache.get_bytes(self.session, force=True)
-
         reposted = 0
         for guild in self.bot.guilds:
             for channel in guild.text_channels:
                 if channel.id == FACE_CHANNEL_ID:
                     await self.ensure_starter_message(channel)
                     reposted += 1
-
         ref_state = f"✅ {len(ref)} bytes" if ref else "❌ not available"
+        slots = face_pool.get_face_slots()
+        pool_state = (
+            f"faces: {sum(1 for s in slots if s)}/3, "
+            f"body: {'✅' if face_pool.get_path('body') else '❌'}, "
+            f"clothing: {'✅' if face_pool.get_path('clothing') else '❌'}"
+        )
         await ctx.send(
             f"✅ Face cog reloaded.\n"
-            f"• Reference: {ref_state}\n"
+            f"• Legacy reference: {ref_state}\n"
+            f"• Pool: {pool_state}\n"
             f"• Starter messages reposted: {reposted}"
         )
 
     @commands.command(name="face_caps")
     @commands.has_permissions(administrator=True)
     async def face_caps(self, ctx: commands.Context, model_id: Optional[str] = None):
-        """Zeigt oder verwirft die gelernten Modell-Eigenheiten."""
         if model_id and model_id.lower() in ("reset", "clear"):
             model_caps.reset()
             await ctx.send("♻️ All learned model capabilities cleared.")
@@ -999,30 +1200,34 @@ class VeniceFaceCog(commands.Cog):
             model_caps.reset(model_id)
             await ctx.send(f"♻️ Learned capabilities for `{model_id}` cleared.")
             return
-
         lines = [f"`{mid}` → {model_caps.describe(mid)}" for mid in _ordered_model_ids()]
         await ctx.send("🧠 **Learned model capabilities**\n" + "\n".join(lines))
 
     @commands.command(name="face_test")
     @commands.has_permissions(administrator=True)
     async def face_test(self, ctx: commands.Context):
-        """Testet alle Modelle mit einem Minimal-Prompt (verbraucht Quota-frei)."""
         await self._ensure_session()
-        ref = await face_ref_cache.get_bytes(self.session)
-        if not ref:
-            await ctx.send("❌ No face reference available - cannot test.")
+        face, _ = await face_pool.read_random_face_bytes()
+        if face is None:
+            face = await face_ref_cache.get_bytes(self.session)
+        if not face:
+            await ctx.send("❌ No face reference available (pool empty and no legacy fallback).")
             return
 
         status = await ctx.send("🧪 Testing models...")
         results: list[str] = []
         for mid in _ordered_model_ids():
+            is_nsfw = _model_is_ab18(MODELS[mid])
+            secondary = await face_pool.read_secondary_bytes(is_nsfw)
             img, err = await venice_edit(
-                self.session, mid, "a simple portrait test", ref, retries=0
+                self.session, mid, "a simple portrait test",
+                face, secondary, retries=0,
             )
+            sec_tag = f" +{'body' if is_nsfw else 'clothing'}" if secondary else ""
             if img:
-                results.append(f"✅ `{mid}` → {len(img)} bytes • {model_caps.describe(mid)}")
+                results.append(f"✅ `{mid}`{sec_tag} → {len(img)} bytes • {model_caps.describe(mid)}")
             else:
-                results.append(f"❌ `{mid}` → {trim(err or 'unknown', 160)}")
+                results.append(f"❌ `{mid}`{sec_tag} → {trim(err or 'unknown', 160)}")
 
         with contextlib.suppress(Exception):
             await status.delete()
@@ -1036,6 +1241,7 @@ class VeniceFaceCog(commands.Cog):
             self._ready_bootstrap_done = True
             await self._ensure_session()
             model_caps.load()
+            face_pool.load()
             with contextlib.suppress(Exception):
                 await face_ref_cache.get_bytes(self.session)
             for guild in self.bot.guilds:
