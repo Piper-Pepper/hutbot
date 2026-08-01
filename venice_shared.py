@@ -712,6 +712,12 @@ async def cleanup_user_ephemerals(interaction: discord.Interaction, delay: float
             await m.delete()
 
 
+# Content prefixes that identify user-facing errors/warnings/locks.
+# Messages starting with any of these are treated as persistent (not tracked
+# for auto-cleanup) so the user has time to read them.
+_ERROR_PREFIX_MARKERS: tuple[str, ...] = ("❌", "⛔", "🔒", "🚫", "⚠️", "🛑")
+
+
 async def send_ephemeral(
     interaction: discord.Interaction,
     content: Optional[str] = None,
@@ -722,10 +728,15 @@ async def send_ephemeral(
     """
     Send an ephemeral message.
 
-    A view can opt out of automatic cleanup by declaring the class attribute
-    `persistent_ephemeral = True`. Those messages are never added to the
-    tracking list and survive cleanup_user_ephemerals(), so their buttons stay
-    clickable for the full view timeout.
+    Auto-tracking rules (when `track` is None):
+    - Views declaring `persistent_ephemeral = True` are NOT tracked.
+      -> AnimateEphemeralView etc. stay clickable across cleanups.
+    - Messages whose content starts with ❌ ⛔ 🔒 🚫 ⚠️ 🛑 are NOT tracked.
+      -> Error/warning/lock messages survive cleanup_user_ephemerals() so the
+         user has time to read them.
+    - Everything else IS tracked and cleaned up on the next cleanup pass.
+
+    Force behaviour explicitly with track=True/False.
     """
     payload = dict(kwargs)
     payload["ephemeral"] = True
@@ -734,7 +745,10 @@ async def send_ephemeral(
 
     if track is None:
         view = payload.get("view")
-        track = not getattr(view, "persistent_ephemeral", False)
+        view_persistent = bool(getattr(view, "persistent_ephemeral", False))
+        text = str(content or "").lstrip()
+        is_error = text.startswith(_ERROR_PREFIX_MARKERS)
+        track = not (view_persistent or is_error)
 
     try:
         if interaction.response.is_done():
@@ -748,7 +762,7 @@ async def send_ephemeral(
     except Exception:
         return None
 
-
+    
 # =================================================
 # POST DECORATION
 # =================================================
