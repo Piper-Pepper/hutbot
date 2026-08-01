@@ -53,9 +53,9 @@ def riddle_level(xp: int) -> tuple[str, str]:
     x = max(0, to_int(xp, 0))
     if x < 1500:
         return ("EASY", "🟢")
-    if x < 3000:
+    if x < 2500:
         return ("MEDIUM", "🟡")
-    if x < 5000:
+    if x < 4000:
         return ("HARD", "🔴")
     return ("BRAIN-DEAD", "💀")
 
