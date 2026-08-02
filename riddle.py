@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Literal
+from typing import Optional
 
 import discord
 from discord import app_commands, Interaction, Role
@@ -32,7 +32,6 @@ from riddle_ui import (
     VoteButtons,
     RiddleAdminPanelView,
     ChampionsView,
-    ChampionsImportModal,
 )
 
 
@@ -778,16 +777,6 @@ class RiddleCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
         )
         view.message = sent
-
-    @app_commands.command(
-        name="champions-import-json",
-        description="Import legacy champions data from JSON (merge or replace).",
-    )
-    @app_commands.guild_only()
-    @riddle_manager_required()
-    async def champions_import_json(self, interaction: Interaction,
-                                    mode: Literal["merge", "replace"] = "merge"):
-        await interaction.response.send_modal(ChampionsImportModal(self, mode))
 
     # ==========================================================================
     # APP-COMMAND ERROR HANDLER
