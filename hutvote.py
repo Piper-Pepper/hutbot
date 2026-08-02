@@ -43,7 +43,10 @@ IGNORE_IDS = {1292194320786522223}
 VOTER_XP = {1: 3000, 2: 2000, 3: 1000}
 VOTER_MEDAL = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-FOLLOWUP_DELAY_SEC = 0.9   # gegen Rate-Limits bei großen Rankings
+# Performance
+VOTER_FETCH_CONCURRENCY = 20      # Parallele reaction.users()-Requests
+DETAIL_EMBEDS_PER_MSG = 5         # Discord erlaubt bis zu 10 pro Message
+FOLLOWUP_DELAY_SEC = 0.3          # Pacing zwischen Followup-Sends
 
 TOPUSER_CHOICES = [
     app_commands.Choice(name="Top 5", value="5"),
@@ -161,10 +164,8 @@ def get_image_url_from_post(msg: discord.Message) -> Optional[str]:
 def build_position_maps(
     per_channel: dict[int, list[discord.Message]],
 ) -> tuple[dict[int, list[discord.Message]], dict[int, discord.Message]]:
-    """Position-basiertes Matching:
-      Alle Videos zwischen zwei Bildern gehören zum vorherigen Bild-Post
-      (im selben Channel, chronologisch aufsteigend).
-    """
+    """Alle Videos zwischen zwei Bildern gehören zum vorherigen Bild
+    (im selben Channel, chronologisch aufsteigend)."""
     img_to_videos: dict[int, list[discord.Message]] = {}
     video_to_img: dict[int, discord.Message] = {}
     for _cid, msgs in per_channel.items():
@@ -184,12 +185,12 @@ async def collect_voter_counts(
     msgs: list[discord.Message],
     guild: discord.Guild,
 ) -> dict[int, int]:
-    """Zählt Reactions pro User.
-    Filter:
-      - Bots raus
-      - User in IGNORE_IDS raus
-      - Mitglieder mit VOTER_EXCLUDED_ROLE_ID raus
-      - STARBOARD-Emoji wird nicht mitgezählt
+    """Parallel + smart. Filter:
+       - Bots raus
+       - IGNORE_IDS raus
+       - Mitglieder mit VOTER_EXCLUDED_ROLE_ID raus
+       - STARBOARD-Emoji ignoriert
+       - Bekannte Voting-Emojis mit count<=1 = nur Bot-Vorreaktion → skip API-Call
     """
     counts: dict[int, int] = {}
     excluded_cache: dict[int, bool] = {}
@@ -207,20 +208,36 @@ async def collect_voter_counts(
         excluded_cache[uid] = False
         return False
 
-    for msg in msgs:
-        for reaction in msg.reactions:
-            key = normalize_emoji(reaction)
-            if str(key) == str(STARBOARD_IGNORE_ID):
-                continue
-            try:
-                async for user in reaction.users():
-                    if user.bot:
-                        continue
-                    if is_excluded(user.id):
-                        continue
-                    counts[user.id] = counts.get(user.id, 0) + 1
-            except Exception:
-                logger.exception("Fehler beim Laden von Reaction-Usern")
+    sem = asyncio.Semaphore(VOTER_FETCH_CONCURRENCY)
+
+    async def process_msg(msg: discord.Message) -> dict[int, int]:
+        local: dict[int, int] = {}
+        async with sem:
+            for reaction in msg.reactions:
+                key = normalize_emoji(reaction)
+                if str(key) == str(STARBOARD_IGNORE_ID):
+                    continue
+                # Wenn bekanntes Voting-Emoji nur die Bot-Vorreaktion hat, kein API-Call.
+                if key in EMOJI_POINTS and reaction.count <= 1:
+                    continue
+                try:
+                    async for user in reaction.users():
+                        if user.bot:
+                            continue
+                        if is_excluded(user.id):
+                            continue
+                        local[user.id] = local.get(user.id, 0) + 1
+                except Exception:
+                    logger.exception("Fehler bei reaction.users()")
+        return local
+
+    results = await asyncio.gather(
+        *(process_msg(m) for m in msgs), return_exceptions=True
+    )
+    for r in results:
+        if isinstance(r, dict):
+            for uid, c in r.items():
+                counts[uid] = counts.get(uid, 0) + c
     return counts
 
 
@@ -228,10 +245,9 @@ def compute_voter_ranks(counts: dict[int, int]) -> list[tuple[int, int, int]]:
     """Dense-Ranking mit Cap auf 3 Ränge (mehrere User pro Rang möglich).
 
     Beispiele:
-      counts.values() =
-        [10,10,10,10]      -> 4× Rang 1
-        [10,8,5,3]         -> Rang 1, 2, 3 (der 3er fällt raus)
-        [10,10,8,5,5,5,3]  -> 2× Rang 1, 1× Rang 2, 3× Rang 3
+      [10,10,10,10]      -> 4× Rang 1
+      [10,8,5,3]         -> Rang 1, 2, 3 (der 3er fällt raus)
+      [10,10,8,5,5,5,3]  -> 2× Rang 1, 1× Rang 2, 3× Rang 3
 
     Rückgabe: Liste (rank, user_id, count).
     """
@@ -523,9 +539,11 @@ class HutVote(commands.Cog):
 
         # --- Score-Berechnung + Sort ---
         stats = {m.id: calc_ai_points(m) for m in msgs}
+
         def sort_key(m):
             s, _, e = stats[m.id]
             return s, e, m.created_at
+
         ranked = sorted(msgs, key=sort_key, reverse=True)
 
         # Ties auf (score, emoji_total)
@@ -573,7 +591,7 @@ class HutVote(commands.Cog):
         if not winners_txt:
             winners_txt = "—\n"
 
-        # --- Top 3 Voters (Dense-Rank, Ties zulässig) ---
+        # --- Top 3 Voters ---
         voter_ranks = compute_voter_ranks(voter_counts)
         voters_txt = ""
         for rank, uid, cnt in voter_ranks:
@@ -599,7 +617,16 @@ class HutVote(commands.Cog):
 
         top_user_ids = [get_target_user(m).id for m in top_unique]
 
-        # --- Detail-Embeds ---
+        # --- Detail-Embeds (gebündelt) ---
+        detail_batch: list[discord.Embed] = []
+
+        async def flush_batch():
+            if detail_batch:
+                await self._paced_send(
+                    interaction, embeds=list(detail_batch), ephemeral=ephemeral
+                )
+                detail_batch.clear()
+
         for m in display_msgs:
             u = get_target_user(m)
             score, breakdown, emoji_total = stats[m.id]
@@ -608,14 +635,12 @@ class HutVote(commands.Cog):
             medal = medals[top_user_ids.index(u.id)] if u.id in top_user_ids else ""
             tie_suffix = f" ({emoji_total} 📊)" if (score, emoji_total) in tied_keys else ""
 
-            # Reaction-Breakdown
             lines = []
             for k, d in breakdown.items():
                 lbl = "📝" if k == "Various" else str(guild.get_emoji(k) or k)
                 lines.append(f"{lbl} × {d['votes']} → {d['points']} pts")
             detail_text = "\n".join(lines) if lines else "_Keine Reaktionen_"
 
-            # Links
             links = f"[Jump to Post 🎖️(**VOTE**🎖️)]({m.jump_url})"
             if kind == "image":
                 vids = img_to_videos.get(m.id, [])
@@ -639,19 +664,22 @@ class HutVote(commands.Cog):
             embed.set_thumbnail(url=u.display_avatar.url)
             embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
 
-            # Image
+            # Bild: bei /ai_vote das Bild des Posts, bei /ai_video das Bild des Source-Posts
             image_url = None
             if kind == "image":
                 image_url = get_image_url_from_post(m)
             else:
-                # Video-Ranking → das Bild des Quell-Posts (= First Frame)
                 src = video_to_img.get(m.id)
                 if src:
                     image_url = get_image_url_from_post(src)
             if image_url:
                 embed.set_image(url=image_url)
 
-            await self._paced_send(interaction, embed=embed, ephemeral=ephemeral)
+            detail_batch.append(embed)
+            if len(detail_batch) >= DETAIL_EMBEDS_PER_MSG:
+                await flush_batch()
+
+        await flush_batch()
 
         # --- Final Summary ---
         if top_unique or voter_ranks:
