@@ -1102,7 +1102,7 @@ VENICE_VIDEO_I2V_MODEL_LTX = env_str(
 #                            request time via closest_aspect_ratio()
 VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     VENICE_VIDEO_I2V_MODEL_ENHANCED: {
-        "button_label": "🔞 Animate",
+        "button_label": "🔞 Animate (WAN 2.7)",
         "button_style": discord.ButtonStyle.danger,
         "resolution": "720p",
         "durations": [5, 10, 15],
@@ -1110,7 +1110,7 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "allowed_aspect_ratios": None,
     },
     VENICE_VIDEO_I2V_MODEL_STANDARD: {
-        "button_label": "🎬 Animate",
+        "button_label": "🎬 Animate (WAN 2.7)",
         "button_style": discord.ButtonStyle.primary,
         "resolution": "720p",
         "durations": [5, 10, 15],
@@ -1118,7 +1118,7 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "allowed_aspect_ratios": None,
     },
     VENICE_VIDEO_I2V_MODEL_LTX: {
-        "button_label": "💎 Animate HQ",
+        "button_label": "💎 Animate HQ (LTX 2.3)",
         "button_style": discord.ButtonStyle.success,
         "resolution": "1080p",
         "durations": [6, 8, 10],
