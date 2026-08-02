@@ -1,4 +1,5 @@
 # hut_vote_cog.py
+import asyncio
 import logging
 import calendar
 import re
@@ -65,13 +66,16 @@ EMOJI_POINTS = {
 
 IGNORE_IDS = {1292194320786522223}
 
+# Rate-Limit-Pacing für Followups (Discord Webhook ~5/5s)
+FOLLOWUP_DELAY_SEC = 0.9
+
 
 # =========================================================
 # POST DETECTOR
 # ---------------------------------------------------------
-# WICHTIG: Wenn sich das Aussehen von Video-Posts ändert
+# WICHTIG: Wenn sich das Aussehen der Video-Posts ändert
 # (Content-String, Attachment-Format, Embed-Struktur),
-# NUR DIESE KLASSE anpassen. Der Rest des Cogs bleibt intakt.
+# NUR DIESE KLASSE anpassen.
 # =========================================================
 class VideoPostDetector:
     """Erkennung & Metadaten-Extraktion für Video-Posts.
@@ -83,45 +87,45 @@ class VideoPostDetector:
       - mentions[0] ist der User, für den das Video generiert wurde
     """
 
-    # ---- Erkennung ----
-    VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".m4v")
-    CONTENT_MARKERS  = ("🎬",)
-    CONTENT_HINTS    = ("click to play", "video")
-
-    # ---- Metadaten ----
-    PROMPT_FIELD_NAMES = ("prompt",)   # embed field name (case-insensitive)
+    VIDEO_EXTENSIONS   = (".mp4", ".webm", ".mov", ".mkv", ".m4v")
+    CONTENT_MARKERS    = ("🎬",)
+    CONTENT_HINTS      = ("click to play", "video")
+    PROMPT_FIELD_NAMES = ("prompt",)   # case-insensitive
 
     @classmethod
     def is_video_post(cls, msg: discord.Message) -> bool:
-        """True, wenn diese Bot-Nachricht ein Video-Post ist.
-
-        Primär:   Attachment (Content-Type oder Dateiendung).
-        Sekundär: Content-Marker + mindestens ein Attachment (Fallback).
-        """
-        # 1) Attachment-basiert (stärkstes Signal)
         for att in msg.attachments:
             if att.content_type and att.content_type.startswith("video/"):
                 return True
             if (att.filename or "").lower().endswith(cls.VIDEO_EXTENSIONS):
                 return True
-
-        # 2) Fallback: Content-Marker + irgendein Attachment
         if not msg.attachments:
             return False
         content = msg.content or ""
         content_lower = content.lower()
         has_marker = any(m in content for m in cls.CONTENT_MARKERS)
-        has_hint = any(h in content_lower for h in cls.CONTENT_HINTS)
+        has_hint   = any(h in content_lower for h in cls.CONTENT_HINTS)
         return has_marker and has_hint
 
     @classmethod
+    def get_video_url(cls, msg: discord.Message) -> Optional[str]:
+        for att in msg.attachments:
+            is_video = (
+                (att.content_type and att.content_type.startswith("video/"))
+                or (att.filename or "").lower().endswith(cls.VIDEO_EXTENSIONS)
+            )
+            if is_video:
+                return att.url
+        return None
+
+    @classmethod
     def extract_prompt(cls, msg: discord.Message) -> Optional[str]:
-        """Prompt aus Embed-Feld 'Prompt' (Code-Block entfernt)."""
         for embed in msg.embeds:
             for field in embed.fields:
                 name = (field.name or "").strip().lower()
                 if name in cls.PROMPT_FIELD_NAMES:
                     text = (field.value or "").strip()
+                    # ```lang\ntext\n``` -> text
                     text = re.sub(r"^```[a-zA-Z0-9]*\s*", "", text)
                     text = re.sub(r"\s*```$", "", text)
                     return text.strip() or None
@@ -134,12 +138,37 @@ class VideoPostDetector:
         return msg.author.id if msg.author else None
 
 
-def prompt_signature(text: str, length: int = 200) -> str:
-    """Normalisiert einen Prompt zum Matchen (Whitespace, Case, Länge)."""
+def _prompt_signatures(text: str) -> list[str]:
+    """Progressiv lockere Signaturen für Bild↔Video-Matching.
+
+    Reihenfolge: strengste zuerst. Bei mehreren Levels wird das ERSTE Match
+    verwendet — je enger, desto zuverlässiger.
+    """
     if not text:
-        return ""
+        return []
+
+    # Ebene 1: Whitespace normalisiert, lowercase, erste 200 Zeichen
     normalized = " ".join(text.split()).lower()
-    return normalized[:length]
+
+    # Ebene 2: nur Alphanumerisch (ignoriert Markdown-Reste, Sonderzeichen)
+    alphanum = re.sub(r"[^a-z0-9\s]", "", normalized)
+    alphanum = " ".join(alphanum.split())
+
+    variants = [
+        normalized[:200],
+        normalized[:80],
+        alphanum[:150],
+        alphanum[:60],
+    ]
+
+    # Dedup mit Reihenfolgen-Erhalt, leere Strings raus
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in variants:
+        if v and v not in seen and len(v) >= 8:
+            seen.add(v)
+            out.append(v)
+    return out
 
 
 # =====================
@@ -158,10 +187,8 @@ def calc_ai_points(msg: discord.Message):
 
     for reaction in msg.reactions:
         key = normalize_emoji(reaction)
-
         if str(key) == str(STARBOARD_IGNORE_ID):
             continue
-
         votes = reaction.count
 
         if key in EMOJI_POINTS:
@@ -202,31 +229,53 @@ def build_image_to_video_map(
 ) -> dict[int, discord.Message]:
     """Verknüpft Bild-Posts mit ihrem Video-Post via (user_id, prompt_signature).
 
-    Bei mehreren passenden Videos wird das ZEITLICH FRÜHESTE gewählt.
-    Videos müssen NACH dem Bild kommen.
+    Multi-Level: Level 0 = striktes 200-Zeichen-Match, Level N = alphanumerisch
+    gekürzt. Erstes Level gewinnt. Videos müssen NACH dem Bild kommen.
     """
-    video_index: dict[tuple[int, str], discord.Message] = {}
+    MAX_LEVELS = 4
+    indexes: list[dict[tuple[int, str], discord.Message]] = [
+        {} for _ in range(MAX_LEVELS)
+    ]
+
     for v in video_msgs:
         uid = VideoPostDetector.extract_target_user_id(v)
         prm = VideoPostDetector.extract_prompt(v)
         if uid is None or not prm:
             continue
-        sig = prompt_signature(prm)
-        key = (uid, sig)
-        prev = video_index.get(key)
-        if prev is None or v.created_at < prev.created_at:
-            video_index[key] = v
+        for level, sig in enumerate(_prompt_signatures(prm)):
+            if level >= MAX_LEVELS:
+                break
+            key = (uid, sig)
+            prev = indexes[level].get(key)
+            if prev is None or v.created_at < prev.created_at:
+                indexes[level][key] = v
 
     mapping: dict[int, discord.Message] = {}
+    unmatched = 0
     for img in image_msgs:
         uid = VideoPostDetector.extract_target_user_id(img)
         prm = VideoPostDetector.extract_prompt(img)
         if uid is None or not prm:
             continue
-        sig = prompt_signature(prm)
-        v = video_index.get((uid, sig))
-        if v and v.created_at >= img.created_at:
-            mapping[img.id] = v
+        found: Optional[discord.Message] = None
+        for level, sig in enumerate(_prompt_signatures(prm)):
+            if level >= MAX_LEVELS:
+                break
+            v = indexes[level].get((uid, sig))
+            if v and v.created_at >= img.created_at:
+                found = v
+                break
+        if found:
+            mapping[img.id] = found
+        else:
+            unmatched += 1
+
+    if unmatched:
+        logger.info(
+            "Image↔Video-Match: %d/%d Bilder ohne passendes Video (das ist normal, "
+            "wenn zu diesen Bildern nie animiert wurde).",
+            unmatched, len(image_msgs),
+        )
     return mapping
 
 
@@ -255,7 +304,7 @@ class HutVote(commands.Cog):
         start: Optional[datetime] = None,
         end_exclusive: Optional[datetime] = None,
     ) -> list[discord.Message]:
-        """Alle Bot-Nachrichten im Zeitraum. Kein Typ-Filter — Split kommt später."""
+        """Alle Bot-Nachrichten im Zeitraum. Kein Typ-Filter."""
         matched: list[discord.Message] = []
         after_dt = (start - timedelta(seconds=1)) if start else None
 
@@ -278,14 +327,21 @@ class HutVote(commands.Cog):
     def _split_by_type(
         msgs: list[discord.Message],
     ) -> tuple[list[discord.Message], list[discord.Message]]:
-        """Return (image_posts, video_posts)."""
         images, videos = [], []
         for m in msgs:
             (videos if VideoPostDetector.is_video_post(m) else images).append(m)
         return images, videos
 
+    async def _paced_send(self, interaction: discord.Interaction, **kwargs):
+        """Followup mit kleiner Pause, um Discord Rate-Limit zu entlasten."""
+        try:
+            await interaction.followup.send(**kwargs)
+        except discord.HTTPException:
+            logger.exception("Followup send failed")
+        await asyncio.sleep(FOLLOWUP_DELAY_SEC)
+
     # =====================================================
-    # /ai_vote — Monatliches Bild-Ranking, mehrere Channels
+    # /ai_vote — Monatliches Bild-Ranking über alle Channels
     # =====================================================
     @app_commands.command(name="ai_vote", description="Shows AI image ranking by reactions")
     @app_commands.guild_only()
@@ -338,6 +394,10 @@ class HutVote(commands.Cog):
             )
 
         img_to_video = build_image_to_video_map(image_msgs, video_msgs)
+        logger.info(
+            "/ai_vote %s %s: %d Bilder, %d Videos, %d Verknüpfungen.",
+            year_v, month_v, len(image_msgs), len(video_msgs), len(img_to_video),
+        )
 
         await self._render_ranking(
             interaction=interaction,
@@ -412,7 +472,7 @@ class HutVote(commands.Cog):
         )
 
     # =====================================================
-    # /ai_video — Monatliches Video-Ranking, mehrere Channels
+    # /ai_video — Monatliches Video-Ranking
     # =====================================================
     @app_commands.command(name="ai_video", description="Shows AI video ranking by reactions")
     @app_commands.guild_only()
@@ -472,7 +532,6 @@ class HutVote(commands.Cog):
             limit=int(topuser.value) if topuser else 5,
             sort_order=sort.value if sort else "asc",
             kind="video",
-            image_to_video_map=None,
         )
 
     # =====================================================
@@ -531,7 +590,6 @@ class HutVote(commands.Cog):
             limit=int(topuser.value) if topuser else 5,
             sort_order=sort.value if sort else "asc",
             kind="video",
-            image_to_video_map=None,
         )
 
     # =====================================================
@@ -571,7 +629,7 @@ class HutVote(commands.Cog):
         # asc = 1 -> X, desc = X -> 1
         display_msgs = top_msgs if sort_order == "asc" else list(reversed(top_msgs))
 
-        # Rank-Map (echte Rangfolge mit Ties auf Score + EmojiTotal)
+        # Rang-Map mit Ties
         rank_map: dict[int, int] = {}
         last_key: Optional[tuple[int, int]] = None
         current_rank = 0
@@ -585,7 +643,7 @@ class HutVote(commands.Cog):
                 rank_map[m.id] = current_rank
                 last_key = key
 
-        # Top 3 Unique User
+        # Top 3 unique User
         top_unique: list[discord.Message] = []
         seen: set[int] = set()
         for m in ranked_msgs:
@@ -606,7 +664,8 @@ class HutVote(commands.Cog):
         now_str = datetime.now(timezone.utc).strftime("%Y/%m/%d %H:%M")
         podium_label = "Top 3 Hut Dwellers" if kind == "image" else "Top 3 Video Makers"
 
-        await interaction.followup.send(
+        await self._paced_send(
+            interaction,
             embed=discord.Embed(
                 title=title,
                 description=f"**{podium_label}:**\n{intro or '—'}",
@@ -644,16 +703,20 @@ class HutVote(commands.Cog):
                 color=discord.Color.gold() if medal else discord.Color.teal(),
             )
             embed.set_thumbnail(url=u.display_avatar.url)
+            embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
 
-            # Bild-Preview NUR wenn wir wirklich ein Bild-Attachment/Embed haben.
-            # Bei Video-Posts können wir kein Preview in ein Embed setzen.
+            send_kwargs: dict = {"embed": embed, "ephemeral": ephemeral}
+
             if kind == "image":
+                # Bild-Preview via Embed
                 image_url = None
                 if m.attachments:
                     att = m.attachments[0]
                     is_video_att = (
                         (att.content_type and att.content_type.startswith("video/"))
-                        or (att.filename or "").lower().endswith(VideoPostDetector.VIDEO_EXTENSIONS)
+                        or (att.filename or "").lower().endswith(
+                            VideoPostDetector.VIDEO_EXTENSIONS
+                        )
                     )
                     if not is_video_att:
                         image_url = att.url
@@ -664,9 +727,16 @@ class HutVote(commands.Cog):
                             break
                 if image_url:
                     embed.set_image(url=image_url)
+            else:
+                # Video-Preview: Discord kann Videos NICHT via embed.set_image
+                # anzeigen. Der einzige Weg zum inline-Player ist die
+                # Attachment-URL als message content — Discord unfurled dann
+                # selbst einen Video-Player unter dem Embed.
+                video_url = VideoPostDetector.get_video_url(m)
+                if video_url:
+                    send_kwargs["content"] = video_url
 
-            embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
-            await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+            await self._paced_send(interaction, **send_kwargs)
 
         # Final Top 3
         if top_unique:
@@ -680,7 +750,8 @@ class HutVote(commands.Cog):
                 final_lines.append(f"{medals[i]} {u.display_name} — {score} pts{tie_suffix}")
 
             final_time = datetime.now(timezone.utc).strftime("%Y/%m/%d %H:%M")
-            await interaction.followup.send(
+            await self._paced_send(
+                interaction,
                 content=" ".join(final_mentions),
                 embed=discord.Embed(
                     title=f"🏆 Final Top 3 (as of {final_time} UTC)",
