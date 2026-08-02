@@ -12,6 +12,7 @@ from riddle_core import (
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES,
     DEFAULT_IMAGE_URL, SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     VOTE_CHANNEL_ID,
+    UNSOLVED_ROTATION_HOURS,
     logger, to_int, safe_int, clean_value, is_http_url, truncate_text,
     clamp_embed_value, clamp_embed_description, extract_first_url, footer_text,
     parse_csv_role_ids, unique_role_mentions, safe_defer, member_has_role,
@@ -26,12 +27,10 @@ if TYPE_CHECKING:
 # INTERNAL HELPERS
 # =============================================================================
 def _spoiler_safe(text: str) -> str:
-    """Neutralize existing '||' so a user-controlled string can't break a spoiler wrapper."""
     return text.replace("||", "\u200b|\u200b|\u200b") if text else text
 
 
 def _first_line(text: Optional[str], max_len: int = 200) -> str:
-    """First non-empty line of a string (URLs stripped), truncated. Falls back to placeholder."""
     if not text:
         return "*no solution set*"
     body, _ = extract_first_url(text)
@@ -768,13 +767,13 @@ class VoteButtons(LoggedPersistentView):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
+
 # riddle_ui.py  (Teil 2/2)
 
 # =============================================================================
 # ADMIN PANEL  ( /riddle )
 # =============================================================================
 class _BaseSlotSelect(Select):
-    """Shared behavior for the two slot dropdowns (filled / empty)."""
     _placeholder = "Select slot"
     _kind_label = ""
 
@@ -929,6 +928,47 @@ class RiddleAdminPanelView(View):
             return "🟢 ON", discord.Color.green()
         return "🟠 OFF", discord.Color.orange()
 
+    async def _slot1_auto_move_status(self) -> Optional[str]:
+        """
+        Human-readable line describing when / whether the current Slot 1
+        riddle will be auto-moved to the end.
+        """
+        slot1_row = self.slot_map.get(1)
+        if not slot1_row:
+            return None
+
+        enabled = bool(to_int(self.state.get("is_enabled"), 0))
+        hiatus_until = self.state.get("hiatus_until") or None
+        hiatus_active = enabled and hiatus_until and iso_in_future(hiatus_until)
+
+        if not enabled:
+            return "⏸ auto-move paused (system OFF)"
+        if hiatus_active:
+            return "⏸ auto-move paused (solved hiatus)"
+
+        age_h = hours_since(slot1_row.get("first_posted_at"))
+        if age_h is None:
+            return "⏳ waiting for first post"
+
+        remaining_h = UNSOLVED_ROTATION_HOURS - age_h
+        rid_s1 = to_int(slot1_row.get("id"), 0)
+        has_pending = await self.cog.repo.has_pending_submissions_for_riddle(rid_s1)
+
+        if remaining_h > 0:
+            if has_pending:
+                return (
+                    f"🕒 auto-move in ~{remaining_h:.1f}h "
+                    f"(⚠️ pending vote(s) — will be delayed until cleared)"
+                )
+            return f"🕒 auto-move in ~{remaining_h:.1f}h"
+        # remaining_h <= 0  → timer already elapsed
+        if has_pending:
+            return (
+                f"⛔ auto-move armed (⚠️ waiting for pending vote(s) to clear "
+                f"— overdue by {abs(remaining_h):.1f}h)"
+            )
+        return f"🚨 auto-move on next tick (overdue by {abs(remaining_h):.1f}h)"
+
     async def build_embeds(self, guild: Optional[discord.Guild]) -> list[discord.Embed]:
         solved_cached = await self.cog.repo.get_cached_solved_total(self.guild_id)
         sys_val, sys_color = self._system_status_display()
@@ -942,6 +982,15 @@ class RiddleAdminPanelView(View):
         main.add_field(name="❓ Slot", value=str(self.selected_slot), inline=True)
         main.add_field(name="⁉️ Solved", value=str(solved_cached), inline=True)
 
+        # Auto-move status line (dedicated field, easy to spot)
+        auto_move_line = await self._slot1_auto_move_status()
+        if auto_move_line:
+            main.add_field(
+                name=f"⏭ Slot 1 Auto-Move (after {UNSOLVED_ROTATION_HOURS}h unsolved)",
+                value=auto_move_line,
+                inline=False,
+            )
+
         occupied = sum(1 for s in range(1, MAX_RIDDLE_SLOTS + 1) if self.slot_map.get(s))
         main.add_field(
             name="Occupancy",
@@ -949,7 +998,6 @@ class RiddleAdminPanelView(View):
             inline=False,
         )
 
-        # Compact one-line-per-slot listing using SOLUTION 1st line only
         lines: list[str] = []
         for slot in range(1, MAX_RIDDLE_SLOTS + 1):
             row = self.slot_map.get(slot)
@@ -978,13 +1026,12 @@ class RiddleAdminPanelView(View):
             inline=False,
         )
 
-        # Last info
         if self.last_info:
             main.add_field(name="ℹ️ Info", value=clamp_embed_value(self.last_info), inline=False)
 
         embeds: list[discord.Embed] = [main]
 
-        # ---------- Selected-slot preview (compact / full toggle) ----------
+        # ---------- Selected-slot preview ----------
         row = self.slot_map.get(self.selected_slot)
         if row:
             shown_no = solved_cached + self.selected_slot
@@ -1085,6 +1132,19 @@ class RiddleAdminPanelView(View):
                 pass
         self.stop()
 
+    async def _auto_disable_if_enabled(self, gid: int) -> bool:
+        """
+        Safety: any structural change from the panel while ON auto-disables the
+        system so no post churn happens while the admin is reorganizing.
+        Returns True if we actually disabled it (was previously ON).
+        """
+        if await self.cog.repo.is_enabled(gid):
+            await self.cog.repo.set_enabled(gid, False)
+            await self.cog.repo.set_hiatus_until(gid, None)
+            await self.cog.remove_active_riddle_posts(gid)
+            return True
+        return False
+
     async def handle_action(self, interaction: Interaction, action: str):
         if interaction.guild is None:
             return
@@ -1162,22 +1222,40 @@ class RiddleAdminPanelView(View):
                 self.last_info = "⚠️ Slot empty."
                 await self.safe_edit_panel()
                 return
+            was_enabled = await self._auto_disable_if_enabled(gid)
             moved = await self.cog.rotate_riddle_to_end(
                 gid, to_int(row["id"], 0), ping_new_slot1=False,
             )
-            self.last_info = "✅ Moved to end (artifacts cleaned up)." if moved else "⚠️ Move failed."
+            if not moved:
+                self.last_info = "⚠️ Move failed."
+            elif was_enabled:
+                self.last_info = (
+                    "✅ Moved to end. System auto-set to 🟠 OFF — "
+                    "use 🟢 Turn ON or 📢 Post Now to resume."
+                )
+            else:
+                self.last_info = "✅ Moved to end."
             await self.safe_edit_panel()
             return
 
         if action == "delete_slot":
             if not row:
                 self.last_info = "⚠️ Slot already empty."
-            else:
-                ok = await self.cog.close_and_cleanup_riddle(
-                    gid, to_int(row["id"], 0), interaction.user.id,
+                await self.safe_edit_panel()
+                return
+            was_enabled = await self._auto_disable_if_enabled(gid)
+            ok = await self.cog.close_and_cleanup_riddle(
+                gid, to_int(row["id"], 0), interaction.user.id,
+            )
+            if not ok:
+                self.last_info = "⚠️ Already closed."
+            elif was_enabled:
+                self.last_info = (
+                    "✅ Deleted. System auto-set to 🟠 OFF — "
+                    "use 🟢 Turn ON or 📢 Post Now to resume."
                 )
-                self.last_info = "✅ Deleted." if ok else "⚠️ Already closed."
-            await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
+            else:
+                self.last_info = "✅ Deleted."
             await self.safe_edit_panel()
             return
 
