@@ -1,8 +1,7 @@
 # riddle_ui.py  (Teil 1/2)
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Any, Optional, Literal
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord import Interaction
@@ -440,79 +439,6 @@ class RiddleImagesModal(Modal):
         await self.panel.safe_edit_panel()
 
 
-class ChampionsImportModal(Modal):
-    def __init__(self, cog: "RiddleCog", mode: Literal["merge", "replace"]):
-        super().__init__(title=f"Import Champions JSON ({mode})")
-        self.cog = cog
-        self.mode = mode
-        self.payload = TextInput(label="Paste JSON", style=discord.TextStyle.paragraph,
-                                 required=True, max_length=4000)
-        self.add_item(self.payload)
-
-    def parse_rows(self, raw: str) -> list[tuple[int, int, int]]:
-        obj = json.loads(raw)
-        rows: dict[int, tuple[int, int, int]] = {}
-
-        def put(uid: int, solved: Any, xp: Any):
-            if uid <= 0:
-                return
-            rows[uid] = (uid, max(0, to_int(solved, 0)), max(0, to_int(xp, 0)))
-
-        if isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, dict):
-                    uid = to_int(item.get("user_id") or item.get("id"), 0)
-                    put(uid, item.get("solved") or item.get("solved_riddles"), item.get("xp"))
-        elif isinstance(obj, dict):
-            if "users" in obj and isinstance(obj["users"], list):
-                for item in obj["users"]:
-                    if isinstance(item, dict):
-                        uid = to_int(item.get("user_id") or item.get("id"), 0)
-                        put(uid, item.get("solved") or item.get("solved_riddles"), item.get("xp"))
-            else:
-                for k, v in obj.items():
-                    uid = to_int(k, 0)
-                    if isinstance(v, dict):
-                        put(uid, v.get("solved") or v.get("solved_riddles"), v.get("xp"))
-                    elif isinstance(v, (list, tuple)) and len(v) >= 2:
-                        put(uid, v[0], v[1])
-        return list(rows.values())
-
-    async def on_submit(self, interaction: Interaction):
-        if interaction.guild is None:
-            return
-        if not await safe_defer(interaction, ephemeral=True):
-            return
-        try:
-            incoming = self.parse_rows(self.payload.value or "")
-        except Exception as e:
-            await interaction.followup.send(f"❌ JSON parse error: {e}", ephemeral=True)
-            return
-        filtered: list[tuple[int, int, int]] = []
-        for uid, solved, xp in incoming:
-            if await self.cog.user_is_excluded(interaction.guild, uid):
-                continue
-            filtered.append((uid, solved, xp))
-        if self.mode == "replace":
-            await self.cog.repo.replace_user_stats(interaction.guild.id, filtered)
-        else:
-            current = {uid: (uid, solved, xp)
-                       for uid, solved, xp in await self.cog.repo.stats_entries(interaction.guild.id)}
-            for uid, solved, xp in filtered:
-                if uid in current:
-                    _, s0, x0 = current[uid]
-                    current[uid] = (uid, s0 + solved, x0 + xp)
-                else:
-                    current[uid] = (uid, solved, xp)
-            await self.cog.repo.replace_user_stats(interaction.guild.id, list(current.values()))
-        await self.cog.rebuild_cached_solved_total_for_guild(interaction.guild.id)
-        await self.cog.sync_open_slot_numbers_for_guild(interaction.guild.id)
-        await interaction.followup.send(
-            f"✅ Import done ({len(filtered)} rows used, excluded users filtered out).",
-            ephemeral=True,
-        )
-
-
 # =============================================================================
 # PING ROLES PICKER
 # =============================================================================
@@ -767,7 +693,6 @@ class VoteButtons(LoggedPersistentView):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
-
 # riddle_ui.py  (Teil 2/2)
 
 # =============================================================================
