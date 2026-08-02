@@ -16,6 +16,11 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN fehlt in .env")
 
+# One-shot: setze in .env FORCE_CLEAR_COMMANDS=1, starte den Bot einmal,
+# entferne das Flag danach wieder. Löscht ALLE global registrierten Commands
+# bei Discord und registriert danach nur die neu, die aktuell im Tree sind.
+FORCE_CLEAR_COMMANDS = os.getenv("FORCE_CLEAR_COMMANDS", "0") == "1"
+
 # -----------------------------------------------------------
 # Intents
 # -----------------------------------------------------------
@@ -51,16 +56,52 @@ async def on_ready():
     global synced_once
     print(f"✅ Bot connected as {bot.user}!")
 
-    if not synced_once:
-        try:
-            print("🌍 Syncing commands globally...")
-            synced = await tree.sync()
-            print(f"✅ Synced {len(synced)} global command(s).")
-        except Exception:
-            print("❌ Failed to sync commands:")
-            traceback.print_exc()
+    if synced_once:
+        return
 
-        synced_once = True
+    # Snapshot der aktuell im Tree registrierten Commands.
+    # Wir müssen sie nach dem Clear wieder einzeln hinzufügen,
+    # weil clear_commands() alles aus dem lokalen Tree wirft.
+    try:
+        current_cmds = list(tree.get_commands())
+    except Exception:
+        current_cmds = []
+        traceback.print_exc()
+
+    try:
+        if FORCE_CLEAR_COMMANDS:
+            print("🧹 FORCE_CLEAR_COMMANDS=1 → wiping all global commands at Discord ...")
+            tree.clear_commands(guild=None)
+            wiped = await tree.sync()
+            print(f"✅ Wiped. Discord now reports {len(wiped)} global command(s).")
+
+            # kurze Pause, damit Discord die Änderung verdauen kann
+            await asyncio.sleep(3)
+
+            # Commands zurück in den Tree legen und erneut syncen
+            print("♻️ Re-registering current commands into tree ...")
+            for c in current_cmds:
+                try:
+                    tree.add_command(c)
+                except Exception:
+                    print(f"⚠️ Could not re-add command {getattr(c, 'name', '?')}:")
+                    traceback.print_exc()
+
+        print("🌍 Syncing commands globally...")
+        synced = await tree.sync()
+        print(f"✅ Synced {len(synced)} global command(s).")
+
+        if FORCE_CLEAR_COMMANDS:
+            print(
+                "ℹ️ Ghost-command cleanup done. "
+                "Setze FORCE_CLEAR_COMMANDS zurück auf 0 in .env, "
+                "damit der nächste Start wieder normal ist."
+            )
+    except Exception:
+        print("❌ Failed to sync commands:")
+        traceback.print_exc()
+
+    synced_once = True
 
 # -----------------------------------------------------------
 # MAIN – load all extensions & start bot with retry handling
@@ -138,3 +179,4 @@ if __name__ == "__main__":
     except Exception:
         print("❌ Unexpected error in main loop:")
         traceback.print_exc()
+    
