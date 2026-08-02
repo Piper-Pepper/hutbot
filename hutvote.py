@@ -1,8 +1,7 @@
-# hut_vote_cog.py
+# hut_vote_cog.py — Teil 1/2
 import asyncio
 import logging
 import calendar
-import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -10,15 +9,14 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-# =====================
-# LOGGING
-# =====================
 logger = logging.getLogger(__name__)
 
 # =====================
 # KONFIG
 # =====================
 ALLOWED_ROLE_IDS = {1346414581643219029, 1346428405368750122}
+VOTER_EXCLUDED_ROLE_ID = 1346414581643219029   # Deren Reactions zählen NICHT
+
 BOT_ID = 1379906834588106883
 
 SCAN_CHANNEL_IDS = [
@@ -28,34 +26,10 @@ SCAN_CHANNEL_IDS = [
     1416267383160442901,
     1416468498305126522,
 ]
-
 DEFAULT_CONTEST_CHANNEL_ID = 1461752750550552741
 
 CUSTOM_5_EMOJI_ID = 1346549711817146400
 STARBOARD_IGNORE_ID = 1346549688836296787
-
-TOPUSER_CHOICES = [
-    app_commands.Choice(name="Top 5", value="5"),
-    app_commands.Choice(name="Top 10", value="10"),
-    app_commands.Choice(name="Top 20", value="20"),
-    app_commands.Choice(name="Top 40", value="40"),
-]
-
-SORT_CHOICES = [
-    app_commands.Choice(name="Ascending (1 → X)", value="asc"),
-    app_commands.Choice(name="Descending (X → 1)", value="desc"),
-]
-
-current_year = datetime.now(timezone.utc).year
-YEAR_CHOICES = [
-    app_commands.Choice(name=str(current_year), value=str(current_year)),
-    app_commands.Choice(name=str(current_year - 1), value=str(current_year - 1)),
-]
-
-MONTH_CHOICES = [
-    app_commands.Choice(name=calendar.month_name[i], value=str(i))
-    for i in range(1, 13)
-]
 
 EMOJI_POINTS = {
     "1️⃣": 1,
@@ -63,112 +37,62 @@ EMOJI_POINTS = {
     "3️⃣": 3,
     CUSTOM_5_EMOJI_ID: 5,
 }
-
 IGNORE_IDS = {1292194320786522223}
 
-# Rate-Limit-Pacing für Followups (Discord Webhook ~5/5s)
-FOLLOWUP_DELAY_SEC = 0.9
+# Voter-XP nach Dense-Rank (max 3 Ränge, mehrere User pro Rang möglich)
+VOTER_XP = {1: 3000, 2: 2000, 3: 1000}
+VOTER_MEDAL = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+FOLLOWUP_DELAY_SEC = 0.9   # gegen Rate-Limits bei großen Rankings
+
+TOPUSER_CHOICES = [
+    app_commands.Choice(name="Top 5", value="5"),
+    app_commands.Choice(name="Top 10", value="10"),
+    app_commands.Choice(name="Top 20", value="20"),
+    app_commands.Choice(name="Top 40", value="40"),
+]
+SORT_CHOICES = [
+    app_commands.Choice(name="Ascending (1 → X)", value="asc"),
+    app_commands.Choice(name="Descending (X → 1)", value="desc"),
+]
+current_year = datetime.now(timezone.utc).year
+YEAR_CHOICES = [
+    app_commands.Choice(name=str(current_year), value=str(current_year)),
+    app_commands.Choice(name=str(current_year - 1), value=str(current_year - 1)),
+]
+MONTH_CHOICES = [
+    app_commands.Choice(name=calendar.month_name[i], value=str(i))
+    for i in range(1, 13)
+]
 
 
 # =========================================================
 # POST DETECTOR
 # ---------------------------------------------------------
-# WICHTIG: Wenn sich das Aussehen der Video-Posts ändert
-# (Content-String, Attachment-Format, Embed-Struktur),
-# NUR DIESE KLASSE anpassen.
+# NUR HIER anpassen, wenn sich Video-Posts im Aussehen ändern.
 # =========================================================
 class VideoPostDetector:
-    """Erkennung & Metadaten-Extraktion für Video-Posts.
-
-    Aktuelles Format (v1):
-      - Content:   "<icon> 🎬 **Video** • @user • ▶ **CLICK TO PLAY**"
-      - Attachment: AI_video.mp4 (content_type video/*)
-      - Embed hat ein Feld "Prompt" mit dem Original-Prompt in ```code```
-      - mentions[0] ist der User, für den das Video generiert wurde
-    """
-
-    VIDEO_EXTENSIONS   = (".mp4", ".webm", ".mov", ".mkv", ".m4v")
-    CONTENT_MARKERS    = ("🎬",)
-    CONTENT_HINTS      = ("click to play", "video")
-    PROMPT_FIELD_NAMES = ("prompt",)   # case-insensitive
+    VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".m4v")
+    CONTENT_MARKERS  = ("🎬",)
+    CONTENT_HINTS    = ("click to play", "video")
 
     @classmethod
     def is_video_post(cls, msg: discord.Message) -> bool:
+        # Primär: Attachment
         for att in msg.attachments:
             if att.content_type and att.content_type.startswith("video/"):
                 return True
             if (att.filename or "").lower().endswith(cls.VIDEO_EXTENSIONS):
                 return True
+        # Fallback: Content-Marker + Attachment
         if not msg.attachments:
             return False
         content = msg.content or ""
-        content_lower = content.lower()
-        has_marker = any(m in content for m in cls.CONTENT_MARKERS)
-        has_hint   = any(h in content_lower for h in cls.CONTENT_HINTS)
-        return has_marker and has_hint
-
-    @classmethod
-    def get_video_url(cls, msg: discord.Message) -> Optional[str]:
-        for att in msg.attachments:
-            is_video = (
-                (att.content_type and att.content_type.startswith("video/"))
-                or (att.filename or "").lower().endswith(cls.VIDEO_EXTENSIONS)
-            )
-            if is_video:
-                return att.url
-        return None
-
-    @classmethod
-    def extract_prompt(cls, msg: discord.Message) -> Optional[str]:
-        for embed in msg.embeds:
-            for field in embed.fields:
-                name = (field.name or "").strip().lower()
-                if name in cls.PROMPT_FIELD_NAMES:
-                    text = (field.value or "").strip()
-                    # ```lang\ntext\n``` -> text
-                    text = re.sub(r"^```[a-zA-Z0-9]*\s*", "", text)
-                    text = re.sub(r"\s*```$", "", text)
-                    return text.strip() or None
-        return None
-
-    @classmethod
-    def extract_target_user_id(cls, msg: discord.Message) -> Optional[int]:
-        if msg.mentions:
-            return msg.mentions[0].id
-        return msg.author.id if msg.author else None
-
-
-def _prompt_signatures(text: str) -> list[str]:
-    """Progressiv lockere Signaturen für Bild↔Video-Matching.
-
-    Reihenfolge: strengste zuerst. Bei mehreren Levels wird das ERSTE Match
-    verwendet — je enger, desto zuverlässiger.
-    """
-    if not text:
-        return []
-
-    # Ebene 1: Whitespace normalisiert, lowercase, erste 200 Zeichen
-    normalized = " ".join(text.split()).lower()
-
-    # Ebene 2: nur Alphanumerisch (ignoriert Markdown-Reste, Sonderzeichen)
-    alphanum = re.sub(r"[^a-z0-9\s]", "", normalized)
-    alphanum = " ".join(alphanum.split())
-
-    variants = [
-        normalized[:200],
-        normalized[:80],
-        alphanum[:150],
-        alphanum[:60],
-    ]
-
-    # Dedup mit Reihenfolgen-Erhalt, leere Strings raus
-    seen: set[str] = set()
-    out: list[str] = []
-    for v in variants:
-        if v and v not in seen and len(v) >= 8:
-            seen.add(v)
-            out.append(v)
-    return out
+        cl = content.lower()
+        return (
+            any(m in content for m in cls.CONTENT_MARKERS)
+            and any(h in cl for h in cls.CONTENT_HINTS)
+        )
 
 
 # =====================
@@ -184,100 +108,160 @@ def calc_ai_points(msg: discord.Message):
     breakdown = {}
     score = 0
     emoji_total = 0
-
     for reaction in msg.reactions:
         key = normalize_emoji(reaction)
         if str(key) == str(STARBOARD_IGNORE_ID):
             continue
         votes = reaction.count
-
         if key in EMOJI_POINTS:
-            extra_votes = max(votes - 1, 0)   # Bot-Vorreaktion abziehen
-            if extra_votes <= 0:
+            extra = max(votes - 1, 0)   # Bot-Vorreaktion abziehen
+            if extra <= 0:
                 continue
-            points = extra_votes * EMOJI_POINTS[key]
-            breakdown[key] = {"votes": extra_votes, "points": points}
+            points = extra * EMOJI_POINTS[key]
+            breakdown[key] = {"votes": extra, "points": points}
             score += points
-            emoji_total += extra_votes
+            emoji_total += extra
         else:
-            points = votes
             breakdown.setdefault("Various", {"votes": 0, "points": 0})
             breakdown["Various"]["votes"] += votes
-            breakdown["Various"]["points"] += points
-            score += points
+            breakdown["Various"]["points"] += votes
+            score += votes
             emoji_total += votes
-
     return score, breakdown, emoji_total
 
 
 def get_month_utc_range(year: int, month: int):
     start = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
-        end_exclusive = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
     else:
-        end_exclusive = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-    return start, end_exclusive
+        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    return start, end
 
 
 def get_target_user(msg: discord.Message):
     return msg.mentions[0] if msg.mentions else msg.author
 
 
-def build_image_to_video_map(
-    image_msgs: list[discord.Message],
-    video_msgs: list[discord.Message],
-) -> dict[int, discord.Message]:
-    """Verknüpft Bild-Posts mit ihrem Video-Post via (user_id, prompt_signature).
-
-    Multi-Level: Level 0 = striktes 200-Zeichen-Match, Level N = alphanumerisch
-    gekürzt. Erstes Level gewinnt. Videos müssen NACH dem Bild kommen.
-    """
-    MAX_LEVELS = 4
-    indexes: list[dict[tuple[int, str], discord.Message]] = [
-        {} for _ in range(MAX_LEVELS)
-    ]
-
-    for v in video_msgs:
-        uid = VideoPostDetector.extract_target_user_id(v)
-        prm = VideoPostDetector.extract_prompt(v)
-        if uid is None or not prm:
-            continue
-        for level, sig in enumerate(_prompt_signatures(prm)):
-            if level >= MAX_LEVELS:
-                break
-            key = (uid, sig)
-            prev = indexes[level].get(key)
-            if prev is None or v.created_at < prev.created_at:
-                indexes[level][key] = v
-
-    mapping: dict[int, discord.Message] = {}
-    unmatched = 0
-    for img in image_msgs:
-        uid = VideoPostDetector.extract_target_user_id(img)
-        prm = VideoPostDetector.extract_prompt(img)
-        if uid is None or not prm:
-            continue
-        found: Optional[discord.Message] = None
-        for level, sig in enumerate(_prompt_signatures(prm)):
-            if level >= MAX_LEVELS:
-                break
-            v = indexes[level].get((uid, sig))
-            if v and v.created_at >= img.created_at:
-                found = v
-                break
-        if found:
-            mapping[img.id] = found
-        else:
-            unmatched += 1
-
-    if unmatched:
-        logger.info(
-            "Image↔Video-Match: %d/%d Bilder ohne passendes Video (das ist normal, "
-            "wenn zu diesen Bildern nie animiert wurde).",
-            unmatched, len(image_msgs),
+def get_image_url_from_post(msg: discord.Message) -> Optional[str]:
+    if msg.attachments:
+        att = msg.attachments[0]
+        is_video = (
+            (att.content_type and att.content_type.startswith("video/"))
+            or (att.filename or "").lower().endswith(VideoPostDetector.VIDEO_EXTENSIONS)
         )
-    return mapping
+        if not is_video:
+            return att.url
+    for e in msg.embeds:
+        if e.image and e.image.url:
+            return e.image.url
+    return None
 
+
+def build_position_maps(
+    per_channel: dict[int, list[discord.Message]],
+) -> tuple[dict[int, list[discord.Message]], dict[int, discord.Message]]:
+    """Position-basiertes Matching:
+      Alle Videos zwischen zwei Bildern gehören zum vorherigen Bild-Post
+      (im selben Channel, chronologisch aufsteigend).
+    """
+    img_to_videos: dict[int, list[discord.Message]] = {}
+    video_to_img: dict[int, discord.Message] = {}
+    for _cid, msgs in per_channel.items():
+        msgs_sorted = sorted(msgs, key=lambda m: m.created_at)
+        current_img: Optional[discord.Message] = None
+        for m in msgs_sorted:
+            if VideoPostDetector.is_video_post(m):
+                if current_img is not None:
+                    img_to_videos.setdefault(current_img.id, []).append(m)
+                    video_to_img[m.id] = current_img
+            else:
+                current_img = m
+    return img_to_videos, video_to_img
+
+
+async def collect_voter_counts(
+    msgs: list[discord.Message],
+    guild: discord.Guild,
+) -> dict[int, int]:
+    """Zählt Reactions pro User.
+    Filter:
+      - Bots raus
+      - User in IGNORE_IDS raus
+      - Mitglieder mit VOTER_EXCLUDED_ROLE_ID raus
+      - STARBOARD-Emoji wird nicht mitgezählt
+    """
+    counts: dict[int, int] = {}
+    excluded_cache: dict[int, bool] = {}
+
+    def is_excluded(uid: int) -> bool:
+        if uid in excluded_cache:
+            return excluded_cache[uid]
+        if uid in IGNORE_IDS:
+            excluded_cache[uid] = True
+            return True
+        member = guild.get_member(uid) if guild else None
+        if member and any(r.id == VOTER_EXCLUDED_ROLE_ID for r in member.roles):
+            excluded_cache[uid] = True
+            return True
+        excluded_cache[uid] = False
+        return False
+
+    for msg in msgs:
+        for reaction in msg.reactions:
+            key = normalize_emoji(reaction)
+            if str(key) == str(STARBOARD_IGNORE_ID):
+                continue
+            try:
+                async for user in reaction.users():
+                    if user.bot:
+                        continue
+                    if is_excluded(user.id):
+                        continue
+                    counts[user.id] = counts.get(user.id, 0) + 1
+            except Exception:
+                logger.exception("Fehler beim Laden von Reaction-Usern")
+    return counts
+
+
+def compute_voter_ranks(counts: dict[int, int]) -> list[tuple[int, int, int]]:
+    """Dense-Ranking mit Cap auf 3 Ränge (mehrere User pro Rang möglich).
+
+    Beispiele:
+      counts.values() =
+        [10,10,10,10]      -> 4× Rang 1
+        [10,8,5,3]         -> Rang 1, 2, 3 (der 3er fällt raus)
+        [10,10,8,5,5,5,3]  -> 2× Rang 1, 1× Rang 2, 3× Rang 3
+
+    Rückgabe: Liste (rank, user_id, count).
+    """
+    sorted_voters = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    out: list[tuple[int, int, int]] = []
+    current_rank = 0
+    last_count = None
+    for uid, cnt in sorted_voters:
+        if cnt != last_count:
+            current_rank += 1
+            if current_rank > 3:
+                break
+            last_count = cnt
+        out.append((current_rank, uid, cnt))
+    return out
+
+
+async def resolve_display_name(
+    uid: int, guild: discord.Guild, bot: commands.Bot
+) -> str:
+    if guild:
+        m = guild.get_member(uid)
+        if m:
+            return m.display_name
+    try:
+        u = await bot.fetch_user(uid)
+        return u.name
+    except Exception:
+        return f"User#{uid}"
+# hut_vote_cog.py — Teil 2/2 (an Teil 1 anhängen)
 
 # =====================
 # COG
@@ -294,9 +278,7 @@ class HutVote(commands.Cog):
             except Exception:
                 logger.exception("Konnte Channel %s nicht laden.", channel_id)
                 return None
-        if isinstance(channel, discord.TextChannel):
-            return channel
-        return None
+        return channel if isinstance(channel, discord.TextChannel) else None
 
     async def _scan_bot_messages(
         self,
@@ -304,131 +286,100 @@ class HutVote(commands.Cog):
         start: Optional[datetime] = None,
         end_exclusive: Optional[datetime] = None,
     ) -> list[discord.Message]:
-        """Alle Bot-Nachrichten im Zeitraum. Kein Typ-Filter."""
         matched: list[discord.Message] = []
         after_dt = (start - timedelta(seconds=1)) if start else None
-
         try:
-            async for msg in channel.history(
-                after=after_dt, before=end_exclusive, limit=None
-            ):
+            async for msg in channel.history(after=after_dt, before=end_exclusive, limit=None):
                 if msg.author.id != BOT_ID:
                     continue
-                if start and end_exclusive:
-                    if not (start <= msg.created_at < end_exclusive):
-                        continue
+                if start and end_exclusive and not (start <= msg.created_at < end_exclusive):
+                    continue
                 matched.append(msg)
         except Exception:
             logger.exception("Fehler beim Lesen von #%s (%s)", channel.name, channel.id)
-
         return matched
 
+    async def _scan_multi(self, guild, channel_ids, start=None, end_exclusive=None):
+        per_channel: dict[int, list[discord.Message]] = {}
+        for cid in channel_ids:
+            ch = await self._safe_text_channel(guild, cid)
+            if ch is None:
+                continue
+            per_channel[cid] = await self._scan_bot_messages(ch, start, end_exclusive)
+        return per_channel
+
     @staticmethod
-    def _split_by_type(
-        msgs: list[discord.Message],
-    ) -> tuple[list[discord.Message], list[discord.Message]]:
+    def _split_by_type(msgs):
         images, videos = [], []
         for m in msgs:
             (videos if VideoPostDetector.is_video_post(m) else images).append(m)
         return images, videos
 
     async def _paced_send(self, interaction: discord.Interaction, **kwargs):
-        """Followup mit kleiner Pause, um Discord Rate-Limit zu entlasten."""
         try:
             await interaction.followup.send(**kwargs)
         except discord.HTTPException:
             logger.exception("Followup send failed")
         await asyncio.sleep(FOLLOWUP_DELAY_SEC)
 
-    # =====================================================
-    # /ai_vote — Monatliches Bild-Ranking über alle Channels
-    # =====================================================
+    # ============ /ai_vote ============
     @app_commands.command(name="ai_vote", description="Shows AI image ranking by reactions")
     @app_commands.guild_only()
     @app_commands.checks.has_any_role(*ALLOWED_ROLE_IDS)
     @app_commands.describe(
-        year="Select year",
-        month="Select month",
+        year="Select year", month="Select month",
         topuser="Number of top posts to display",
-        sort="Sort order",
-        public="Whether the result is public or ephemeral",
+        sort="Sort order", public="Public or ephemeral",
     )
     @app_commands.choices(
         year=YEAR_CHOICES, month=MONTH_CHOICES,
         topuser=TOPUSER_CHOICES, sort=SORT_CHOICES,
     )
     async def ai_vote(
-        self,
-        interaction: discord.Interaction,
-        year: app_commands.Choice[str],
-        month: app_commands.Choice[str],
+        self, interaction: discord.Interaction,
+        year: app_commands.Choice[str], month: app_commands.Choice[str],
         topuser: app_commands.Choice[str] = None,
         sort: app_commands.Choice[str] = None,
         public: bool = False,
     ):
         ephemeral_flag = not public
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
-
         if interaction.guild is None:
-            return await interaction.followup.send(
-                "Dieser Befehl geht nur im Server.", ephemeral=True
-            )
+            return await interaction.followup.send("Server-only.", ephemeral=True)
 
-        year_v = int(year.value)
-        month_v = int(month.value)
-        start_dt, end_exclusive = get_month_utc_range(year_v, month_v)
-
-        all_msgs: list[discord.Message] = []
-        for cid in SCAN_CHANNEL_IDS:
-            channel = await self._safe_text_channel(interaction.guild, cid)
-            if channel is None:
-                continue
-            all_msgs.extend(
-                await self._scan_bot_messages(channel, start_dt, end_exclusive)
-            )
-
-        image_msgs, video_msgs = self._split_by_type(all_msgs)
+        start_dt, end_ex = get_month_utc_range(int(year.value), int(month.value))
+        per_ch = await self._scan_multi(interaction.guild, SCAN_CHANNEL_IDS, start_dt, end_ex)
+        all_msgs = [m for msgs in per_ch.values() for m in msgs]
+        image_msgs, _ = self._split_by_type(all_msgs)
         if not image_msgs:
-            return await interaction.followup.send(
-                "No AI posts found.", ephemeral=ephemeral_flag
-            )
+            return await interaction.followup.send("No AI posts found.", ephemeral=ephemeral_flag)
 
-        img_to_video = build_image_to_video_map(image_msgs, video_msgs)
-        logger.info(
-            "/ai_vote %s %s: %d Bilder, %d Videos, %d Verknüpfungen.",
-            year_v, month_v, len(image_msgs), len(video_msgs), len(img_to_video),
-        )
+        img_to_videos, video_to_img = build_position_maps(per_ch)
+        voter_counts = await collect_voter_counts(all_msgs, interaction.guild)
 
         await self._render_ranking(
-            interaction=interaction,
-            msgs=image_msgs,
-            title=f"🤖 AI Top — {calendar.month_name[month_v]} {year_v}",
+            interaction=interaction, msgs=image_msgs,
+            title=f"🤖 AI Top — {calendar.month_name[int(month.value)]} {year.value}",
             ephemeral=ephemeral_flag,
             limit=int(topuser.value) if topuser else 5,
             sort_order=sort.value if sort else "asc",
             kind="image",
-            image_to_video_map=img_to_video,
+            img_to_videos=img_to_videos, video_to_img=video_to_img,
+            voter_counts=voter_counts,
         )
 
-    # =====================================================
-    # /ai_contest — Single-Channel Bild-Ranking
-    # =====================================================
-    @app_commands.command(
-        name="ai_contest",
-        description="Shows AI contest ranking for a single channel",
-    )
+    # ============ /ai_contest ============
+    @app_commands.command(name="ai_contest", description="Shows AI contest ranking for a single channel")
     @app_commands.guild_only()
     @app_commands.checks.has_any_role(*ALLOWED_ROLE_IDS)
     @app_commands.describe(
         channel="Channel to scan",
         topuser="Number of top posts to display",
-        sort="Sort order",
-        public="Whether the result is public or ephemeral",
+        sort="Sort order", public="Public or ephemeral",
     )
     @app_commands.choices(topuser=TOPUSER_CHOICES, sort=SORT_CHOICES)
     async def ai_contest(
-        self,
-        interaction: discord.Interaction,
+        self, interaction: discord.Interaction,
         channel: discord.TextChannel = None,
         topuser: app_commands.Choice[str] = None,
         sort: app_commands.Choice[str] = None,
@@ -436,123 +387,91 @@ class HutVote(commands.Cog):
     ):
         ephemeral_flag = not public
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
-
         if interaction.guild is None:
-            return await interaction.followup.send(
-                "Dieser Befehl geht nur im Server.", ephemeral=True
-            )
+            return await interaction.followup.send("Server-only.", ephemeral=True)
 
-        target_channel = channel or await self._safe_text_channel(
-            interaction.guild, DEFAULT_CONTEST_CHANNEL_ID
-        )
-        if not isinstance(target_channel, discord.TextChannel):
-            return await interaction.followup.send(
-                "Invalid channel.", ephemeral=ephemeral_flag
-            )
+        target = channel or await self._safe_text_channel(interaction.guild, DEFAULT_CONTEST_CHANNEL_ID)
+        if not isinstance(target, discord.TextChannel):
+            return await interaction.followup.send("Invalid channel.", ephemeral=ephemeral_flag)
 
-        all_msgs = await self._scan_bot_messages(target_channel)
-        image_msgs, video_msgs = self._split_by_type(all_msgs)
-
+        msgs = await self._scan_bot_messages(target)
+        per_ch = {target.id: msgs}
+        image_msgs, _ = self._split_by_type(msgs)
         if not image_msgs:
-            return await interaction.followup.send(
-                "No AI posts found.", ephemeral=ephemeral_flag
-            )
+            return await interaction.followup.send("No AI posts found.", ephemeral=ephemeral_flag)
 
-        img_to_video = build_image_to_video_map(image_msgs, video_msgs)
+        img_to_videos, video_to_img = build_position_maps(per_ch)
+        voter_counts = await collect_voter_counts(msgs, interaction.guild)
 
         await self._render_ranking(
-            interaction=interaction,
-            msgs=image_msgs,
-            title=f"🏁 AI Contest Ranking — {target_channel.name}",
+            interaction=interaction, msgs=image_msgs,
+            title=f"🏁 AI Contest Ranking — {target.name}",
             ephemeral=ephemeral_flag,
             limit=int(topuser.value) if topuser else 5,
             sort_order=sort.value if sort else "asc",
             kind="image",
-            image_to_video_map=img_to_video,
+            img_to_videos=img_to_videos, video_to_img=video_to_img,
+            voter_counts=voter_counts,
         )
 
-    # =====================================================
-    # /ai_video — Monatliches Video-Ranking
-    # =====================================================
+    # ============ /ai_video ============
     @app_commands.command(name="ai_video", description="Shows AI video ranking by reactions")
     @app_commands.guild_only()
     @app_commands.checks.has_any_role(*ALLOWED_ROLE_IDS)
     @app_commands.describe(
-        year="Select year",
-        month="Select month",
+        year="Select year", month="Select month",
         topuser="Number of top posts to display",
-        sort="Sort order",
-        public="Whether the result is public or ephemeral",
+        sort="Sort order", public="Public or ephemeral",
     )
     @app_commands.choices(
         year=YEAR_CHOICES, month=MONTH_CHOICES,
         topuser=TOPUSER_CHOICES, sort=SORT_CHOICES,
     )
     async def ai_video(
-        self,
-        interaction: discord.Interaction,
-        year: app_commands.Choice[str],
-        month: app_commands.Choice[str],
+        self, interaction: discord.Interaction,
+        year: app_commands.Choice[str], month: app_commands.Choice[str],
         topuser: app_commands.Choice[str] = None,
         sort: app_commands.Choice[str] = None,
         public: bool = False,
     ):
         ephemeral_flag = not public
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
-
         if interaction.guild is None:
-            return await interaction.followup.send(
-                "Dieser Befehl geht nur im Server.", ephemeral=True
-            )
+            return await interaction.followup.send("Server-only.", ephemeral=True)
 
-        year_v = int(year.value)
-        month_v = int(month.value)
-        start_dt, end_exclusive = get_month_utc_range(year_v, month_v)
-
-        all_msgs: list[discord.Message] = []
-        for cid in SCAN_CHANNEL_IDS:
-            channel = await self._safe_text_channel(interaction.guild, cid)
-            if channel is None:
-                continue
-            all_msgs.extend(
-                await self._scan_bot_messages(channel, start_dt, end_exclusive)
-            )
-
+        start_dt, end_ex = get_month_utc_range(int(year.value), int(month.value))
+        per_ch = await self._scan_multi(interaction.guild, SCAN_CHANNEL_IDS, start_dt, end_ex)
+        all_msgs = [m for msgs in per_ch.values() for m in msgs]
         _, video_msgs = self._split_by_type(all_msgs)
         if not video_msgs:
-            return await interaction.followup.send(
-                "No AI video posts found.", ephemeral=ephemeral_flag
-            )
+            return await interaction.followup.send("No AI video posts found.", ephemeral=ephemeral_flag)
+
+        img_to_videos, video_to_img = build_position_maps(per_ch)
+        voter_counts = await collect_voter_counts(all_msgs, interaction.guild)
 
         await self._render_ranking(
-            interaction=interaction,
-            msgs=video_msgs,
-            title=f"🎬 AI Video Top — {calendar.month_name[month_v]} {year_v}",
+            interaction=interaction, msgs=video_msgs,
+            title=f"🎬 AI Video Top — {calendar.month_name[int(month.value)]} {year.value}",
             ephemeral=ephemeral_flag,
             limit=int(topuser.value) if topuser else 5,
             sort_order=sort.value if sort else "asc",
             kind="video",
+            img_to_videos=img_to_videos, video_to_img=video_to_img,
+            voter_counts=voter_counts,
         )
 
-    # =====================================================
-    # /ai_video_contest — Single-Channel Video-Ranking
-    # =====================================================
-    @app_commands.command(
-        name="ai_video_contest",
-        description="Shows AI video contest ranking for a single channel",
-    )
+    # ============ /ai_video_contest ============
+    @app_commands.command(name="ai_video_contest", description="Shows AI video contest ranking for a single channel")
     @app_commands.guild_only()
     @app_commands.checks.has_any_role(*ALLOWED_ROLE_IDS)
     @app_commands.describe(
         channel="Channel to scan",
         topuser="Number of top posts to display",
-        sort="Sort order",
-        public="Whether the result is public or ephemeral",
+        sort="Sort order", public="Public or ephemeral",
     )
     @app_commands.choices(topuser=TOPUSER_CHOICES, sort=SORT_CHOICES)
     async def ai_video_contest(
-        self,
-        interaction: discord.Interaction,
+        self, interaction: discord.Interaction,
         channel: discord.TextChannel = None,
         topuser: app_commands.Choice[str] = None,
         sort: app_commands.Choice[str] = None,
@@ -560,80 +479,67 @@ class HutVote(commands.Cog):
     ):
         ephemeral_flag = not public
         await interaction.response.defer(thinking=True, ephemeral=ephemeral_flag)
-
         if interaction.guild is None:
-            return await interaction.followup.send(
-                "Dieser Befehl geht nur im Server.", ephemeral=True
-            )
+            return await interaction.followup.send("Server-only.", ephemeral=True)
 
-        target_channel = channel or await self._safe_text_channel(
-            interaction.guild, DEFAULT_CONTEST_CHANNEL_ID
-        )
-        if not isinstance(target_channel, discord.TextChannel):
-            return await interaction.followup.send(
-                "Invalid channel.", ephemeral=ephemeral_flag
-            )
+        target = channel or await self._safe_text_channel(interaction.guild, DEFAULT_CONTEST_CHANNEL_ID)
+        if not isinstance(target, discord.TextChannel):
+            return await interaction.followup.send("Invalid channel.", ephemeral=ephemeral_flag)
 
-        all_msgs = await self._scan_bot_messages(target_channel)
-        _, video_msgs = self._split_by_type(all_msgs)
-
+        msgs = await self._scan_bot_messages(target)
+        per_ch = {target.id: msgs}
+        _, video_msgs = self._split_by_type(msgs)
         if not video_msgs:
-            return await interaction.followup.send(
-                "No AI video posts found.", ephemeral=ephemeral_flag
-            )
+            return await interaction.followup.send("No AI video posts found.", ephemeral=ephemeral_flag)
+
+        img_to_videos, video_to_img = build_position_maps(per_ch)
+        voter_counts = await collect_voter_counts(msgs, interaction.guild)
 
         await self._render_ranking(
-            interaction=interaction,
-            msgs=video_msgs,
-            title=f"🎬 AI Video Contest — {target_channel.name}",
+            interaction=interaction, msgs=video_msgs,
+            title=f"🎬 AI Video Contest — {target.name}",
             ephemeral=ephemeral_flag,
             limit=int(topuser.value) if topuser else 5,
             sort_order=sort.value if sort else "asc",
             kind="video",
+            img_to_videos=img_to_videos, video_to_img=video_to_img,
+            voter_counts=voter_counts,
         )
 
     # =====================================================
     # RENDERING
     # =====================================================
     async def _render_ranking(
-        self,
-        interaction: discord.Interaction,
-        msgs: list[discord.Message],
-        title: str,
-        ephemeral: bool,
-        limit: int,
-        sort_order: str,
-        kind: str = "image",                                       # "image" | "video"
-        image_to_video_map: Optional[dict[int, discord.Message]] = None,
+        self, interaction: discord.Interaction,
+        msgs: list[discord.Message], title: str,
+        ephemeral: bool, limit: int, sort_order: str,
+        kind: str,   # "image" | "video"
+        img_to_videos: dict[int, list[discord.Message]],
+        video_to_img: dict[int, discord.Message],
+        voter_counts: dict[int, int],
     ):
         guild = interaction.guild
         medals = ["🥇", "🥈", "🥉"]
-        image_to_video_map = image_to_video_map or {}
 
+        # --- Score-Berechnung + Sort ---
         stats = {m.id: calc_ai_points(m) for m in msgs}
+        def sort_key(m):
+            s, _, e = stats[m.id]
+            return s, e, m.created_at
+        ranked = sorted(msgs, key=sort_key, reverse=True)
 
-        def sort_key(m: discord.Message):
-            score, _, emoji_total = stats[m.id]
-            return score, emoji_total, m.created_at
-
-        ranked_msgs = sorted(msgs, key=sort_key, reverse=True)
-
-        # Ties auf (score, emoji_total) — konsistent mit rank_map
+        # Ties auf (score, emoji_total)
         tie_counts: dict[tuple[int, int], int] = {}
-        for m in ranked_msgs:
+        for m in ranked:
             s, _, e = stats[m.id]
             tie_counts[(s, e)] = tie_counts.get((s, e), 0) + 1
         tied_keys = {k for k, c in tie_counts.items() if c > 1}
 
-        top_msgs = ranked_msgs[:limit]
-        # asc = 1 -> X, desc = X -> 1
-        display_msgs = top_msgs if sort_order == "asc" else list(reversed(top_msgs))
-
         # Rang-Map mit Ties
         rank_map: dict[int, int] = {}
-        last_key: Optional[tuple[int, int]] = None
+        last_key = None
         current_rank = 0
-        for idx, m in enumerate(ranked_msgs, start=1):
+        for idx, m in enumerate(ranked, start=1):
             s, _, e = stats[m.id]
             key = (s, e)
             if key == last_key:
@@ -643,40 +549,57 @@ class HutVote(commands.Cog):
                 rank_map[m.id] = current_rank
                 last_key = key
 
-        # Top 3 unique User
+        top_msgs = ranked[:limit]
+        display_msgs = top_msgs if sort_order == "asc" else list(reversed(top_msgs))
+
+        # --- Top 3 unique Winners ---
         top_unique: list[discord.Message] = []
-        seen: set[int] = set()
-        for m in ranked_msgs:
+        seen_uids: set[int] = set()
+        for m in ranked:
             u = get_target_user(m)
             if u.id in IGNORE_IDS or u.name == "Deleted User":
                 continue
-            if u.id not in seen:
-                top_unique.append(m)
-                seen.add(u.id)
+            if u.id in seen_uids:
+                continue
+            top_unique.append(m)
+            seen_uids.add(u.id)
             if len(top_unique) == 3:
                 break
 
-        intro = ""
+        winners_txt = ""
         for i, m in enumerate(top_unique):
             u = get_target_user(m)
-            intro += f"{medals[i]} {u.display_name}\n"
+            winners_txt += f"{medals[i]} {u.display_name}\n"
+        if not winners_txt:
+            winners_txt = "—\n"
 
+        # --- Top 3 Voters (Dense-Rank, Ties zulässig) ---
+        voter_ranks = compute_voter_ranks(voter_counts)
+        voters_txt = ""
+        for rank, uid, cnt in voter_ranks:
+            name = await resolve_display_name(uid, guild, self.bot)
+            xp = VOTER_XP.get(rank, 0)
+            voters_txt += f"{VOTER_MEDAL[rank]} {name} — {cnt} reactions — **+{xp} XP**\n"
+        if not voters_txt:
+            voters_txt = "—\n"
+
+        # --- Intro-Embed ---
         now_str = datetime.now(timezone.utc).strftime("%Y/%m/%d %H:%M")
-        podium_label = "Top 3 Hut Dwellers" if kind == "image" else "Top 3 Video Makers"
-
-        await self._paced_send(
-            interaction,
-            embed=discord.Embed(
-                title=title,
-                description=f"**{podium_label}:**\n{intro or '—'}",
-                color=discord.Color.blurple(),
-            ).set_footer(text=f"Updated: {now_str} UTC"),
-            ephemeral=ephemeral,
+        winners_label = "Top 3 Hut Dwellers" if kind == "image" else "Top 3 Video Makers"
+        intro = discord.Embed(
+            title=title,
+            description=(
+                f"**{winners_label}:**\n{winners_txt}\n"
+                f"**Top 3 Voters:**\n{voters_txt}"
+            ),
+            color=discord.Color.blurple(),
         )
+        intro.set_footer(text=f"Updated: {now_str} UTC")
+        await self._paced_send(interaction, embed=intro, ephemeral=ephemeral)
 
         top_user_ids = [get_target_user(m).id for m in top_unique]
 
-        # Detail-Embeds
+        # --- Detail-Embeds ---
         for m in display_msgs:
             u = get_target_user(m)
             score, breakdown, emoji_total = stats[m.id]
@@ -685,17 +608,28 @@ class HutVote(commands.Cog):
             medal = medals[top_user_ids.index(u.id)] if u.id in top_user_ids else ""
             tie_suffix = f" ({emoji_total} 📊)" if (score, emoji_total) in tied_keys else ""
 
+            # Reaction-Breakdown
             lines = []
             for k, d in breakdown.items():
-                emoji_label = "📝" if k == "Various" else str(guild.get_emoji(k) or k)
-                lines.append(f"{emoji_label} × {d['votes']} → {d['points']} pts")
+                lbl = "📝" if k == "Various" else str(guild.get_emoji(k) or k)
+                lines.append(f"{lbl} × {d['votes']} → {d['points']} pts")
             detail_text = "\n".join(lines) if lines else "_Keine Reaktionen_"
 
-            # Jump-Links: bei Bild-Ranking optional zusätzlicher VIDEO-Link
+            # Links
             links = f"[Jump to Post 🎖️(**VOTE**🎖️)]({m.jump_url})"
-            if kind == "image" and m.id in image_to_video_map:
-                video_msg = image_to_video_map[m.id]
-                links += f" • [🎬 **VIDEO**]({video_msg.jump_url})"
+            if kind == "image":
+                vids = img_to_videos.get(m.id, [])
+                if len(vids) == 1:
+                    links += f" • [🎬 **VIDEO**]({vids[0].jump_url})"
+                elif len(vids) > 1:
+                    parts = " ".join(
+                        f"[🎬 V{i+1}]({v.jump_url})" for i, v in enumerate(vids)
+                    )
+                    links += f" • {parts}"
+            elif kind == "video":
+                src = video_to_img.get(m.id)
+                if src:
+                    links += f" • [🖼️ Source]({src.jump_url})"
 
             embed = discord.Embed(
                 title=f"#{rank_number} — {u.display_name} {medal} — {score} pts{tie_suffix}",
@@ -705,57 +639,53 @@ class HutVote(commands.Cog):
             embed.set_thumbnail(url=u.display_avatar.url)
             embed.set_footer(text=f"Posted: {m.created_at.strftime('%Y/%m/%d %H:%M')} UTC")
 
-            send_kwargs: dict = {"embed": embed, "ephemeral": ephemeral}
-
+            # Image
+            image_url = None
             if kind == "image":
-                # Bild-Preview via Embed
-                image_url = None
-                if m.attachments:
-                    att = m.attachments[0]
-                    is_video_att = (
-                        (att.content_type and att.content_type.startswith("video/"))
-                        or (att.filename or "").lower().endswith(
-                            VideoPostDetector.VIDEO_EXTENSIONS
-                        )
-                    )
-                    if not is_video_att:
-                        image_url = att.url
-                if image_url is None:
-                    for e in m.embeds:
-                        if e.image and e.image.url:
-                            image_url = e.image.url
-                            break
-                if image_url:
-                    embed.set_image(url=image_url)
+                image_url = get_image_url_from_post(m)
             else:
-                # Video-Preview: Discord kann Videos NICHT via embed.set_image
-                # anzeigen. Der einzige Weg zum inline-Player ist die
-                # Attachment-URL als message content — Discord unfurled dann
-                # selbst einen Video-Player unter dem Embed.
-                video_url = VideoPostDetector.get_video_url(m)
-                if video_url:
-                    send_kwargs["content"] = video_url
+                # Video-Ranking → das Bild des Quell-Posts (= First Frame)
+                src = video_to_img.get(m.id)
+                if src:
+                    image_url = get_image_url_from_post(src)
+            if image_url:
+                embed.set_image(url=image_url)
 
-            await self._paced_send(interaction, **send_kwargs)
+            await self._paced_send(interaction, embed=embed, ephemeral=ephemeral)
 
-        # Final Top 3
-        if top_unique:
-            final_mentions = []
-            final_lines = []
-            for i, m in enumerate(top_unique):
-                u = get_target_user(m)
-                score, _, emoji_total = stats[m.id]
-                tie_suffix = f" ({emoji_total} 📊)" if (score, emoji_total) in tied_keys else ""
-                final_mentions.append(u.mention)
-                final_lines.append(f"{medals[i]} {u.display_name} — {score} pts{tie_suffix}")
+        # --- Final Summary ---
+        if top_unique or voter_ranks:
+            final_desc_lines = []
+
+            if top_unique:
+                final_desc_lines.append(f"**{winners_label}:**")
+                for i, m in enumerate(top_unique):
+                    u = get_target_user(m)
+                    score, _, emoji_total = stats[m.id]
+                    tie_suffix = f" ({emoji_total} 📊)" if (score, emoji_total) in tied_keys else ""
+                    final_desc_lines.append(
+                        f"{medals[i]} {u.display_name} — {score} pts{tie_suffix}"
+                    )
+                final_desc_lines.append("")
+
+            if voter_ranks:
+                final_desc_lines.append("**Top 3 Voters:**")
+                for rank, uid, cnt in voter_ranks:
+                    name = await resolve_display_name(uid, guild, self.bot)
+                    xp = VOTER_XP.get(rank, 0)
+                    final_desc_lines.append(
+                        f"{VOTER_MEDAL[rank]} {name} — {cnt} reactions — **+{xp} XP**"
+                    )
 
             final_time = datetime.now(timezone.utc).strftime("%Y/%m/%d %H:%M")
+            winner_mentions = [get_target_user(m).mention for m in top_unique]
+
             await self._paced_send(
                 interaction,
-                content=" ".join(final_mentions),
+                content=" ".join(winner_mentions) if winner_mentions else None,
                 embed=discord.Embed(
-                    title=f"🏆 Final Top 3 (as of {final_time} UTC)",
-                    description="\n".join(final_lines),
+                    title=f"🏆 Final Results (as of {final_time} UTC)",
+                    description="\n".join(final_desc_lines),
                     color=discord.Color.gold(),
                 ),
                 ephemeral=ephemeral,
@@ -770,9 +700,7 @@ class HutVote(commands.Cog):
             else:
                 await interaction.response.send_message("❌ No permission.", ephemeral=True)
             return
-
         logger.exception("Unhandled app command error", exc_info=error)
-
         try:
             if interaction.response.is_done():
                 await interaction.followup.send(
