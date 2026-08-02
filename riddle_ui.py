@@ -15,6 +15,7 @@ from riddle_core import (
     logger, to_int, safe_int, clean_value, is_http_url, truncate_text,
     clamp_embed_value, clamp_embed_description, extract_first_url, footer_text,
     parse_csv_role_ids, unique_role_mentions, safe_defer, member_has_role,
+    iso_in_future, hours_until, hours_since,
 )
 
 if TYPE_CHECKING:
@@ -40,16 +41,9 @@ def _first_line(text: Optional[str], max_len: int = 200) -> str:
 
 
 # =============================================================================
-# LEVEL / DIFFICULTY  (rein visuell — aus vorhandenem XP-Wert abgeleitet)
+# LEVEL / DIFFICULTY
 # =============================================================================
 def riddle_level(xp: int) -> tuple[str, str]:
-    """
-    Return (label, emoji) based on XP reward.
-      0    – 1499  -> EASY
-      1500 – 2999  -> MEDIUM
-      3000 – 4999  -> HARD
-      5000 +       -> BRAIN-DEAD
-    """
     x = max(0, to_int(xp, 0))
     if x < 1500:
         return ("EASY", "🟢")
@@ -61,7 +55,6 @@ def riddle_level(xp: int) -> tuple[str, str]:
 
 
 def level_badge(xp: int) -> str:
-    """Compact one-liner like '🟢 `EASY`' — designed to sit small & clean in embed fields."""
     label, emoji = riddle_level(xp)
     return f"{emoji} `{label}`"
 
@@ -159,10 +152,6 @@ def build_solved_ping_post_embed(
     solver_avatar_url: Optional[str],
     submitted_answer: str = "",
 ) -> discord.Embed:
-    """
-    Short 'ping' post announcing the winner.
-    Contains: winner mention + avatar image + XP + level + both answers behind spoilers.
-    """
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     sol_text_raw = (riddle.get("solution") or "").strip()
@@ -174,7 +163,6 @@ def build_solved_ping_post_embed(
         color=discord.Color.green(),
     )
 
-    # Winner's submitted answer (spoiler)
     if submitted_answer and submitted_answer.strip():
         safe_ans = _spoiler_safe(submitted_answer.strip())
         e.add_field(
@@ -183,7 +171,6 @@ def build_solved_ping_post_embed(
             inline=False,
         )
 
-    # Real solution (spoiler)
     if sol_text or more_url:
         parts: list[str] = []
         if sol_text:
@@ -781,7 +768,6 @@ class VoteButtons(LoggedPersistentView):
         super().__init__(timeout=None)
         self.add_item(VoteSuccessButton(cog))
         self.add_item(VoteFailButton(cog))
-
 # riddle_ui.py  (Teil 2/2)
 
 # =============================================================================
@@ -794,7 +780,6 @@ class _BaseSlotSelect(Select):
 
     def __init__(self, panel: "RiddleAdminPanelView", *, options: list[discord.SelectOption], row: int):
         self.panel = panel
-        # If a category is empty, we still need at least 1 option → dummy sentinel.
         if not options:
             options = [discord.SelectOption(
                 label=f"(no {self._kind_label} slots)",
@@ -871,7 +856,6 @@ class PanelButton(discord.ui.Button):
         except discord.NotFound:
             return
         except discord.HTTPException as e:
-            # 50027 / 401 -> ephemeral admin-panel webhook token expired (~15 min)
             if getattr(e, "code", None) == 50027 or getattr(e, "status", None) == 401:
                 try:
                     await interaction.response.send_message(
@@ -897,7 +881,7 @@ class RiddleAdminPanelView(View):
         self.state: dict = {}
         self.last_info: str = "Ready."
         self.message: Optional[discord.Message] = None
-        self.show_full_preview: bool = False  # default: compact preview
+        self.show_full_preview: bool = False
 
     async def interaction_check(self, interaction: Interaction) -> bool:
         return interaction.user.id == self.owner_id
@@ -935,18 +919,28 @@ class RiddleAdminPanelView(View):
         self.add_item(PanelButton(self, preview_label, "toggle_preview", 4, discord.ButtonStyle.secondary))
         self.add_item(PanelButton(self, "🔄 Refresh", "refresh", 4, discord.ButtonStyle.secondary))
 
-    async def build_embeds(self, guild: Optional[discord.Guild]) -> list[discord.Embed]:
+    def _system_status_display(self) -> tuple[str, discord.Color]:
         enabled = bool(to_int(self.state.get("is_enabled"), 0))
+        hiatus_until = self.state.get("hiatus_until") or None
+        if enabled and hiatus_until and iso_in_future(hiatus_until):
+            remaining = hours_until(hiatus_until) or 0.0
+            return f"🟡 ON (hiatus {remaining:.1f}h)", discord.Color.gold()
+        if enabled:
+            return "🟢 ON", discord.Color.green()
+        return "🟠 OFF", discord.Color.orange()
+
+    async def build_embeds(self, guild: Optional[discord.Guild]) -> list[discord.Embed]:
         solved_cached = await self.cog.repo.get_cached_solved_total(self.guild_id)
+        sys_val, sys_color = self._system_status_display()
 
         # ---------- Main overview embed ----------
         main = discord.Embed(
             title="🗂️ Riddle Control Center",
-            color=discord.Color.green() if enabled else discord.Color.orange(),
+            color=sys_color,
         )
-        main.add_field(name="🧩System", value="🟢 ON" if enabled else "🟠 OFF", inline=True)
-        main.add_field(name="❓Slot", value=str(self.selected_slot), inline=True)
-        main.add_field(name="⁉️Solved", value=str(solved_cached), inline=True)
+        main.add_field(name="🧩 System", value=sys_val, inline=True)
+        main.add_field(name="❓ Slot", value=str(self.selected_slot), inline=True)
+        main.add_field(name="⁉️ Solved", value=str(solved_cached), inline=True)
 
         occupied = sum(1 for s in range(1, MAX_RIDDLE_SLOTS + 1) if self.slot_map.get(s))
         main.add_field(
@@ -968,7 +962,13 @@ class RiddleAdminPanelView(View):
             xp = to_int(row.get("xp"), 0)
             lvl = level_badge(xp)
             preview = _first_line(row.get("solution"), 80)
-            active_tag = " · 👉" if slot == 1 else ""
+            active_tag = ""
+            if slot == 1:
+                age = hours_since(row.get("first_posted_at"))
+                if age is not None:
+                    active_tag = f" · 👉 posted {age:.1f}h ago"
+                else:
+                    active_tag = " · 👉"
             lines.append(
                 f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · {lvl} · +{len(extras)} roles{active_tag} — _{preview}_"
             )
@@ -977,6 +977,10 @@ class RiddleAdminPanelView(View):
             value=clamp_embed_value("\n".join(lines)) if lines else "*none*",
             inline=False,
         )
+
+        # Last info
+        if self.last_info:
+            main.add_field(name="ℹ️ Info", value=clamp_embed_value(self.last_info), inline=False)
 
         embeds: list[discord.Embed] = [main]
 
@@ -989,7 +993,6 @@ class RiddleAdminPanelView(View):
             xp_val = to_int(row.get("xp"), 0)
 
             if self.show_full_preview:
-                # ----- FULL detail preview -----
                 preview = discord.Embed(
                     title=f"🔍 Slot {self.selected_slot} · Riddle No.{shown_no}",
                     description=clamp_embed_description(row.get("text") or "*No text*"),
@@ -1034,7 +1037,6 @@ class RiddleAdminPanelView(View):
                     embeds.append(thumb_s)
 
             else:
-                # ----- COMPACT preview: solution thumbnail + 1st line of solution -----
                 first_line = _first_line(row.get("solution"), 200)
                 preview = discord.Embed(
                     title=f"🔍 Slot {self.selected_slot} · Riddle No.{shown_no}",
@@ -1087,8 +1089,9 @@ class RiddleAdminPanelView(View):
         if interaction.guild is None:
             return
         row = self.slot_map.get(self.selected_slot)
+        gid = interaction.guild.id
 
-        # --- MODAL actions ---
+        # --- MODAL actions (must be sent BEFORE any defer) ---
         if action == "edit_content":
             ping_preview = f"Base: <@&{RIDDLE_ROLE_ID}>"
             if row:
@@ -1141,7 +1144,6 @@ class RiddleAdminPanelView(View):
         # --- generic actions ---
         if not await safe_defer(interaction):
             return
-        gid = interaction.guild.id
 
         if action == "toggle_preview":
             self.show_full_preview = not self.show_full_preview
@@ -1150,10 +1152,8 @@ class RiddleAdminPanelView(View):
             return
 
         if action == "refresh":
-            await self.cog.normalize_after_structure_change(gid)
-            if await self.cog.repo.is_enabled(gid):
-                await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
-            self.last_info = "✅ Refreshed + gaps compacted."
+            res = await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
+            self.last_info = f"✅ Refreshed ({res})."
             await self.safe_edit_panel()
             return
 
@@ -1162,11 +1162,10 @@ class RiddleAdminPanelView(View):
                 self.last_info = "⚠️ Slot empty."
                 await self.safe_edit_panel()
                 return
-            moved = await self.cog.repo.move_open_riddle_to_end(gid, to_int(row["id"], 0))
-            await self.cog.normalize_after_structure_change(gid)
-            if await self.cog.repo.is_enabled(gid):
-                await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
-            self.last_info = "✅ Moved to end." if moved else "⚠️ Move failed."
+            moved = await self.cog.rotate_riddle_to_end(
+                gid, to_int(row["id"], 0), ping_new_slot1=False,
+            )
+            self.last_info = "✅ Moved to end (artifacts cleaned up)." if moved else "⚠️ Move failed."
             await self.safe_edit_panel()
             return
 
@@ -1174,32 +1173,30 @@ class RiddleAdminPanelView(View):
             if not row:
                 self.last_info = "⚠️ Slot already empty."
             else:
-                closed = await self.cog.repo.close_open_riddle_by_id(
-                    gid, to_int(row["id"], 0), interaction.user.id
+                ok = await self.cog.close_and_cleanup_riddle(
+                    gid, to_int(row["id"], 0), interaction.user.id,
                 )
-                self.last_info = "✅ Deleted." if closed else "⚠️ Already closed."
-            await self.cog.normalize_after_structure_change(gid)
-            if await self.cog.repo.is_enabled(gid):
-                await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
-            else:
-                await self.cog.remove_active_riddle_posts(gid)
+                self.last_info = "✅ Deleted." if ok else "⚠️ Already closed."
+            await self.cog.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
             await self.safe_edit_panel()
             return
 
         if action == "toggle":
             if await self.cog.repo.is_enabled(gid):
+                # OFF
                 await self.cog.repo.set_enabled(gid, False)
+                await self.cog.repo.set_hiatus_until(gid, None)
                 await self.cog.remove_active_riddle_posts(gid)
                 self.last_info = "✅ System turned OFF."
             else:
+                # ON
                 s1 = await self.cog.repo.get_open_slot1(gid)
                 if not s1:
                     self.last_info = "⚠️ Cannot turn ON — Slot 1 is empty."
                 else:
                     await self.cog.repo.set_enabled(gid, True)
-                    res = await self.cog.publish_slot1_post(
-                        gid, force_repost=True, allow_role_ping=True
-                    )
+                    await self.cog.repo.set_hiatus_until(gid, None)
+                    res = await self.cog.force_repost_slot1_fresh(gid, allow_ping=True)
                     self.last_info = f"✅ System turned ON ({res})."
             await self.safe_edit_panel()
             return
@@ -1210,22 +1207,27 @@ class RiddleAdminPanelView(View):
                 self.last_info = "⚠️ Slot 1 is empty."
             else:
                 await self.cog.repo.set_enabled(gid, True)
-                res = await self.cog.publish_slot1_post(
-                    gid, force_repost=True, allow_role_ping=True
-                )
+                await self.cog.repo.set_hiatus_until(gid, None)  # bypass hiatus
+                res = await self.cog.force_repost_slot1_fresh(gid, allow_ping=True)
                 self.last_info = f"✅ Posted now: {res}"
             await self.safe_edit_panel()
             return
 
         if action == "close_active":
-            r = await self.cog.repo.close_slot1_unsolved(gid, interaction.user.id)
-            if not r:
+            s1 = await self.cog.repo.get_open_slot1(gid)
+            if not s1:
                 self.last_info = "⚠️ No active riddle in Slot 1."
             else:
-                await self.cog.normalize_after_structure_change(gid)
-                await self.cog.repo.set_enabled(gid, False)
-                await self.cog.remove_active_riddle_posts(gid)
-                self.last_info = "✅ Active riddle closed. System OFF."
+                ok = await self.cog.close_and_cleanup_riddle(
+                    gid, to_int(s1["id"], 0), interaction.user.id,
+                )
+                if ok:
+                    await self.cog.repo.set_enabled(gid, False)
+                    await self.cog.repo.set_hiatus_until(gid, None)
+                    await self.cog.remove_active_riddle_posts(gid)
+                    self.last_info = "✅ Active riddle closed. System OFF."
+                else:
+                    self.last_info = "⚠️ Already closed."
             await self.safe_edit_panel()
             return
 

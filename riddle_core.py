@@ -18,6 +18,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("riddle_system")
 
+
 # =============================================================================
 # CONFIG
 # =============================================================================
@@ -50,7 +51,20 @@ ACCESS_DENIED_IMAGE_URL = _env_str("RIDDLE_ACCESS_DENIED_IMAGE_URL", "")
 
 MAX_RIDDLE_SLOTS = _env_int("RIDDLE_MAX_SLOTS", 10)
 MAX_EXTRA_PING_ROLES = _env_int("RIDDLE_MAX_EXTRA_PING_ROLES", 3)
-AUTO_SCAN_SECONDS = _env_int("RIDDLE_AUTO_SCAN_SECONDS", 43200)
+
+# --- Auto-rotation + solved hiatus (new) -------------------------------------
+# Hours a riddle can sit in Slot 1 without being solved before it is
+# auto-moved to the end. The countdown starts at the FIRST post; refreshes
+# / edits do NOT reset it. Auto-rotation only fires when there is NO
+# pending vote post for that riddle.
+UNSOLVED_ROTATION_HOURS = _env_int("RIDDLE_UNSOLVED_ROTATION_HOURS", 6)
+
+# After a solve the system stays ON, but no new Slot 1 riddle is posted
+# during this hiatus. Can be bypassed by the "Post Now" button.
+SOLVED_HIATUS_HOURS = _env_int("RIDDLE_SOLVED_HIATUS_HOURS", 6)
+
+# How often the background worker reconciles / checks rotation + hiatus.
+ROTATION_TICK_SECONDS = _env_int("RIDDLE_ROTATION_TICK_SECONDS", 900)  # 15 min
 
 SUBMIT_BUTTON_ID = "riddle_submit_solution_v2"
 VOTE_UP_BUTTON_ID = "riddle_vote_up_v2"
@@ -64,8 +78,11 @@ URL_RE = re.compile(r"(https?://\S+)")
 # =============================================================================
 # UTILS
 # =============================================================================
+def utcnow_naive() -> dt.datetime:
+    return dt.datetime.utcnow().replace(microsecond=0)
+
 def now_iso_utc() -> str:
-    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return utcnow_naive().isoformat() + "Z"
 
 def now_date_str() -> str:
     return dt.datetime.now().strftime("%Y/%m/%d")
@@ -116,6 +133,39 @@ def extract_first_url(text: str) -> tuple[str, Optional[str]]:
     cleaned = URL_RE.sub("", text, count=1).strip()
     return cleaned, link
 
+# --- ISO datetime helpers (new) ---------------------------------------------
+def parse_iso_utc(s: Optional[str]) -> Optional[dt.datetime]:
+    if not s:
+        return None
+    try:
+        return dt.datetime.fromisoformat(str(s).strip().rstrip("Z"))
+    except Exception:
+        return None
+
+def iso_utc_in_hours(hours: float) -> str:
+    ts = utcnow_naive() + dt.timedelta(hours=hours)
+    return ts.replace(microsecond=0).isoformat() + "Z"
+
+def hours_since(iso_ts: Optional[str]) -> Optional[float]:
+    t = parse_iso_utc(iso_ts)
+    if t is None:
+        return None
+    return (utcnow_naive() - t).total_seconds() / 3600.0
+
+def hours_until(iso_ts: Optional[str]) -> Optional[float]:
+    t = parse_iso_utc(iso_ts)
+    if t is None:
+        return None
+    delta = (t - utcnow_naive()).total_seconds() / 3600.0
+    return max(0.0, delta)
+
+def iso_in_future(iso_ts: Optional[str]) -> bool:
+    t = parse_iso_utc(iso_ts)
+    if t is None:
+        return False
+    return t > utcnow_naive()
+
+# ---------------------------------------------------------------------------
 def parse_csv_role_ids(s: Optional[str]) -> list[int]:
     if not s:
         return []
@@ -300,6 +350,7 @@ class RiddleRepo:
             updated_at TEXT NOT NULL,
             posted_channel_id INTEGER,
             posted_message_id INTEGER,
+            first_posted_at TEXT,
             solved_by INTEGER,
             solved_at TEXT,
             solved_post_channel_id INTEGER,
@@ -341,6 +392,7 @@ class RiddleRepo:
         CREATE TABLE IF NOT EXISTS guild_riddle_state (
             guild_id INTEGER PRIMARY KEY,
             is_enabled INTEGER NOT NULL DEFAULT 0 CHECK(is_enabled IN (0,1)),
+            hiatus_until TEXT,
             updated_at TEXT NOT NULL
         );
 
@@ -363,8 +415,11 @@ class RiddleRepo:
         """
         async with self.lock:
             await self.db.executescript(schema)
+            # Migrations for existing DBs
             await self._add_col_if_missing("riddles", "solved_post_channel_id", "solved_post_channel_id INTEGER")
             await self._add_col_if_missing("riddles", "solved_post_message_id", "solved_post_message_id INTEGER")
+            await self._add_col_if_missing("riddles", "first_posted_at", "first_posted_at TEXT")
+            await self._add_col_if_missing("guild_riddle_state", "hiatus_until", "hiatus_until TEXT")
             await self.db.commit()
 
     async def _one(self, query: str, params: tuple = ()) -> Optional[dict]:
@@ -396,7 +451,7 @@ class RiddleRepo:
             await cur.close()
         return rc, lid
 
-# -- guild state / cache ----------------------------------------------
+    # -- guild state / cache ----------------------------------------------
     async def ensure_guild_state(self, guild_id: int):
         await self._exec(
             "INSERT INTO guild_riddle_state (guild_id, is_enabled, updated_at) VALUES (?, 0, ?) "
@@ -422,7 +477,25 @@ class RiddleRepo:
 
     async def get_state_row(self, guild_id: int) -> dict:
         row = await self._one("SELECT * FROM guild_riddle_state WHERE guild_id=? LIMIT 1", (guild_id,))
-        return row or {"guild_id": guild_id, "is_enabled": 0, "updated_at": now_iso_utc()}
+        return row or {"guild_id": guild_id, "is_enabled": 0, "hiatus_until": None, "updated_at": now_iso_utc()}
+
+    # --- hiatus (new) ---
+    async def set_hiatus_until(self, guild_id: int, iso_ts: Optional[str]):
+        await self.ensure_guild_state(guild_id)
+        await self._exec(
+            "UPDATE guild_riddle_state SET hiatus_until=?, updated_at=? WHERE guild_id=?",
+            (iso_ts, now_iso_utc(), guild_id),
+        )
+
+    async def get_hiatus_until(self, guild_id: int) -> Optional[str]:
+        row = await self._one(
+            "SELECT hiatus_until FROM guild_riddle_state WHERE guild_id=? LIMIT 1",
+            (guild_id,),
+        )
+        if not row:
+            return None
+        v = row.get("hiatus_until")
+        return str(v) if v else None
 
     async def list_all_guild_ids(self) -> list[int]:
         rows = await self._all(
@@ -617,6 +690,11 @@ class RiddleRepo:
                 raise
 
     async def compact_open_slots(self, guild_id: int):
+        """
+        Compacts open riddles into slots 1..MAX in order.
+        Riddles that do NOT end up as slot 1 get their first_posted_at cleared,
+        so the 6h auto-rotation timer restarts when they cycle back.
+        """
         if self.db is None:
             return
         async with self.lock:
@@ -630,6 +708,7 @@ class RiddleRepo:
                 )
                 rows = await cur.fetchall()
                 await cur.close()
+
                 await self.db.execute(
                     "UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? "
                     "WHERE guild_id=? AND status='open'",
@@ -638,13 +717,26 @@ class RiddleRepo:
                 for i, row in enumerate(rows, start=1):
                     rid = to_int(row["id"], 0)
                     if i <= MAX_RIDDLE_SLOTS:
-                        await self.db.execute(
-                            "UPDATE riddles SET slot_no=?, is_active=?, updated_at=? WHERE id=?",
-                            (i, 1 if i == 1 else 0, now, rid),
-                        )
+                        if i == 1:
+                            # Slot 1 stays -- keep first_posted_at untouched.
+                            await self.db.execute(
+                                "UPDATE riddles SET slot_no=1, is_active=1, updated_at=? WHERE id=?",
+                                (now, rid),
+                            )
+                        else:
+                            # Non-slot-1 open riddles: no timer, no post refs.
+                            await self.db.execute(
+                                "UPDATE riddles SET slot_no=?, is_active=0, "
+                                "first_posted_at=NULL, posted_channel_id=NULL, posted_message_id=NULL, "
+                                "updated_at=? WHERE id=?",
+                                (i, now, rid),
+                            )
                     else:
+                        # Overflow -> close
                         await self.db.execute(
-                            "UPDATE riddles SET status='closed', closed_by=0, closed_at=?, updated_at=? WHERE id=?",
+                            "UPDATE riddles SET status='closed', closed_by=0, closed_at=?, "
+                            "first_posted_at=NULL, posted_channel_id=NULL, posted_message_id=NULL, "
+                            "updated_at=? WHERE id=?",
                             (now, now, rid),
                         )
                         await self.db.execute(
@@ -681,9 +773,11 @@ class RiddleRepo:
                 ids.remove(riddle_id)
                 ids.append(riddle_id)
                 now = now_iso_utc()
+                # Full reset of slot state / timer / posted refs on every open riddle.
                 await self.db.execute(
-                    "UPDATE riddles SET slot_no=NULL, is_active=0, updated_at=? "
-                    "WHERE guild_id=? AND status='open'",
+                    "UPDATE riddles SET slot_no=NULL, is_active=0, "
+                    "first_posted_at=NULL, posted_channel_id=NULL, posted_message_id=NULL, "
+                    "updated_at=? WHERE guild_id=? AND status='open'",
                     (now, guild_id),
                 )
                 for idx, rid in enumerate(ids, start=1):
@@ -716,6 +810,7 @@ class RiddleRepo:
                 now = now_iso_utc()
                 await self.db.execute(
                     "UPDATE riddles SET status='closed', slot_no=NULL, is_active=0, "
+                    "first_posted_at=NULL, posted_channel_id=NULL, posted_message_id=NULL, "
                     "closed_by=?, closed_at=?, updated_at=? WHERE id=? AND status='open'",
                     (closed_by, now, now, riddle_id),
                 )
@@ -738,9 +833,23 @@ class RiddleRepo:
 
     # -- post refs ---------------------------------------------------------
     async def set_riddle_post_ref(self, riddle_id: int, channel_id: int, message_id: int):
+        """
+        Sets posted_channel_id / posted_message_id, and sets first_posted_at
+        only if it is currently NULL (so refreshes / edits do NOT reset it).
+        """
+        now = now_iso_utc()
         await self._exec(
-            "UPDATE riddles SET posted_channel_id=?, posted_message_id=?, updated_at=? WHERE id=?",
-            (channel_id, message_id, now_iso_utc(), riddle_id),
+            "UPDATE riddles SET posted_channel_id=?, posted_message_id=?, "
+            "first_posted_at=COALESCE(first_posted_at, ?), updated_at=? WHERE id=?",
+            (channel_id, message_id, now, now, riddle_id),
+        )
+
+    async def reset_riddle_post_state(self, riddle_id: int):
+        """Clear posted refs AND first_posted_at (used for 'Post Now' fresh restart)."""
+        await self._exec(
+            "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
+            "first_posted_at=NULL, updated_at=? WHERE id=?",
+            (now_iso_utc(), riddle_id),
         )
 
     async def set_solved_post_ref(self, riddle_id: int, channel_id: int, message_id: int):
@@ -752,19 +861,21 @@ class RiddleRepo:
     async def clear_all_open_post_refs(self, guild_id: Optional[int] = None):
         if guild_id is None:
             await self._exec(
-                "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, updated_at=? WHERE status='open'",
+                "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
+                "first_posted_at=NULL, updated_at=? WHERE status='open'",
                 (now_iso_utc(),),
             )
         else:
             await self._exec(
-                "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
-                "WHERE guild_id=? AND status='open'",
+                "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
+                "first_posted_at=NULL, updated_at=? WHERE guild_id=? AND status='open'",
                 (now_iso_utc(), guild_id),
             )
 
     async def clear_other_open_post_refs(self, guild_id: int, keep_riddle_id: int):
         await self._exec(
-            "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
+            "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
+            "first_posted_at=NULL, updated_at=? "
             "WHERE guild_id=? AND status='open' AND id<>?",
             (now_iso_utc(), guild_id, keep_riddle_id),
         )
@@ -824,6 +935,20 @@ class RiddleRepo:
             "WHERE status='pending' AND riddle_id IN (SELECT id FROM riddles WHERE status<>'open')",
             (now_iso_utc(),),
         )
+
+    async def cancel_pending_for_riddle(self, riddle_id: int, moderator_id: int = 0):
+        await self._exec(
+            "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? "
+            "WHERE riddle_id=? AND status='pending'",
+            (moderator_id, now_iso_utc(), riddle_id),
+        )
+
+    async def has_pending_submissions_for_riddle(self, riddle_id: int) -> bool:
+        row = await self._one(
+            "SELECT 1 AS x FROM submissions WHERE riddle_id=? AND status='pending' LIMIT 1",
+            (riddle_id,),
+        )
+        return row is not None
 
     async def pending_open_submissions(self) -> list[dict]:
         return await self._all(

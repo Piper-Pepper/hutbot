@@ -12,10 +12,12 @@ from riddle_core import (
     RIDDLE_CHANNEL_ID, VOTE_CHANNEL_ID,
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID,
     EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, EXTRA_EXCLUDED_ROLE_IDS_CSV,
-    DEFAULT_IMAGE_URL, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES, AUTO_SCAN_SECONDS,
+    DEFAULT_IMAGE_URL, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES,
+    UNSOLVED_ROTATION_HOURS, SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS,
     SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
     footer_text,
+    iso_in_future, iso_utc_in_hours, hours_since,
     riddle_manager_required, send_access_denied, MissingRiddleManagerRole,
     RiddleRepo,
 )
@@ -42,7 +44,7 @@ class RiddleCog(commands.Cog):
         self._startup_done = False
 
     # ==========================================================================
-    # excluded users / stats filtering
+    # EXCLUDED USERS / STATS FILTERING
     # ==========================================================================
     def excluded_role_ids(self) -> set[int]:
         s = {EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, RIDDLE_MANAGER_ROLE_ID}
@@ -97,7 +99,7 @@ class RiddleCog(commands.Cog):
         await self.sync_open_slot_numbers_for_guild(guild_id)
 
     # ==========================================================================
-    # discord resolvers
+    # DISCORD RESOLVERS
     # ==========================================================================
     async def resolve_channel(self, channel_id: int):
         ch = self.bot.get_channel(channel_id)
@@ -143,7 +145,7 @@ class RiddleCog(commands.Cog):
         return mention, f"User {uid}", None
 
     # ==========================================================================
-    # ping content helper
+    # PING CONTENT HELPER
     # ==========================================================================
     def build_ping_content(self, guild: Optional[discord.Guild], mention_role_ids_csv: Optional[str]) -> Optional[str]:
         """Base role + up to MAX_EXTRA_PING_ROLES extra roles as a mention string."""
@@ -159,7 +161,7 @@ class RiddleCog(commands.Cog):
         return " ".join(dict.fromkeys(m for m in mentions if m)) or None
 
     # ==========================================================================
-    # channel cleanup helpers
+    # CHANNEL CLEANUP HELPERS
     # ==========================================================================
     def _msg_has_custom_id(self, msg: discord.Message, custom_ids: set[str]) -> bool:
         try:
@@ -244,7 +246,7 @@ class RiddleCog(commands.Cog):
 
     async def post_xp_reminder_to_vote_channel(self, guild: Optional[discord.Guild],
                                                user_id: int, xp_gain: int, riddle_no: int):
-        """Post an '/xp app <xp> <user>' reminder into the VOTE channel after a solve."""
+        """Post an XP-add reminder into the VOTE channel after a solve."""
         if VOTE_CHANNEL_ID <= 0 or xp_gain <= 0:
             return
         ch = await self.resolve_channel(VOTE_CHANNEL_ID)
@@ -258,10 +260,16 @@ class RiddleCog(commands.Cog):
         except Exception:
             logger.exception("Failed to post XP reminder to vote channel")
 
-# ==========================================================================
+    # ==========================================================================
     # POSTING: active riddle in Slot 1
     # ==========================================================================
     async def publish_slot1_post(self, guild_id: int, *, force_repost: bool, allow_role_ping: bool) -> str:
+        """
+        Publish (or edit) the current Slot 1 riddle.
+        Does NOT check hiatus / rotation — call enforce_enabled_state for that.
+        first_posted_at is preserved via COALESCE in set_riddle_post_ref, so
+        refresh/edit does NOT reset the 6h countdown.
+        """
         await self.normalize_after_structure_change(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
         if not slot1:
@@ -304,19 +312,146 @@ class RiddleCog(commands.Cog):
             logger.exception("publish_slot1_post failed")
             return "error"
 
-    async def enforce_enabled_state(self, guild_id: int, *, allow_ping: bool, force_repost: bool = False) -> str:
-        await self.normalize_after_structure_change(guild_id)
-        enabled = await self.repo.is_enabled(guild_id)
+    async def force_repost_slot1_fresh(self, guild_id: int, *, allow_ping: bool) -> str:
+        """
+        Delete any existing Slot 1 post, reset its timer + refs, then publish
+        a brand-new post. Used by 'Post Now' and 'Turn ON' so the 6h countdown
+        actually restarts.
+        """
         slot1 = await self.repo.get_open_slot1(guild_id)
-        if not enabled:
+        if not slot1:
+            return "no_slot1"
+        rid = to_int(slot1.get("id"), 0)
+        old_msg = await self.fetch_message_safe(
+            slot1.get("posted_channel_id"), slot1.get("posted_message_id"),
+        )
+        if old_msg:
+            try:
+                await old_msg.delete()
+            except Exception:
+                pass
+        await self.repo.reset_riddle_post_state(rid)
+        return await self.publish_slot1_post(
+            guild_id, force_repost=False, allow_role_ping=allow_ping,
+        )
+
+    async def enforce_enabled_state(self, guild_id: int, *, allow_ping: bool, force_repost: bool = False) -> str:
+        """
+        Reconcile Discord state with DB state. Respects hiatus + auto-rotation.
+          - if disabled            -> remove active posts
+          - if in hiatus           -> remove active posts, do nothing
+          - if hiatus expired      -> clear it, continue
+          - if slot1 age >= 6h and no pending vote posts -> auto-rotate
+          - otherwise              -> publish / refresh
+        """
+        await self.normalize_after_structure_change(guild_id)
+
+        if not await self.repo.is_enabled(guild_id):
             await self.remove_active_riddle_posts(guild_id)
             return "disabled"
+
+        # Hiatus check
+        hiatus = await self.repo.get_hiatus_until(guild_id)
+        if hiatus:
+            if iso_in_future(hiatus):
+                await self.remove_active_riddle_posts(guild_id)
+                return "hiatus"
+            # expired
+            await self.repo.set_hiatus_until(guild_id, None)
+
+        slot1 = await self.repo.get_open_slot1(guild_id)
         if not slot1:
             await self.repo.set_enabled(guild_id, False)
             await self.remove_active_riddle_posts(guild_id)
             return "enabled_but_no_slot1"
-        return await self.publish_slot1_post(guild_id, force_repost=force_repost, allow_role_ping=allow_ping)
 
+        # Auto-rotation check: 6h since FIRST post AND no pending vote posts.
+        fpa = slot1.get("first_posted_at")
+        age_h = hours_since(fpa) if fpa else None
+        if age_h is not None and age_h >= UNSOLVED_ROTATION_HOURS:
+            rid_s1 = to_int(slot1.get("id"), 0)
+            if not await self.repo.has_pending_submissions_for_riddle(rid_s1):
+                await self.auto_rotate_slot1_unsolved(guild_id)
+                return "auto_rotated"
+            # else: pending vote posts still exist -> wait, don't rotate yet.
+
+        return await self.publish_slot1_post(
+            guild_id, force_repost=force_repost, allow_role_ping=allow_ping,
+        )
+
+    # ==========================================================================
+    # ROTATION / CLEANUP HELPERS
+    # ==========================================================================
+    async def rotate_riddle_to_end(self, guild_id: int, riddle_id: int, *, ping_new_slot1: bool) -> bool:
+        """
+        Move a riddle to the end of the open queue AND clean up all its Discord
+        artifacts (posted riddle message, wrong-answer posts, pending vote posts,
+        pending submissions). Then publish the new Slot 1.
+        """
+        r = await self.repo.get_riddle_by_id(guild_id, riddle_id)
+        if not r or str(r.get("status")) != "open":
+            return False
+
+        # 1) delete posted riddle message
+        orig = await self.fetch_message_safe(r.get("posted_channel_id"), r.get("posted_message_id"))
+        if orig:
+            try:
+                await orig.delete()
+            except Exception:
+                logger.exception("Failed to delete original riddle post during rotation")
+
+        # 2) delete wrong-answer public posts
+        await self.cleanup_wrong_posts_for_riddle(riddle_id)
+
+        # 3) delete pending vote messages + cancel pending submissions
+        await self.cleanup_vote_messages_for_riddle(riddle_id)
+        await self.repo.cancel_pending_for_riddle(riddle_id)
+
+        # 4) DB move
+        ok = await self.repo.move_open_riddle_to_end(guild_id, riddle_id)
+
+        # 5) normalize + publish fresh Slot 1
+        await self.normalize_after_structure_change(guild_id)
+        if await self.repo.is_enabled(guild_id):
+            # Slot 1 changed -> definitely a fresh post; publish_slot1_post will
+            # set first_posted_at from NULL (via COALESCE).
+            await self.publish_slot1_post(
+                guild_id, force_repost=True, allow_role_ping=ping_new_slot1,
+            )
+        return ok
+
+    async def auto_rotate_slot1_unsolved(self, guild_id: int):
+        """Auto-rotation entry point (6h unsolved + no pending vote posts)."""
+        slot1 = await self.repo.get_open_slot1(guild_id)
+        if not slot1:
+            return
+        await self.rotate_riddle_to_end(
+            guild_id, to_int(slot1.get("id"), 0), ping_new_slot1=True,
+        )
+
+    async def close_and_cleanup_riddle(self, guild_id: int, riddle_id: int, closed_by: int) -> bool:
+        """
+        Close a riddle AND clean up all its Discord artifacts. Used by the
+        'Delete Slot' and 'Close Active' panel buttons.
+        """
+        r = await self.repo.get_riddle_by_id(guild_id, riddle_id)
+        if not r or str(r.get("status")) != "open":
+            return False
+        orig = await self.fetch_message_safe(r.get("posted_channel_id"), r.get("posted_message_id"))
+        if orig:
+            try:
+                await orig.delete()
+            except Exception:
+                pass
+        await self.cleanup_wrong_posts_for_riddle(riddle_id)
+        await self.cleanup_vote_messages_for_riddle(riddle_id)
+        await self.repo.cancel_pending_for_riddle(riddle_id, closed_by)
+        closed = await self.repo.close_open_riddle_by_id(guild_id, riddle_id, closed_by)
+        return closed is not None
+
+    # ==========================================================================
+    # REPOST PENDING VOTES (on startup/reconnect)
+    # ==========================================================================
     async def repost_pending_votes(self):
         rows = await self.repo.pending_open_submissions()
         if not rows:
@@ -347,13 +482,13 @@ class RiddleCog(commands.Cog):
     # ==========================================================================
     async def finalize_correct(self, guild: discord.Guild, ctx: dict, moderator: discord.Member):
         """
-        1)  DELETE the original riddle post entirely (not edit)
-        2)  DELETE all previously posted wrong-answer messages
-        3)  Post FRESH BIG solved post (riddle thumb + solution big image + [🔗 MORE] link, NO pings)
-        4)  Post SMALL ping post with Base + Extras + Winner mention
-        5)  Cleanup other pending vote messages for this riddle
+        1)  Delete the original riddle post
+        2)  Delete all wrong-answer posts for this riddle
+        3)  Post FRESH BIG solved post (no pings)
+        4)  Post SMALL ping post (Base + Extras + Winner)
+        5)  Cleanup other pending vote messages
         6)  Apply XP + solved-count if solver not excluded
-        7)  Normalize + AUTO-STOP the system
+        7)  System STAYS ON, but a solved hiatus of SOLVED_HIATUS_HOURS is set
         8)  XP reminder posted to VOTE channel
         """
         gid = guild.id
@@ -363,7 +498,7 @@ class RiddleCog(commands.Cog):
         xp_gain = max(0, to_int(ctx.get("xp_gain"), 0))
         submitted_answer = str(ctx.get("answer") or "")
 
-        # Reload the riddle so we have the freshest fields (images / mentions).
+        # Reload the riddle so we have the freshest fields.
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "solution", "xp", "image_url", "solution_url",
                   "riddle_no", "posted_channel_id", "posted_message_id",
@@ -433,11 +568,13 @@ class RiddleCog(commands.Cog):
         else:
             await self.rebuild_cached_solved_total_for_guild(gid)
 
-        # ---- 7) Normalize + AUTO-STOP ----
+        # ---- 7) Normalize + start SOLVED HIATUS (system stays ON) ----
         await self.normalize_after_structure_change(gid)
         await self.repo.clear_all_open_post_refs(gid)
-        await self.repo.set_enabled(gid, False)
-        await self.remove_active_riddle_posts(gid)
+        if await self.repo.is_enabled(gid):
+            await self.repo.set_hiatus_until(gid, iso_utc_in_hours(SOLVED_HIATUS_HOURS))
+        # System is NOT turned off here — spec: after a solve the system
+        # stays ON, only the next post is delayed by the hiatus.
 
         # ---- 8) XP reminder in the VOTE channel ----
         if solver_id > 0 and xp_gain > 0 and not await self.user_is_excluded(guild, solver_id):
@@ -451,7 +588,8 @@ class RiddleCog(commands.Cog):
     async def finalize_wrong(self, guild: discord.Guild, ctx: dict, moderator: discord.Member):
         """
         Riddle stays OPEN. Post a public wrong-answer message in the riddle channel.
-        Only the submitter is pinged. Message-ID stored for cleanup at solve time.
+        Only the submitter is pinged. Message-ID stored for cleanup at solve time
+        or at auto-rotation.
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -468,9 +606,7 @@ class RiddleCog(commands.Cog):
         if ch is None or not hasattr(ch, "send"):
             return
 
-        # ONLY the submitter is pinged
         content = submitter_mention if submitter_mention else None
-
         embed = build_wrong_post_embed(
             guild, riddle_row,
             submitter_mention, submitter_name, submitter_avatar,
@@ -496,9 +632,7 @@ class RiddleCog(commands.Cog):
         for gid in gids:
             await self.repo.ensure_guild_state(gid)
 
-        enabled_map: dict[int, bool] = {}
         for gid in gids:
-            enabled_map[gid] = await self.repo.is_enabled(gid)
             await self.rebuild_cached_solved_total_for_guild(gid)
             await self.normalize_after_structure_change(gid)
 
@@ -512,10 +646,8 @@ class RiddleCog(commands.Cog):
         await self.repo.cancel_pending_for_non_open()
 
         for gid in gids:
-            if enabled_map.get(gid, False):
-                await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
-            else:
-                await self.remove_active_riddle_posts(gid)
+            # enforce_enabled_state respects hiatus + rotation
+            await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
 
         await self.repost_pending_votes()
 
@@ -530,18 +662,16 @@ class RiddleCog(commands.Cog):
                 self._startup_done = True
             except Exception:
                 logger.exception("startup_rebuild failed – will retry next cycle")
-        while not self.bot.is_closed():    
+        while not self.bot.is_closed():
             try:
                 for gid in await self.repo.list_all_guild_ids():
                     await self.repo.ensure_guild_state(gid)
-                    await self.normalize_after_structure_change(gid)
-                    if await self.repo.is_enabled(gid):
-                        await self.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
-                    else:
-                        await self.remove_active_riddle_posts(gid)
+                    # enforce_enabled_state handles: disabled, hiatus,
+                    # auto-rotation (6h + no pending), and normal refresh.
+                    await self.enforce_enabled_state(gid, allow_ping=False, force_repost=False)
             except Exception:
                 logger.exception("auto worker cycle error")
-            await asyncio.sleep(max(60, AUTO_SCAN_SECONDS))
+            await asyncio.sleep(max(60, ROTATION_TICK_SECONDS))
 
     # ==========================================================================
     # LISTENERS
@@ -559,7 +689,7 @@ class RiddleCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Repost the active riddle after every (re)connect so buttons work again."""
+        """Reconcile after every (re)connect so buttons + hiatus work again."""
         if not self._startup_done:
             return  # first startup is handled by _auto_worker -> startup_rebuild
         try:
@@ -567,10 +697,9 @@ class RiddleCog(commands.Cog):
             self.bot.add_view(SubmitButtonView(self))
             self.bot.add_view(VoteButtons(self))
             for gid in await self.repo.list_all_guild_ids():
-                if await self.repo.is_enabled(gid):
-                    await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
+                await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
             await self.repost_pending_votes()
-            logger.info("on_ready: reposted active riddles + pending votes after reconnect")
+            logger.info("on_ready: reconciled active riddles + pending votes after reconnect")
         except Exception:
             logger.exception("on_ready reconnect recovery failed")
 
