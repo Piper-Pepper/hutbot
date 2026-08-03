@@ -213,7 +213,18 @@ def build_wrong_post_embed(
         e.set_author(name=submitter_name, icon_url=submitter_avatar_url)
     else:
         e.set_author(name=submitter_name)
-    e.add_field(name="🧩 Riddle", value=clamp_embed_value(riddle.get("text") or "*No text*"), inline=False)
+
+    # >>> NEU: Riddle-Text auf 100 Zeichen kürzen
+    riddle_text_short = truncate_text(
+        (riddle.get("text") or "*No text*").strip(),
+        100,
+    )
+    e.add_field(
+        name="🧩 Riddle",
+        value=clamp_embed_value(riddle_text_short),
+        inline=False,
+    )
+
     e.add_field(name="🧠 Submitted Answer", value=clamp_embed_value(submitted_answer or "*empty*"), inline=False)
     e.add_field(name="🏆 Award (still up for grabs)", value=f"{xp} XP",      inline=True)
     e.add_field(name="🎚️ Level",                     value=level_badge(xp), inline=True)
@@ -222,7 +233,6 @@ def build_wrong_post_embed(
         e.set_thumbnail(url=r_img)
     e.set_footer(text=footer_text(guild))
     return e
-
 
 def build_vote_embed(
     guild: Optional[discord.Guild], riddle: dict, submitter_id: int,
