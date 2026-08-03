@@ -217,7 +217,7 @@ def build_wrong_post_embed(
     # >>> NEU: Riddle-Text auf 100 Zeichen kürzen
     riddle_text_short = truncate_text(
         (riddle.get("text") or "*No text*").strip(),
-        100,
+        80,
     )
     e.add_field(
         name="🧩 Riddle",
