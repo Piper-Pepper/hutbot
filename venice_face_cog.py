@@ -92,8 +92,12 @@ FACE_ONLY_INSTRUCTION_SUFFIX = (
 
 FACE_ASPECT_RATIO: Optional[str] = None
 FACE_RESOLUTION: Optional[str] = "1K"
-FACE_SAFE_MODE: Optional[bool] = False
 FACE_OUTPUT_FORMAT: Optional[str] = "png"
+
+# safe_mode is INTENTIONALLY hard-coded as False and never touched by the caps
+# auto-heal system. Without this the API defaults to safe_mode=true and returns
+# BLURRED output for anything the classifier tags as adult.
+FACE_SAFE_MODE_VALUE: bool = False
 
 IMAGE_QUOTA_FILE = os.getenv("IMAGE_QUOTA_FILE", "goonhut_image_quota.json")
 image_quota = get_quota_store(IMAGE_QUOTA_FILE)
@@ -198,9 +202,13 @@ RECENT_SCAN_LIMIT = 12
 
 # =================================================
 # MODEL CAPS
+#
+# IMPORTANT: safe_mode is intentionally NOT part of OPTIONAL_PARAM_KEYS.
+# It must never be blocked by auto-healing since safe_mode=false is what keeps
+# the API from blurring adult output. It is hard-coded in every payload.
 # =================================================
 OPTIONAL_PARAM_KEYS: tuple[str, ...] = (
-    "aspect_ratio", "resolution", "safe_mode", "output_format",
+    "aspect_ratio", "resolution", "output_format",
     "seed", "variants", "negative_prompt", "strength",
 )
 
@@ -229,10 +237,16 @@ class ModelCapsStore:
                 for mid, entry in data.items():
                     if not isinstance(entry, dict):
                         continue
-                    blocked = entry.get("blocked") or []
+                    blocked_raw = entry.get("blocked") or []
+                    # Defensive: strip any legacy 'safe_mode' entry that could
+                    # have been persisted from an earlier version of this cog.
+                    blocked = {
+                        str(b) for b in blocked_raw
+                        if str(b) in OPTIONAL_PARAM_KEYS and str(b) != "safe_mode"
+                    }
                     style = entry.get("image_style")
                     self._data[str(mid)] = {
-                        "blocked": {str(b) for b in blocked if str(b) in OPTIONAL_PARAM_KEYS},
+                        "blocked": blocked,
                         "image_style": style if style in IMAGE_STYLE_ORDER else IMAGE_STYLE_RAW,
                     }
         except Exception as e:
@@ -272,7 +286,9 @@ class ModelCapsStore:
 
     def block(self, model_id: str, keys: set[str]) -> set[str]:
         entry = self._entry(model_id)
-        new = {k for k in keys if k in OPTIONAL_PARAM_KEYS} - entry["blocked"]
+        # Extra hard guard: never allow safe_mode to enter the blocked set.
+        candidates = {k for k in keys if k in OPTIONAL_PARAM_KEYS and k != "safe_mode"}
+        new = candidates - entry["blocked"]
         if new:
             entry["blocked"] |= new
             self._dirty = True
@@ -329,6 +345,7 @@ def _collect_rejected_params(body_text: str) -> set[str]:
     for key in OPTIONAL_PARAM_KEYS:
         if key in found or re.search(rf"\b{re.escape(key)}\b", lowered):
             bad.add(key)
+    # safe_mode is not in OPTIONAL_PARAM_KEYS, so it can never be reported here.
     return bad
 
 
@@ -342,10 +359,10 @@ def _encode_image(image_bytes: bytes, style: str) -> str:
 
 
 def _apply_optional(payload: dict[str, Any], blocked: set[str]) -> None:
+    # safe_mode is set directly in the payload builder, NOT here.
     optional = {
         "aspect_ratio": FACE_ASPECT_RATIO,
         "resolution": FACE_RESOLUTION,
-        "safe_mode": FACE_SAFE_MODE,
         "output_format": FACE_OUTPUT_FORMAT,
     }
     for k, v in optional.items():
@@ -360,6 +377,9 @@ def _build_single_edit_payload(model_id: str, prompt: str, face_bytes: bytes) ->
         "model": model_id,
         "prompt": prompt,
         "image": _encode_image(face_bytes, style),
+        # HARD-CODED: never blockable, never optional. Without safe_mode=false
+        # the Venice API blurs any output the classifier tags as adult.
+        "safe_mode": FACE_SAFE_MODE_VALUE,
     }
     _apply_optional(payload, blocked)
     return payload
@@ -542,7 +562,7 @@ face_pool = FacePoolStore(FACE_POOL_FILE, FACE_POOL_DIR, FACE_SLOT_COUNT)
 
 
 # =================================================
-# VENICE EDIT - single-edit only
+# VENICE EDIT - single-edit only, safe_mode always false
 # =================================================
 async def venice_edit(
     session: aiohttp.ClientSession,
@@ -568,8 +588,9 @@ async def venice_edit(
         payload = _build_single_edit_payload(model_id, prompt, face_bytes)
 
         logger.info(
-            "[FACE %s] -> POST SINGLE model=%s prompt_len=%d caps(%s)",
-            req_id, model_id, len(prompt), model_caps.describe(model_id),
+            "[FACE %s] -> POST SINGLE model=%s prompt_len=%d safe_mode=%s caps(%s)",
+            req_id, model_id, len(prompt), payload.get("safe_mode"),
+            model_caps.describe(model_id),
         )
         try:
             async with session.post(endpoint, headers=headers, json=payload, timeout=timeout) as resp:
@@ -964,7 +985,8 @@ async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]
             "**Buttons on the starter message:**\n"
             "• 🔞 `Nude V1` — qwen-edit-uncensored\n"
             "• 🔞 `Nude V2` — seedream-v5-pro-edit\n"
-            "• 👗 `Clothed (Free)` — nano-banana-2-edit"
+            "• 👗 `Clothed (Free)` — nano-banana-2-edit\n\n"
+            f"`safe_mode` is hard-locked to **{FACE_SAFE_MODE_VALUE}** (uncensored output)."
         ),
         color=discord.Color.purple(),
     )
@@ -1235,6 +1257,7 @@ class VeniceFaceCog(commands.Cog):
             f"• Legacy reference: {ref_state}\n"
             f"• Pool: {pool_state}\n"
             f"• Required role id: `{FACE_REQUIRED_ROLE_ID}`\n"
+            f"• safe_mode value: `{FACE_SAFE_MODE_VALUE}` (uncensored)\n"
             f"• Starter messages reposted: {reposted}"
         )
 
