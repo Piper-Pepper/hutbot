@@ -53,10 +53,6 @@ VENICE_IMAGE_EDIT_URL = os.getenv(
     "VENICE_IMAGE_EDIT_URL",
     "https://api.venice.ai/api/v1/image/edit",
 )
-VENICE_IMAGE_MULTI_EDIT_URL = os.getenv(
-    "VENICE_IMAGE_MULTI_EDIT_URL",
-    "https://api.venice.ai/api/v1/image/multi-edit",
-)
 if not VENICE_API_KEY:
     raise RuntimeError("VENICE_API_KEY not set in .env")
 
@@ -72,8 +68,10 @@ FACE_REFERENCE_URL = os.getenv("FACE_REFERENCE_URL", "")
 FACE_POOL_FILE = os.getenv("FACE_POOL_FILE", "venice_face_pool.json")
 FACE_POOL_DIR = Path(os.getenv("FACE_POOL_DIR", "assets/face_pool"))
 
-# SINGLE mandatory role for the face cog (no tier system).
-# Configurable via .env, defaults to the previous Tier 2 role id.
+# Number of face reference slots the pool exposes.
+FACE_SLOT_COUNT = 5
+
+# SINGLE mandatory role for the face cog.
 FACE_REQUIRED_ROLE_ID = env_int("FACE_REQUIRED_ROLE_ID", 1375147276413964408)
 
 # --- Hidden prompt suffixes -----------------------
@@ -87,18 +85,9 @@ PROMPT_HIDDEN_SUFFIX = (
     " professional photography."
 )
 
-# For single-edit modes (face only):
 FACE_ONLY_INSTRUCTION_SUFFIX = (
     " IMPORTANT: The reference image shows Piper's face and identity - "
     "same facial features, same eyes, nose, mouth, skin tone and hair must be preserved perfectly."
-)
-
-# For multi-edit mode (Clothed Wardrobe - face + clothing):
-WARDROBE_INSTRUCTION_SUFFIX = (
-    " IMPORTANT: The FIRST reference image shows Piper's face and identity - "
-    "preserve her facial features, eyes, nose, mouth, skin tone and hair perfectly."
-    " The SECOND reference image shows Piper's exact clothing/outfit - "
-    "she MUST wear exactly this outfit in the scene, matching colors, fabric, cut and style precisely."
 )
 
 FACE_ASPECT_RATIO: Optional[str] = None
@@ -113,18 +102,23 @@ FACE_CAPS_FILE = os.getenv("FACE_CAPS_FILE", "venice_face_model_caps.json")
 
 # =================================================
 # BACKEND MODELS
+# label       -> long label used in config/admin views
+# short_label -> compact label shown in posts (embed fields, footers, filenames)
 # =================================================
 MODELS: dict[str, dict[str, Any]] = {
     "qwen-edit-uncensored": {
         "label": "🔞 qwen-edit-uncensored",
+        "short_label": "🔞 Qwen",
         "prompt_limit": 3000,
     },
     "seedream-v5-pro-edit": {
         "label": "🔞 seedream-v5-pro-edit",
+        "short_label": "🔞 Seedream",
         "prompt_limit": 5000,
     },
     "nano-banana-2-edit": {
         "label": "👗 nano-banana-2-edit",
+        "short_label": "👗 Nano-Banana",
         "prompt_limit": 10000,
     },
 }
@@ -135,54 +129,50 @@ def get_model_label(model_id: str) -> str:
     return (MODELS.get(model_id) or {}).get("label", model_id)
 
 
+def get_model_short_label(model_id: str) -> str:
+    cfg = MODELS.get(model_id) or {}
+    return cfg.get("short_label") or cfg.get("label") or model_id
+
+
 # =================================================
-# MODES - 4 visible buttons
-#
-# API mapping:
-#   - The FIRST THREE modes (Nude V1, Nude V2, Clothed Free) send ONLY the face
-#     reference to the single-edit endpoint (VENICE_IMAGE_EDIT_URL).
-#   - The FOURTH mode (Clothed Wardrobe) additionally sends a random clothing
-#     reference to the multi-edit endpoint (VENICE_IMAGE_MULTI_EDIT_URL).
+# MODES - 3 visible buttons (all single-edit, face only)
 # =================================================
 MODES: dict[str, dict[str, Any]] = {
     "nude_v1": {
         "label": "🔞 Nude (Variant 1)",
+        "short_label": "🔞 Nude V1",
         "button_label": "🔞 Nude V1",
         "model": "qwen-edit-uncensored",
-        "use_wardrobe": False,
         "danger": True,
         "prompt_limit": 3000,
     },
     "nude_v2": {
         "label": "🔞 Nude (Variant 2)",
+        "short_label": "🔞 Nude V2",
         "button_label": "🔞 Nude V2",
         "model": "seedream-v5-pro-edit",
-        "use_wardrobe": False,
         "danger": True,
         "prompt_limit": 5000,
     },
     "clothed_free": {
         "label": "👗 Clothed (Free)",
+        "short_label": "👗 Clothed",
         "button_label": "👗 Clothed (Free)",
         "model": "nano-banana-2-edit",
-        "use_wardrobe": False,
-        "danger": False,
-        "prompt_limit": 10000,
-    },
-    "clothed_wardrobe": {
-        "label": "👗 Clothed (Piper's Wardrobe)",
-        "button_label": "👗 Piper's Wardrobe",
-        "model": "nano-banana-2-edit",
-        "use_wardrobe": True,
         "danger": False,
         "prompt_limit": 10000,
     },
 }
-MODE_ORDER = ["nude_v1", "nude_v2", "clothed_free", "clothed_wardrobe"]
+MODE_ORDER = ["nude_v1", "nude_v2", "clothed_free"]
 
 
 def get_mode_label(mode_id: str) -> str:
     return (MODES.get(mode_id) or {}).get("label", mode_id)
+
+
+def get_mode_short_label(mode_id: str) -> str:
+    cfg = MODES.get(mode_id) or {}
+    return cfg.get("short_label") or cfg.get("label") or mode_id
 
 
 def get_mode_button_label(mode_id: str) -> str:
@@ -220,12 +210,6 @@ IMAGE_STYLE_ORDER = (IMAGE_STYLE_RAW, IMAGE_STYLE_DATAURL)
 
 
 class ModelCapsStore:
-    """
-    Learns which optional API parameters a given edit model actually accepts.
-    When the provider rejects a param with 400/415/422, we mark it as blocked
-    for that model and retry without it.
-    """
-
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
         self._data: dict[str, dict[str, Any]] = {}
@@ -381,24 +365,6 @@ def _build_single_edit_payload(model_id: str, prompt: str, face_bytes: bytes) ->
     return payload
 
 
-def _build_multi_edit_payload(
-    model_id: str, prompt: str, face_bytes: bytes, secondary_bytes: bytes
-) -> dict[str, Any]:
-    """Face image first = base identity. Second image = wardrobe/outfit."""
-    blocked = model_caps.blocked(model_id)
-    style = model_caps.image_style(model_id)
-    payload: dict[str, Any] = {
-        "modelId": model_id,
-        "prompt": prompt,
-        "images": [
-            _encode_image(face_bytes, style),
-            _encode_image(secondary_bytes, style),
-        ],
-    }
-    _apply_optional(payload, blocked)
-    return payload
-
-
 def _model_param_footer(model_id: str) -> str:
     blocked = model_caps.blocked(model_id)
     bits = []
@@ -410,17 +376,12 @@ def _model_param_footer(model_id: str) -> str:
 
 
 def user_has_required_role(member: Optional[discord.Member]) -> bool:
-    """Face cog requires ONE specific role (configured via .env). No tier logic."""
     if not isinstance(member, discord.Member):
         return False
     return any(r.id == FACE_REQUIRED_ROLE_ID for r in member.roles)
 
 
 async def send_face_role_locked_message(interaction: discord.Interaction):
-    """
-    Show 'You need Tier X, Level Y and the Role <@&...> to access this feature'
-    (only the tier line is emitted; no full tier ladder).
-    """
     await send_role_locked_message(
         interaction, FACE_REQUIRED_ROLE_ID, "The face-consistent image generator"
     )
@@ -470,17 +431,18 @@ class FaceReferenceCache:
 
 
 face_ref_cache = FaceReferenceCache(FACE_REFERENCE_FILE, FACE_REFERENCE_URL)
+
+
 # =================================================
-# FACE POOL STORE - 3 face + 3 clothing slots
+# FACE POOL STORE - 5 face slots (no clothing)
 # =================================================
 class FacePoolStore:
-    def __init__(self, config_file: Path | str, storage_dir: Path | str):
+    def __init__(self, config_file: Path | str, storage_dir: Path | str,
+                 slot_count: int = FACE_SLOT_COUNT):
         self.config_file = Path(config_file)
         self.storage_dir = Path(storage_dir)
-        self._data: dict[str, Any] = {
-            "face_slots": [None, None, None],
-            "clothing_slots": [None, None, None],
-        }
+        self.slot_count = slot_count
+        self._data: dict[str, Any] = {"face_slots": [None] * slot_count}
         self._loaded = False
         self._lock = asyncio.Lock()
 
@@ -498,17 +460,14 @@ class FacePoolStore:
             data = json.loads(raw) if raw.strip() else {}
             if isinstance(data, dict):
                 slots = data.get("face_slots")
-                if isinstance(slots, list) and len(slots) == 3:
-                    self._data["face_slots"] = [s if isinstance(s, str) else None for s in slots]
-
-                clothing = data.get("clothing_slots")
-                if isinstance(clothing, list) and len(clothing) == 3:
-                    self._data["clothing_slots"] = [s if isinstance(s, str) else None for s in clothing]
-                else:
-                    # Legacy migration: single clothing_slot -> first list slot.
-                    legacy = data.get("clothing_slot")
-                    if isinstance(legacy, str):
-                        self._data["clothing_slots"] = [legacy, None, None]
+                if isinstance(slots, list):
+                    # Normalize length: pad or trim to slot_count.
+                    normalized = [s if isinstance(s, str) else None for s in slots]
+                    if len(normalized) < self.slot_count:
+                        normalized += [None] * (self.slot_count - len(normalized))
+                    else:
+                        normalized = normalized[: self.slot_count]
+                    self._data["face_slots"] = normalized
         except Exception as e:
             logger.warning("Face pool load failed: %s", e)
 
@@ -521,14 +480,9 @@ class FacePoolStore:
         except Exception as e:
             logger.warning("Face pool save failed: %s", e)
 
-    def _basename(self, slot_type: str, index: Optional[int]) -> str:
-        if slot_type == "face":
-            assert index is not None and 0 <= index < 3
-            return f"face_{index+1}"
-        if slot_type == "clothing":
-            assert index is not None and 0 <= index < 3
-            return f"clothing_{index+1}"
-        raise ValueError(slot_type)
+    def _basename(self, index: int) -> str:
+        assert 0 <= index < self.slot_count
+        return f"face_{index+1}"
 
     def _remove_stale(self, basename: str, keep: Path):
         for ext in ("png", "jpg", "jpeg", "webp"):
@@ -537,55 +491,40 @@ class FacePoolStore:
                 with contextlib.suppress(Exception):
                     p.unlink()
 
-    def _set_path(self, slot_type: str, index: Optional[int], path: Optional[str]):
-        if slot_type == "face":
-            self._data["face_slots"][index] = path
-        elif slot_type == "clothing":
-            self._data["clothing_slots"][index] = path
-
-    async def set_slot(self, slot_type: str, index: Optional[int],
-                       image_bytes: bytes, extension: str = "png") -> str:
+    async def set_slot(self, index: int, image_bytes: bytes, extension: str = "png") -> str:
         async with self._lock:
             self.load()
             self._ensure_dir()
-            basename = self._basename(slot_type, index)
+            basename = self._basename(index)
             ext = extension.lower().lstrip(".")
             if ext not in ("png", "jpg", "jpeg", "webp"):
                 ext = "png"
             path = self.storage_dir / f"{basename}.{ext}"
             await asyncio.to_thread(path.write_bytes, image_bytes)
             self._remove_stale(basename, path)
-            self._set_path(slot_type, index, str(path))
+            self._data["face_slots"][index] = str(path)
             self.save()
             return str(path)
 
-    async def clear_slot(self, slot_type: str, index: Optional[int] = None):
+    async def clear_slot(self, index: int):
         async with self._lock:
             self.load()
-            basename = self._basename(slot_type, index)
+            basename = self._basename(index)
             for ext in ("png", "jpg", "jpeg", "webp"):
                 p = self.storage_dir / f"{basename}.{ext}"
                 if p.exists():
                     with contextlib.suppress(Exception):
                         p.unlink()
-            self._set_path(slot_type, index, None)
+            self._data["face_slots"][index] = None
             self.save()
 
-    def get_path(self, slot_type: str, index: Optional[int] = None) -> Optional[str]:
+    def get_path(self, index: int) -> Optional[str]:
         self.load()
-        if slot_type == "face":
-            return self._data["face_slots"][index]
-        if slot_type == "clothing":
-            return self._data["clothing_slots"][index]
-        return None
+        return self._data["face_slots"][index]
 
     def get_face_slots(self) -> list[Optional[str]]:
         self.load()
         return list(self._data["face_slots"])
-
-    def get_clothing_slots(self) -> list[Optional[str]]:
-        self.load()
-        return list(self._data["clothing_slots"])
 
     async def read_random_face(self) -> tuple[Optional[bytes], Optional[int]]:
         slots = [(i, p) for i, p in enumerate(self.get_face_slots()) if p and Path(p).exists()]
@@ -598,30 +537,18 @@ class FacePoolStore:
             logger.error("Face slot read failed: %s", e)
             return None, None
 
-    async def read_random_clothing(self) -> tuple[Optional[bytes], Optional[int]]:
-        slots = [(i, p) for i, p in enumerate(self.get_clothing_slots()) if p and Path(p).exists()]
-        if not slots:
-            return None, None
-        i, chosen = random.choice(slots)
-        try:
-            return await asyncio.to_thread(Path(chosen).read_bytes), i
-        except Exception as e:
-            logger.error("Clothing slot read failed: %s", e)
-            return None, None
 
-
-face_pool = FacePoolStore(FACE_POOL_FILE, FACE_POOL_DIR)
+face_pool = FacePoolStore(FACE_POOL_FILE, FACE_POOL_DIR, FACE_SLOT_COUNT)
 
 
 # =================================================
-# VENICE EDIT - dual endpoint (single + multi) with fallback
+# VENICE EDIT - single-edit only
 # =================================================
 async def venice_edit(
     session: aiohttp.ClientSession,
     model_id: str,
     prompt: str,
     face_bytes: bytes,
-    secondary_bytes: Optional[bytes] = None,
     retries: int = 2,
 ) -> tuple[Optional[bytes], Optional[str]]:
     headers = {
@@ -630,9 +557,7 @@ async def venice_edit(
     }
     req_id = uuid.uuid4().hex[:8]
     timeout = aiohttp.ClientTimeout(total=180, connect=20, sock_read=150)
-
-    use_multi = secondary_bytes is not None
-    endpoint = VENICE_IMAGE_MULTI_EDIT_URL if use_multi else VENICE_IMAGE_EDIT_URL
+    endpoint = VENICE_IMAGE_EDIT_URL
 
     last_error: Optional[str] = None
     heals = 0
@@ -640,15 +565,11 @@ async def venice_edit(
     attempt = 0
 
     while attempt <= retries and heals <= max_heals:
-        if use_multi:
-            payload = _build_multi_edit_payload(model_id, prompt, face_bytes, secondary_bytes)
-        else:
-            payload = _build_single_edit_payload(model_id, prompt, face_bytes)
+        payload = _build_single_edit_payload(model_id, prompt, face_bytes)
 
         logger.info(
-            "[FACE %s] -> POST %s model=%s images=%d prompt_len=%d caps(%s)",
-            req_id, "MULTI" if use_multi else "SINGLE", model_id,
-            2 if use_multi else 1, len(prompt), model_caps.describe(model_id),
+            "[FACE %s] -> POST SINGLE model=%s prompt_len=%d caps(%s)",
+            req_id, model_id, len(prompt), model_caps.describe(model_id),
         )
         try:
             async with session.post(endpoint, headers=headers, json=payload, timeout=timeout) as resp:
@@ -664,8 +585,8 @@ async def venice_edit(
                 with contextlib.suppress(Exception):
                     body = await resp.text()
 
-                logger.error("[FACE %s] status=%s ep=%s body=%s",
-                             req_id, resp.status, endpoint, body[:1200])
+                logger.error("[FACE %s] status=%s body=%s",
+                             req_id, resp.status, body[:1200])
 
                 if resp.status in (400, 415, 422):
                     rejected = _collect_rejected_params(body)
@@ -674,19 +595,6 @@ async def venice_edit(
                         if newly:
                             heals += 1
                             continue
-
-                    # Multi-edit rejected? Fall back to single-edit.
-                    if use_multi and (
-                        "images" in body.lower()
-                        or "maxinputimages" in body.lower()
-                        or "multi" in body.lower()
-                        or "modelid" in body.lower()
-                    ):
-                        logger.warning("[FACE %s] multi-edit refused, falling back to single", req_id)
-                        use_multi = False
-                        endpoint = VENICE_IMAGE_EDIT_URL
-                        heals += 1
-                        continue
 
                     if _mentions_image_field(body):
                         current = model_caps.image_style(model_id)
@@ -730,7 +638,7 @@ async def venice_edit(
 
 
 # =================================================
-# MODULE-LEVEL COG REFERENCE (for starter repost from generation flow)
+# MODULE-LEVEL COG REFERENCE
 # =================================================
 _cog_instance: Optional["VeniceFaceCog"] = None
 
@@ -762,12 +670,12 @@ def _face_progress_embed(user, prompt, mode_id, model_id, percent, eta_sec, stag
         status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
         quota_name="Quota (24h, shared)",
         quota_state=quota,
-        footer=f"{get_mode_label(mode_id)} • {get_model_label(model_id)} • {_model_param_footer(model_id)}",
+        footer=f"{get_mode_short_label(mode_id)} • {get_model_short_label(model_id)} • {_model_param_footer(model_id)}",
     )
-
+# venice_face_cog.py — Part 2/2
 
 # =================================================
-# STARTER BUTTONS - 4 modes
+# STARTER BUTTONS - 3 modes
 # =================================================
 class StarterModeButton(discord.ui.Button):
     def __init__(self, session_ref, channel_id: int, mode_id: str, row: int):
@@ -828,7 +736,6 @@ class FacePromptModal(discord.ui.Modal):
             "nude_v1": "Piper naked on a bed at night, soft lamp light...",
             "nude_v2": "Piper naked in a bathroom, steamy mirror, wet hair...",
             "clothed_free": "Piper in a red dress on a rainy Tokyo street at night...",
-            "clothed_wardrobe": "Piper walking through a neon-lit alley at night...",
         }.get(mode_id, "Describe the scene...")
 
         self.prompt = discord.ui.TextInput(
@@ -877,17 +784,13 @@ async def run_face_generation(
         await send_face_role_locked_message(interaction)
         return
 
-    mode_cfg = MODES[mode_id]
     model_id = get_mode_model(mode_id)
-    use_wardrobe = bool(mode_cfg["use_wardrobe"])
 
     progress_msg = None
     quota_success = False
     token_quota = None
 
-    # Face cog uses the same shared image quota file as the image cog.
-    # Limit is determined by the tier of the *required* face role.
-    from venice_shared import TIER_RULES, DEFAULT_IMAGE_LIMIT_24H
+    from venice_shared import TIER_RULES
     face_role_tier = None
     for t, cfg in TIER_RULES.items():
         if cfg["role_id"] == FACE_REQUIRED_ROLE_ID:
@@ -895,8 +798,6 @@ async def run_face_generation(
             break
 
     try:
-        # Use the tier that the face role belongs to; if the configured role
-        # is NOT a tier role, fall back to the member's actual tier limit.
         if face_role_tier is not None:
             image_limit = int(face_role_tier[1]["image_limit"])
         else:
@@ -922,40 +823,17 @@ async def run_face_generation(
             )
             return
 
-        # === Random clothing (wardrobe mode only) ===
-        secondary_bytes: Optional[bytes] = None
-        chosen_cloth_slot: Optional[int] = None
-        if use_wardrobe:
-            secondary_bytes, chosen_cloth_slot = await face_pool.read_random_clothing()
-            if secondary_bytes is None:
-                await send_ephemeral(
-                    interaction,
-                    "❌ No clothing reference available for wardrobe mode.\n"
-                    "Use `/face_config` to upload at least one clothing image, "
-                    "or use `Clothed (Free)` instead.",
-                )
-                return
-
         logger.info(
-            "[FACE gen] user=%s mode=%s model=%s face_slot=%s cloth_slot=%s",
+            "[FACE gen] user=%s mode=%s model=%s face_slot=%s",
             interaction.user.id, mode_id, model_id,
             (chosen_face_slot + 1) if chosen_face_slot is not None else "legacy",
-            (chosen_cloth_slot + 1) if chosen_cloth_slot is not None else "none",
         )
 
-        # === Build full prompt ===
-        if use_wardrobe:
-            full_prompt = (
-                f"{user_prompt.strip()}"
-                f"{PROMPT_HIDDEN_SUFFIX}"
-                f"{WARDROBE_INSTRUCTION_SUFFIX}"
-            ).strip()
-        else:
-            full_prompt = (
-                f"{user_prompt.strip()}"
-                f"{PROMPT_HIDDEN_SUFFIX}"
-                f"{FACE_ONLY_INSTRUCTION_SUFFIX}"
-            ).strip()
+        full_prompt = (
+            f"{user_prompt.strip()}"
+            f"{PROMPT_HIDDEN_SUFFIX}"
+            f"{FACE_ONLY_INSTRUCTION_SUFFIX}"
+        ).strip()
 
         est_time = 40.0
         progress_msg = await send_ephemeral(
@@ -967,7 +845,7 @@ async def run_face_generation(
         )
 
         gen_task = asyncio.create_task(
-            venice_edit(session, model_id, full_prompt, face_bytes, secondary_bytes)
+            venice_edit(session, model_id, full_prompt, face_bytes)
         )
 
         def gen_embed(percent, eta):
@@ -996,7 +874,7 @@ async def run_face_generation(
                     ),
                 )
 
-        # === Result embed ===
+        # === Result embed - uses SHORT labels ===
         embed = discord.Embed(
             title="🎭 Face Image",
             color=discord.Color.purple(),
@@ -1011,11 +889,11 @@ async def run_face_generation(
             value=f"```{codeblock_safe(trim(user_prompt, 1600))}```",
             inline=False,
         )
-        embed.add_field(name="Mode", value=get_mode_label(mode_id), inline=True)
-        embed.add_field(name="Model", value=get_model_label(model_id), inline=True)
+        embed.add_field(name="Mode", value=get_mode_short_label(mode_id), inline=True)
+        embed.add_field(name="Model", value=get_model_short_label(model_id), inline=True)
         guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
         embed.set_footer(
-            text=f"{get_mode_label(mode_id)} • {get_model_label(model_id)} • {_model_param_footer(model_id)}",
+            text=f"{get_mode_short_label(mode_id)} • {get_model_short_label(model_id)} • {_model_param_footer(model_id)}",
             icon_url=guild_icon,
         )
 
@@ -1060,57 +938,37 @@ async def run_face_generation(
                 await progress_msg.delete()
         if not quota_success:
             await image_quota.rollback(token_quota)
-        # Repost starter buttons back to the channel bottom.
         if _cog_instance and interaction.channel:
             with contextlib.suppress(Exception):
                 await _cog_instance.ensure_starter_message(interaction.channel)
 
 
 # =================================================
-# CONFIG PANEL - with image previews
+# CONFIG PANEL - 5 face slots only
 # =================================================
 _PREVIEW_MAX_BYTES = 500_000
 
 
-async def _load_preview(path: Optional[str]) -> Optional[bytes]:
-    if not path or not Path(path).exists():
-        return None
-    try:
-        raw = await asyncio.to_thread(Path(path).read_bytes)
-        return raw if looks_like_image(raw) else None
-    except Exception:
-        return None
-
-
 async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]]:
     face_slots = face_pool.get_face_slots()
-    cloth_slots = face_pool.get_clothing_slots()
 
     def ok(p):
         return "✅" if p and Path(p).exists() else "❌"
 
     face_summary = " | ".join(f"F{i+1}: {ok(s)}" for i, s in enumerate(face_slots))
-    cloth_summary = " | ".join(f"C{i+1}: {ok(s)}" for i, s in enumerate(cloth_slots))
 
     main = discord.Embed(
         title="🎭 Face Pool Configuration",
         description=(
-            "**Face Slots (3)** — one picked randomly per generation for ALL modes.\n"
-            "**Clothing Slots (3)** — one picked randomly for the "
-            "👗 `Clothed (Piper's Wardrobe)` mode only.\n\n"
+            f"**Face Slots ({FACE_SLOT_COUNT})** — one picked randomly per generation for ALL modes.\n\n"
             "**Buttons on the starter message:**\n"
-            "• 🔞 `Nude V1` — qwen-edit-uncensored (single-edit, face only)\n"
-            "• 🔞 `Nude V2` — seedream-v5-pro-edit (single-edit, face only)\n"
-            "• 👗 `Clothed (Free)` — nano-banana-2-edit (single-edit, face only)\n"
-            "• 👗 `Clothed (Wardrobe)` — nano-banana-2-edit + random clothing image"
+            "• 🔞 `Nude V1` — qwen-edit-uncensored\n"
+            "• 🔞 `Nude V2` — seedream-v5-pro-edit\n"
+            "• 👗 `Clothed (Free)` — nano-banana-2-edit"
         ),
         color=discord.Color.purple(),
     )
-    main.add_field(
-        name="Status",
-        value=f"Faces: {face_summary}\nClothes: {cloth_summary}",
-        inline=False,
-    )
+    main.add_field(name="Status", value=f"Faces: {face_summary}", inline=False)
     main.set_footer(text="Use the buttons below to upload or clear slots.")
 
     embeds: list[discord.Embed] = [main]
@@ -1135,8 +993,6 @@ async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]
 
     for i, p in enumerate(face_slots):
         add_preview(f"Face {i+1}", p, f"face_{i+1}", discord.Color.blurple())
-    for i, p in enumerate(cloth_slots):
-        add_preview(f"👗 Clothing {i+1}", p, f"cloth_{i+1}", discord.Color.green())
 
     # Discord limit: max 10 embeds per message.
     if len(embeds) > 10:
@@ -1145,12 +1001,13 @@ async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]
 
     return embeds, files
 
+
 class FaceConfigView(discord.ui.View):
     """
     Rows:
-      0: 📤 F1 | 📤 F2 | 📤 F3 | 🗑️ F1 | 🗑️ F2
-      1: 🗑️ F3 | 📤 C1 | 📤 C2 | 📤 C3 |
-      2: 🗑️ C1 | 🗑️ C2 | 🗑️ C3 | 🔄 Refresh
+      0: 📤 F1 | 📤 F2 | 📤 F3 | 📤 F4 | 📤 F5
+      1: 🗑️ F1 | 🗑️ F2 | 🗑️ F3 | 🗑️ F4 | 🗑️ F5
+      2: 🔄 Refresh Panel
     """
 
     def __init__(self, owner_id: int, bot: commands.Bot):
@@ -1172,7 +1029,7 @@ class FaceConfigView(discord.ui.View):
             with contextlib.suppress(Exception):
                 await interaction.edit_original_response(embeds=embeds, attachments=files, view=self)
 
-    async def _await_upload(self, interaction, slot_type: str, index: Optional[int], label: str):
+    async def _await_upload(self, interaction, index: int, label: str):
         await interaction.response.send_message(
             f"📎 **Upload for {label}**\n"
             f"Send an image message (attachment) in this channel within **90s**.\n"
@@ -1217,7 +1074,7 @@ class FaceConfigView(discord.ui.View):
                 break
 
         try:
-            path = await face_pool.set_slot(slot_type, index, img_bytes, ext)
+            path = await face_pool.set_slot(index, img_bytes, ext)
         except Exception as e:
             await interaction.followup.send(f"❌ Save failed: {e}", ephemeral=True)
             return
@@ -1231,63 +1088,55 @@ class FaceConfigView(discord.ui.View):
         )
         await self._refresh(interaction, response=False)
 
-    async def _clear(self, interaction, slot_type, index, label):
-        await face_pool.clear_slot(slot_type, index)
+    async def _clear(self, interaction, index, label):
+        await face_pool.clear_slot(index)
         await self._refresh(interaction, response=True)
         with contextlib.suppress(Exception):
             await interaction.followup.send(f"🗑️ **{label}** cleared.", ephemeral=True)
 
-    # ---- Row 0: Face uploads + first two Face clears ----
+    # ---- Row 0: Uploads F1-F5 ----
     @discord.ui.button(label="📤 F1", style=discord.ButtonStyle.primary, row=0)
     async def up_f1(self, interaction, button):
-        await self._await_upload(interaction, "face", 0, "Face 1")
+        await self._await_upload(interaction, 0, "Face 1")
 
     @discord.ui.button(label="📤 F2", style=discord.ButtonStyle.primary, row=0)
     async def up_f2(self, interaction, button):
-        await self._await_upload(interaction, "face", 1, "Face 2")
+        await self._await_upload(interaction, 1, "Face 2")
 
     @discord.ui.button(label="📤 F3", style=discord.ButtonStyle.primary, row=0)
     async def up_f3(self, interaction, button):
-        await self._await_upload(interaction, "face", 2, "Face 3")
+        await self._await_upload(interaction, 2, "Face 3")
 
-    @discord.ui.button(label="🗑️ F1", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="📤 F4", style=discord.ButtonStyle.primary, row=0)
+    async def up_f4(self, interaction, button):
+        await self._await_upload(interaction, 3, "Face 4")
+
+    @discord.ui.button(label="📤 F5", style=discord.ButtonStyle.primary, row=0)
+    async def up_f5(self, interaction, button):
+        await self._await_upload(interaction, 4, "Face 5")
+
+    # ---- Row 1: Clears F1-F5 ----
+    @discord.ui.button(label="🗑️ F1", style=discord.ButtonStyle.danger, row=1)
     async def clr_f1(self, interaction, button):
-        await self._clear(interaction, "face", 0, "Face 1")
+        await self._clear(interaction, 0, "Face 1")
 
-    @discord.ui.button(label="🗑️ F2", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="🗑️ F2", style=discord.ButtonStyle.danger, row=1)
     async def clr_f2(self, interaction, button):
-        await self._clear(interaction, "face", 1, "Face 2")
+        await self._clear(interaction, 1, "Face 2")
 
-    # ---- Row 1: Face clear F3 + Clothing uploads ----
     @discord.ui.button(label="🗑️ F3", style=discord.ButtonStyle.danger, row=1)
     async def clr_f3(self, interaction, button):
-        await self._clear(interaction, "face", 2, "Face 3")
+        await self._clear(interaction, 2, "Face 3")
 
-    @discord.ui.button(label="📤 C1", style=discord.ButtonStyle.success, row=1)
-    async def up_c1(self, interaction, button):
-        await self._await_upload(interaction, "clothing", 0, "Clothing 1")
+    @discord.ui.button(label="🗑️ F4", style=discord.ButtonStyle.danger, row=1)
+    async def clr_f4(self, interaction, button):
+        await self._clear(interaction, 3, "Face 4")
 
-    @discord.ui.button(label="📤 C2", style=discord.ButtonStyle.success, row=1)
-    async def up_c2(self, interaction, button):
-        await self._await_upload(interaction, "clothing", 1, "Clothing 2")
+    @discord.ui.button(label="🗑️ F5", style=discord.ButtonStyle.danger, row=1)
+    async def clr_f5(self, interaction, button):
+        await self._clear(interaction, 4, "Face 5")
 
-    @discord.ui.button(label="📤 C3", style=discord.ButtonStyle.success, row=1)
-    async def up_c3(self, interaction, button):
-        await self._await_upload(interaction, "clothing", 2, "Clothing 3")
-
-    # ---- Row 2: Clothing clears + Refresh ----
-    @discord.ui.button(label="🗑️ C1", style=discord.ButtonStyle.danger, row=2)
-    async def clr_c1(self, interaction, button):
-        await self._clear(interaction, "clothing", 0, "Clothing 1")
-
-    @discord.ui.button(label="🗑️ C2", style=discord.ButtonStyle.danger, row=2)
-    async def clr_c2(self, interaction, button):
-        await self._clear(interaction, "clothing", 1, "Clothing 2")
-
-    @discord.ui.button(label="🗑️ C3", style=discord.ButtonStyle.danger, row=2)
-    async def clr_c3(self, interaction, button):
-        await self._clear(interaction, "clothing", 2, "Clothing 3")
-
+    # ---- Row 2: Refresh ----
     @discord.ui.button(label="🔄 Refresh Panel", style=discord.ButtonStyle.secondary, row=2)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._refresh(interaction, response=True)
@@ -1349,7 +1198,7 @@ class VeniceFaceCog(commands.Cog):
     # =========================================
     @app_commands.command(
         name="face_config",
-        description="Manage face pool (3 face slots + 3 clothing slots). Owner only.",
+        description="Manage face pool (5 face slots). Owner only.",
     )
     async def face_config_slash(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_USER_ID:
@@ -1380,11 +1229,7 @@ class VeniceFaceCog(commands.Cog):
                     reposted += 1
         ref_state = f"✅ {len(ref)} bytes" if ref else "❌ n/a"
         faces = face_pool.get_face_slots()
-        cloths = face_pool.get_clothing_slots()
-        pool_state = (
-            f"faces: {sum(1 for s in faces if s)}/3, "
-            f"clothes: {sum(1 for s in cloths if s)}/3"
-        )
+        pool_state = f"faces: {sum(1 for s in faces if s)}/{FACE_SLOT_COUNT}"
         await ctx.send(
             f"✅ Face cog reloaded.\n"
             f"• Legacy reference: {ref_state}\n"
@@ -1424,23 +1269,20 @@ class VeniceFaceCog(commands.Cog):
         status = await ctx.send("🧪 Testing modes...")
         results: list[str] = []
         for mode_id in MODE_ORDER:
-            cfg = MODES[mode_id]
             model_id = get_mode_model(mode_id)
-            secondary = None
-            if cfg["use_wardrobe"]:
-                secondary, _ = await face_pool.read_random_clothing()
-                if secondary is None:
-                    results.append(f"⚠️ `{mode_id}` skipped (no clothing slots)")
-                    continue
             img, err = await venice_edit(
                 self.session, model_id, "a simple portrait test",
-                face, secondary, retries=0,
+                face, retries=0,
             )
-            tag = " [multi]" if secondary else " [single]"
             if img:
-                results.append(f"✅ `{mode_id}` ({model_id}){tag} -> {len(img)} bytes")
+                results.append(
+                    f"✅ `{mode_id}` ({get_model_short_label(model_id)}) -> {len(img)} bytes"
+                )
             else:
-                results.append(f"❌ `{mode_id}` ({model_id}){tag} -> {trim(err or 'unknown', 160)}")
+                results.append(
+                    f"❌ `{mode_id}` ({get_model_short_label(model_id)}) -> "
+                    f"{trim(err or 'unknown', 160)}"
+                )
 
         with contextlib.suppress(Exception):
             await status.delete()
