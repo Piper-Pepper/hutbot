@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 logger = logging.getLogger(__name__)
@@ -10,13 +11,15 @@ logger = logging.getLogger(__name__)
 # =====================
 # CONFIG
 # =====================
-CONTACT_CHANNEL_ID = 1382079493711200549   # hier steht der "Contact Staff" Button
-STAFF_CHANNEL_ID   = 1390430555124007145   # hier landen die Tickets
+CONTACT_CHANNEL_ID = 1382079493711200549   # where the "Contact Staff" button lives
+STAFF_CHANNEL_ID   = 1390430555124007145   # where tickets are delivered
+
+CONTACT_BUTTON_EMOJI_ID = 1346555409095331860   # server-owned custom emoji
 
 CONTACT_MARKER = "PEPPER_POLICE_CONTACT_PANEL"
 TICKET_MARKER  = "PEPPER_POLICE_TICKET"
 
-CONTACT_BUTTON_CUSTOM_ID = "pepper_police:contact_staff"
+CONTACT_BUTTON_CUSTOM_ID  = "pepper_police:contact_staff"
 COMPLETE_BUTTON_CUSTOM_ID = "pepper_police:request_completed"
 
 
@@ -26,14 +29,14 @@ COMPLETE_BUTTON_CUSTOM_ID = "pepper_police:request_completed"
 class TicketModal(discord.ui.Modal, title="Open Ticket for Pepper Police"):
     subject = discord.ui.TextInput(
         label="Subject",
-        placeholder="Kurzer Titel für dein Anliegen",
+        placeholder="Short title for your request",
         style=discord.TextStyle.short,
         max_length=100,
         required=True,
     )
     details = discord.ui.TextInput(
         label="Details",
-        placeholder="Beschreibe dein Anliegen so ausführlich wie möglich...",
+        placeholder="Describe your request in as much detail as possible...",
         style=discord.TextStyle.paragraph,
         max_length=1800,
         required=True,
@@ -60,15 +63,15 @@ class TicketModal(discord.ui.Modal, title="Open Ticket for Pepper Police"):
         try:
             await self.staff_channel.send(embed=embed, view=view)
         except discord.HTTPException:
-            logger.exception("Konnte Ticket nicht in Staff-Channel posten")
+            logger.exception("Failed to post ticket to staff channel")
             await interaction.response.send_message(
-                "❌ Ticket konnte nicht übermittelt werden. Bitte melde dich manuell beim Staff.",
+                "❌ Your ticket could not be delivered. Please contact staff manually.",
                 ephemeral=True,
             )
             return
 
         await interaction.response.send_message(
-            "✅ Dein Ticket wurde an die Pepper Police übermittelt. Danke!",
+            "✅ Your ticket has been delivered to the Pepper Police. Thank you!",
             ephemeral=True,
         )
 
@@ -83,33 +86,13 @@ class ContactStaffView(discord.ui.View):
     @discord.ui.button(
         label="Contact Staff",
         style=discord.ButtonStyle.danger,
-        emoji="🚨",
+        emoji=discord.PartialEmoji(name="pepper_police", id=CONTACT_BUTTON_EMOJI_ID),
         custom_id=CONTACT_BUTTON_CUSTOM_ID,
     )
     async def contact_staff(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message(
-                "Nur auf dem Server verfügbar.", ephemeral=True
-            )
-            return
-
-        staff_channel = guild.get_channel(STAFF_CHANNEL_ID)
-        if not isinstance(staff_channel, discord.TextChannel):
-            try:
-                staff_channel = await guild.fetch_channel(STAFF_CHANNEL_ID)
-            except Exception:
-                staff_channel = None
-
-        if not isinstance(staff_channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "❌ Staff-Channel ist nicht erreichbar.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(TicketModal(staff_channel))
+        await _open_ticket_modal(interaction)
 
 
 class RequestCompletedView(discord.ui.View):
@@ -128,10 +111,10 @@ class RequestCompletedView(discord.ui.View):
         try:
             await interaction.message.delete()
         except discord.HTTPException:
-            logger.exception("Konnte Ticket-Nachricht nicht löschen")
+            logger.exception("Failed to delete ticket message")
             try:
                 await interaction.response.send_message(
-                    "❌ Konnte Ticket nicht löschen.", ephemeral=True
+                    "❌ Could not delete this ticket.", ephemeral=True
                 )
             except discord.InteractionResponded:
                 pass
@@ -145,6 +128,31 @@ class RequestCompletedView(discord.ui.View):
 
 
 # =====================
+# SHARED HELPER — opens the modal for both button and slash command
+# =====================
+async def _open_ticket_modal(interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("Server only.", ephemeral=True)
+        return
+
+    staff_channel = guild.get_channel(STAFF_CHANNEL_ID)
+    if not isinstance(staff_channel, discord.TextChannel):
+        try:
+            staff_channel = await guild.fetch_channel(STAFF_CHANNEL_ID)
+        except Exception:
+            staff_channel = None
+
+    if not isinstance(staff_channel, discord.TextChannel):
+        await interaction.response.send_message(
+            "❌ Staff channel is not reachable.", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_modal(TicketModal(staff_channel))
+
+
+# =====================
 # COG
 # =====================
 class PepperPolice(commands.Cog):
@@ -153,22 +161,36 @@ class PepperPolice(commands.Cog):
         self._setup_done = False
 
     async def cog_load(self):
-        # Persistente Views registrieren, damit Buttons auch nach Restart
-        # ansprechbar sind, während wir sie neu posten.
+        # Register persistent views so buttons keep working across restarts
+        # (matters for tickets that are still open in the staff channel).
         self.bot.add_view(ContactStaffView())
         self.bot.add_view(RequestCompletedView())
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # nur einmal ausführen (on_ready kann mehrfach feuern)
+        # on_ready can fire multiple times — guard it
         if self._setup_done:
             return
         self._setup_done = True
         try:
             await self._refresh_panels()
         except Exception:
-            logger.exception("Pepper Police panel refresh fehlgeschlagen")
+            logger.exception("Pepper Police panel refresh failed")
 
+    # =====================
+    # SLASH COMMAND
+    # =====================
+    @app_commands.command(
+        name="hut_ticket",
+        description="Open a ticket for the Pepper Police",
+    )
+    @app_commands.guild_only()
+    async def hut_ticket(self, interaction: discord.Interaction):
+        await _open_ticket_modal(interaction)
+
+    # =====================
+    # PANEL REFRESH
+    # =====================
     async def _refresh_panels(self):
         for guild in self.bot.guilds:
             await self._cleanup_contact_channel(guild)
@@ -197,7 +219,7 @@ class PepperPolice(commands.Cog):
         for embed in msg.embeds:
             if embed.footer and embed.footer.text and CONTACT_MARKER in embed.footer.text:
                 return True
-        # Fallback: enthält den Button mit unserer custom_id
+        # Fallback: message carries our contact button custom_id
         for row in msg.components:
             for comp in getattr(row, "children", []):
                 if getattr(comp, "custom_id", None) == CONTACT_BUTTON_CUSTOM_ID:
@@ -226,19 +248,14 @@ class PepperPolice(commands.Cog):
                     try:
                         await msg.delete()
                     except discord.HTTPException:
-                        logger.exception("Konnte altes Contact-Panel nicht löschen")
+                        logger.exception("Failed to delete old contact panel")
         except Exception:
-            logger.exception("Fehler beim Aufräumen von Contact-Channel")
+            logger.exception("Error while cleaning contact channel")
 
     async def _cleanup_staff_channel(self, guild: discord.Guild):
-        """Alte, hängengebliebene Ticket-Posts entfernen, damit die 'Request Completed'
-        Buttons in offenen Tickets nach Restart weiter funktionieren wir posten
-        sie NICHT neu, da Ticket-Inhalt user-spezifisch ist. Die persistente View
-        greift ohnehin für alle offenen Tickets."""
-        # Da wir persistente Views mit fester custom_id verwenden, funktionieren
-        # bereits existierende Tickets auch nach einem Restart weiter.
-        # Nichts zu tun hier — Methode bleibt als Hook falls du das Verhalten
-        # ändern möchtest (z.B. alle offenen Tickets beim Restart wegräumen).
+        """Open tickets stay intact across restarts — the persistent view keeps
+        their 'Request Completed' buttons working. If you ever want to wipe
+        open tickets on restart, iterate history here and delete ticket posts."""
         return
 
     async def _post_contact_panel(self, guild: discord.Guild):
@@ -248,9 +265,10 @@ class PepperPolice(commands.Cog):
         embed = discord.Embed(
             title="🚨 Pepper Police — Contact Staff",
             description=(
-                "Du hast ein Anliegen, brauchst Hilfe oder möchtest etwas melden?\n\n"
-                "Klick unten auf **Contact Staff** und öffne ein Ticket. "
-                "Dein Anliegen wird vertraulich an das Staff-Team weitergeleitet."
+                "Need help, want to report something, or have a request?\n\n"
+                "Click **Contact Staff** below (or use `/hut_ticket` anywhere) "
+                "to open a ticket. Your message will be delivered privately "
+                "to the staff team."
             ),
             color=discord.Color.red(),
         )
@@ -258,7 +276,7 @@ class PepperPolice(commands.Cog):
         try:
             await ch.send(embed=embed, view=ContactStaffView())
         except discord.HTTPException:
-            logger.exception("Konnte Contact-Panel nicht posten")
+            logger.exception("Failed to post contact panel")
 
 
 # =====================
