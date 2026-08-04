@@ -120,6 +120,7 @@ async def main():
             "hutvote",
             "riddle",
             "venice_face_cog",
+            "pepper_police_cog",
         ]
 
         for ext in extensions:
