@@ -55,6 +55,11 @@ ACCESS_DENIED_IMAGE_URL = _env_str("RIDDLE_ACCESS_DENIED_IMAGE_URL", "")
 MAX_RIDDLE_SLOTS = _env_int("RIDDLE_MAX_SLOTS", 10)
 MAX_EXTRA_PING_ROLES = _env_int("RIDDLE_MAX_EXTRA_PING_ROLES", 3)
 
+# Grace period after a fresh post before the Submit button works. Gives everyone
+# the same chance to read the riddle instead of rewarding whoever had the
+# channel open. Anchored to first_posted_at.
+SUBMIT_DELAY_MINUTES = _env_int("RIDDLE_SUBMIT_DELAY_MINUTES", 5)
+
 # Hours a riddle may sit in Slot 1 unsolved before it is auto-moved to the end.
 # The countdown starts at the FIRST post; refreshes/edits do NOT reset it.
 UNSOLVED_ROTATION_HOURS = _env_int("RIDDLE_UNSOLVED_ROTATION_HOURS", 6)
@@ -117,8 +122,16 @@ def validate_config() -> list[str]:
         )
     if not (1 <= MAX_EXTRA_PING_ROLES <= 25):
         problems.append(f"RIDDLE_MAX_EXTRA_PING_ROLES={MAX_EXTRA_PING_ROLES} must be 1..25.")
+    if SUBMIT_DELAY_MINUTES < 0:
+        problems.append("RIDDLE_SUBMIT_DELAY_MINUTES must be >= 0.")
     if UNSOLVED_ROTATION_HOURS <= 0:
         problems.append("RIDDLE_UNSOLVED_ROTATION_HOURS must be > 0.")
+    if SUBMIT_DELAY_MINUTES >= UNSOLVED_ROTATION_HOURS * 60:
+        problems.append(
+            f"RIDDLE_SUBMIT_DELAY_MINUTES={SUBMIT_DELAY_MINUTES} is >= the rotation "
+            f"window ({UNSOLVED_ROTATION_HOURS}h) – the riddle would rotate before "
+            f"anyone could submit."
+        )
     if ROTATION_HARD_CAP_HOURS < UNSOLVED_ROTATION_HOURS:
         problems.append(
             f"RIDDLE_ROTATION_HARD_CAP_HOURS={ROTATION_HARD_CAP_HOURS} must be >= "
@@ -164,6 +177,14 @@ def iso_utc_in_hours(hours: float) -> str:
     return ts.replace(microsecond=0).isoformat() + "Z"
 
 
+def iso_add_minutes(iso_ts: Optional[str], minutes: float) -> Optional[str]:
+    """Offset a stored timestamp by N minutes. None if unparseable."""
+    t = parse_iso_utc(iso_ts)
+    if t is None:
+        return None
+    return (t + dt.timedelta(minutes=minutes)).replace(microsecond=0).isoformat() + "Z"
+
+
 def iso_to_unix(iso_ts: Optional[str]) -> Optional[int]:
     t = parse_iso_utc(iso_ts)
     if t is None:
@@ -178,7 +199,8 @@ def discord_ts(iso_ts: Optional[str], style: str = "f") -> Optional[str]:
     """
     Render a stored timestamp as a Discord dynamic timestamp tag so every
     viewer sees it in their own local timezone.
-    Styles: t f F d D R  (R = relative, e.g. "3 hours ago").
+    Styles: t f F d D R  (R = relative, e.g. "in 4 minutes" – updates by itself,
+    which is why the unlock hint needs no message edits to stay accurate).
     """
     unix = iso_to_unix(iso_ts)
     return f"<t:{unix}:{style}>" if unix is not None else None
@@ -196,6 +218,14 @@ def hours_until(iso_ts: Optional[str]) -> Optional[float]:
     if t is None:
         return None
     return max(0.0, (t - utcnow_naive()).total_seconds() / 3600.0)
+
+
+def seconds_until(iso_ts: Optional[str]) -> Optional[float]:
+    """Precise remaining seconds – used for scheduling the unlock re-render."""
+    t = parse_iso_utc(iso_ts)
+    if t is None:
+        return None
+    return max(0.0, (t - utcnow_naive()).total_seconds())
 
 
 def iso_in_future(iso_ts: Optional[str]) -> bool:
@@ -229,6 +259,39 @@ def format_duration_hours(hours: Optional[float]) -> str:
     if mins and not days:  # minutes become noise once we talk in days
         parts.append(f"{mins}m")
     return " ".join(parts) or f"{total_minutes}m"
+
+
+# =============================================================================
+# SUBMIT GRACE PERIOD
+# =============================================================================
+def submit_unlock_iso(riddle: dict, *, posted_at_override: Optional[str] = None) -> Optional[str]:
+    """
+    Timestamp at which submissions open for this riddle.
+    Returns None if the riddle was never posted (nothing to unlock yet).
+
+    posted_at_override is used for the very first post, where first_posted_at
+    has not been written to the DB yet – the caller passes the exact timestamp
+    it is about to store, so hint and stored value cannot drift apart.
+    """
+    anchor = posted_at_override or riddle.get("first_posted_at")
+    if not anchor:
+        return None
+    if SUBMIT_DELAY_MINUTES <= 0:
+        return anchor
+    return iso_add_minutes(anchor, SUBMIT_DELAY_MINUTES)
+
+
+def submit_is_locked(riddle: dict, *, posted_at_override: Optional[str] = None) -> bool:
+    """
+    True while the grace period is still running.
+    A riddle that was never posted counts as NOT locked, so the button keeps
+    working in edge cases (e.g. refs lost after a restart) instead of being
+    dead with no way to unlock it.
+    """
+    if SUBMIT_DELAY_MINUTES <= 0:
+        return False
+    unlock = submit_unlock_iso(riddle, posted_at_override=posted_at_override)
+    return bool(unlock and iso_in_future(unlock))
 
 
 # =============================================================================
@@ -881,9 +944,9 @@ class RiddleRepo:
     async def compact_open_slots(self, guild_id: int):
         """
         Compact open riddles into slots 1..MAX in order. Riddles that do not end
-        up in slot 1 get first_posted_at + post refs cleared, so their rotation
-        timer restarts when they cycle back. Overflow is closed.
-        Exits early if the layout is already correct (saves writes per tick).
+        up in slot 1 get first_posted_at + post refs cleared, so both the
+        rotation timer and the submit grace period restart when they cycle back.
+        Overflow is closed. Exits early if the layout is already correct.
         """
         if self.db is None:
             return
@@ -906,7 +969,6 @@ class RiddleRepo:
 
                 ids = [to_int(r["id"], 0) for r in rows if to_int(r["id"], 0) > 0]
 
-                # No-op detection: already compact, slot 1 already active.
                 already_ok = len(rows) <= MAX_RIDDLE_SLOTS and all(
                     to_int(r.get("slot_no"), -1) == i
                     and to_int(r.get("is_active"), 0) == (1 if i == 1 else 0)
@@ -924,7 +986,7 @@ class RiddleRepo:
                 )
                 for i, rid in enumerate(ids, start=1):
                     if i == 1:
-                        # Slot 1 keeps first_posted_at (rotation timer) + post refs.
+                        # Slot 1 keeps first_posted_at (timer + grace period) and refs.
                         await self.db.execute(
                             "UPDATE riddles SET slot_no=1, is_active=1, updated_at=? WHERE id=?",
                             (now, rid),
@@ -978,7 +1040,7 @@ class RiddleRepo:
                 now = now_iso_utc()
                 if len(ids) <= 1:
                     # Nothing to reorder, but still reset the timer so the single
-                    # riddle gets a fresh countdown after being re-posted.
+                    # riddle gets a fresh countdown + grace period when re-posted.
                     await self.db.execute(
                         "UPDATE riddles SET first_posted_at=NULL, posted_channel_id=NULL, "
                         "posted_message_id=NULL, updated_at=? WHERE id=?",
@@ -1044,17 +1106,22 @@ class RiddleRepo:
                 raise
 
     # --------------------------------------------------------------- post refs
-    async def set_riddle_post_ref(self, riddle_id: int, channel_id: int, message_id: int):
+    async def set_riddle_post_ref(self, riddle_id: int, channel_id: int, message_id: int,
+                                  first_posted_at: Optional[str] = None):
         """
-        Store post refs. first_posted_at is only written when NULL (COALESCE),
-        so refreshes and edits never reset the rotation countdown – and the
-        timing display keeps the true first-post time.
+        Store post refs. first_posted_at is only written when currently NULL
+        (COALESCE), so refreshes and edits never reset the rotation countdown,
+        the submit grace period, or the timing display.
+
+        first_posted_at can be passed explicitly so the caller's "opens at" hint
+        and the stored anchor are derived from the exact same timestamp.
         """
         now = now_iso_utc()
+        anchor = first_posted_at or now
         await self._exec(
             "UPDATE riddles SET posted_channel_id=?, posted_message_id=?, "
             "first_posted_at=COALESCE(first_posted_at, ?), updated_at=? WHERE id=?",
-            (channel_id, message_id, now, now, riddle_id),
+            (channel_id, message_id, anchor, now, riddle_id),
         )
 
     async def reset_riddle_post_state(self, riddle_id: int):
@@ -1366,9 +1433,12 @@ class RiddleRepo:
                     "posted_channel_id": safe_int(data.get("posted_channel_id"), None),
                     "posted_message_id": safe_int(data.get("posted_message_id"), None),
                     # --- timing ---
+                    # submitted_at is the real solve moment (when the winning
+                    # answer was sent). voted_at is only moderator latency.
                     "first_posted_at": data.get("first_posted_at"),
                     "submitted_at": data.get("submitted_at"),
-                    "solved_at": now,
+                    "voted_at": now,
+                    "solved_at": now,  # DB audit value, NOT for the display
                 }
                 return "approved", ctx
             except Exception:
@@ -1452,6 +1522,7 @@ class RiddleRepo:
                     "mention_role_ids": data.get("mention_role_ids"),
                     "first_posted_at": data.get("first_posted_at"),
                     "submitted_at": data.get("submitted_at"),
+                    "voted_at": now,
                 }
                 return "rejected", ctx
             except Exception:

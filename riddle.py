@@ -14,12 +14,14 @@ from riddle_core import (
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID,
     EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, EXTRA_EXCLUDED_ROLE_IDS_CSV,
     DEFAULT_IMAGE_URL, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES,
+    SUBMIT_DELAY_MINUTES,
     UNSOLVED_ROTATION_HOURS, ROTATION_HARD_CAP_HOURS, SOLVED_HIATUS_HOURS,
     ROTATION_TICK_SECONDS, STATS_REBUILD_DEBOUNCE_SECONDS,
     SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     UNKNOWN_MESSAGE, MessageLookup,
     logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
-    iso_in_future, iso_utc_in_hours, hours_since,
+    now_iso_utc, iso_in_future, iso_utc_in_hours, hours_since, seconds_until,
+    submit_unlock_iso, submit_is_locked,
     riddle_manager_required, send_access_denied, MissingRiddleManagerRole,
     validate_config, RiddleRepo,
 )
@@ -51,6 +53,13 @@ class RiddleCog(commands.Cog):
 
     asyncio.Lock is NOT reentrant, so every locked public method delegates to
     an `_*_unlocked` counterpart which internal callers use.
+
+    Submit grace period
+    -------------------
+    After a fresh post the Submit button is rendered disabled for
+    SUBMIT_DELAY_MINUTES and additionally checked server-side on every click.
+    A short-lived unlock task re-renders the message when the period ends, so
+    users don't have to wait for the next worker tick.
     """
 
     def __init__(self, bot: commands.Bot, repo: RiddleRepo):
@@ -60,6 +69,7 @@ class RiddleCog(commands.Cog):
         self._startup_done = False
         self._guild_locks: dict[int, asyncio.Lock] = {}
         self._stats_rebuild_tasks: dict[int, asyncio.Task] = {}
+        self._unlock_tasks: dict[int, asyncio.Task] = {}
         self._chunked_guilds: set[int] = set()
 
     # ==========================================================================
@@ -70,6 +80,44 @@ class RiddleCog(commands.Cog):
         if lock is None:
             lock = self._guild_locks[guild_id] = asyncio.Lock()
         return lock
+
+    # ==========================================================================
+    # SUBMIT UNLOCK SCHEDULING
+    # ==========================================================================
+    def schedule_submit_unlock(self, guild_id: int, unlock_iso: Optional[str]):
+        """
+        Re-render the active riddle post once the grace period expires, so the
+        Submit button becomes clickable without waiting up to a full worker tick.
+        Purely cosmetic – the authoritative gate is the DB check in the button
+        callback, so a lost task only costs a slightly late-looking button.
+        """
+        old = self._unlock_tasks.get(guild_id)
+        if old and not old.done():
+            old.cancel()
+        if not unlock_iso:
+            return
+        delay = seconds_until(unlock_iso)
+        if delay is None:
+            return
+
+        async def _run():
+            try:
+                await asyncio.sleep(delay + 2.0)  # small buffer against clock skew
+                res = await self.enforce_enabled_state(guild_id, allow_ping=False,
+                                                       force_repost=False)
+                logger.info("Submit unlock re-render for guild %s -> %s", guild_id, res)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Submit unlock re-render failed for guild %s", guild_id)
+
+        self._unlock_tasks[guild_id] = asyncio.create_task(
+            _run(), name=f"riddle_submit_unlock_{guild_id}")
+
+    def cancel_submit_unlock(self, guild_id: int):
+        task = self._unlock_tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
 
     # ==========================================================================
     # EXCLUDED USERS / STATS FILTERING
@@ -300,7 +348,7 @@ class RiddleCog(commands.Cog):
         """
         Legacy safety net for orphaned button messages created before per-guild
         locking existed. With locks + DB refs this should find nothing, so the
-        history limit is kept modest instead of scanning thousands of messages
+        history limit stays modest instead of scanning thousands of messages
         on every boot.
         """
         ch = await self.resolve_channel(channel_id)
@@ -345,6 +393,7 @@ class RiddleCog(commands.Cog):
             await self.delete_message_ref(row.get("posted_channel_id"),
                                           row.get("posted_message_id"))
         await self.repo.clear_all_open_post_refs(guild_id)
+        self.cancel_submit_unlock(guild_id)
 
     async def post_xp_reminder_to_vote_channel(self, guild: Optional[discord.Guild],
                                                user_id: int, xp_gain: int, riddle_no: int,
@@ -394,7 +443,8 @@ class RiddleCog(commands.Cog):
         responsibility (avoids doing it twice per tick).
 
         first_posted_at is preserved via COALESCE in set_riddle_post_ref, so a
-        refresh/edit does not reset the countdown or the timing display.
+        refresh/edit resets neither the rotation countdown, the submit grace
+        period, nor the timing display.
         """
         slot1 = await self.repo.get_open_slot1(guild_id)
         if not slot1:
@@ -405,14 +455,14 @@ class RiddleCog(commands.Cog):
             return "no_channel"
 
         rid = to_int(slot1.get("id"), 0)
-        embed = build_active_riddle_embed(guild, slot1)
-        content = self.build_ping_content(guild, slot1.get("mention_role_ids"))
         existing = await self.fetch_message_safe(slot1.get("posted_channel_id"),
                                                  slot1.get("posted_message_id"))
 
         # Undeterminable state: never post a second copy, retry next tick.
         if existing is UNKNOWN_MESSAGE and not force_repost:
             return "deferred_unknown_state"
+
+        content = self.build_ping_content(guild, slot1.get("mention_role_ids"))
 
         try:
             if force_repost and (isinstance(existing, discord.Message)
@@ -421,20 +471,42 @@ class RiddleCog(commands.Cog):
                                               slot1.get("posted_message_id"))
                 existing = None
 
+            # ---- EDIT path: grace period derived from the stored anchor ----
             if isinstance(existing, discord.Message):
+                locked = submit_is_locked(slot1)
+                unlock = submit_unlock_iso(slot1)
                 await existing.edit(
-                    content=content, embed=embed, view=SubmitButtonView(self),
+                    content=content,
+                    embed=build_active_riddle_embed(guild, slot1),
+                    view=SubmitButtonView(self, locked=locked, unlock_at=unlock),
                     allowed_mentions=discord.AllowedMentions(
                         roles=allow_role_ping, users=False, everyone=False))
                 await self.repo.clear_other_open_post_refs(guild_id, rid)
+                if locked:
+                    self.schedule_submit_unlock(guild_id, unlock)
                 return "updated"
 
+            # ---- FRESH POST path ----
+            # first_posted_at is not in the DB yet, so we mint the anchor here and
+            # hand the SAME value to the embed, the button and the DB write. That
+            # keeps the "opens at" hint and the stored anchor perfectly in sync.
+            post_ts = now_iso_utc()
+            unlock = submit_unlock_iso({}, posted_at_override=post_ts)
+            locked = submit_is_locked({}, posted_at_override=post_ts)
+
             msg = await ch.send(
-                content=content, embed=embed, view=SubmitButtonView(self),
+                content=content,
+                embed=build_active_riddle_embed(guild, slot1,
+                                                posted_at_override=post_ts),
+                view=SubmitButtonView(self, locked=locked, unlock_at=unlock),
                 allowed_mentions=discord.AllowedMentions(
                     roles=allow_role_ping, users=False, everyone=False))
-            await self.repo.set_riddle_post_ref(rid, msg.channel.id, msg.id)
+            await self.repo.set_riddle_post_ref(rid, msg.channel.id, msg.id,
+                                                first_posted_at=post_ts)
             await self.repo.clear_other_open_post_refs(guild_id, rid)
+            if locked:
+                self.schedule_submit_unlock(guild_id, unlock)
+                logger.info("Riddle %s posted – submissions locked until %s", rid, unlock)
             return "posted"
         except discord.Forbidden:
             logger.error("Missing permissions to post in riddle channel %s",
@@ -453,8 +525,8 @@ class RiddleCog(commands.Cog):
                                                  allow_ping: bool) -> str:
         """
         Delete any existing Slot 1 post, reset its timer + refs, then publish a
-        brand-new post. Used by 'Post Now' and 'Turn ON' so the countdown really
-        restarts.
+        brand-new post. Used by 'Post Now' and 'Turn ON', so both the rotation
+        countdown and the submit grace period really restart.
         """
         await self.normalize_after_structure_change(guild_id)
         slot1 = await self.repo.get_open_slot1(guild_id)
@@ -550,6 +622,7 @@ class RiddleCog(commands.Cog):
         if not r or str(r.get("status")) != "open":
             return False
 
+        self.cancel_submit_unlock(guild_id)
         await self.delete_message_ref(r.get("posted_channel_id"), r.get("posted_message_id"))
         await self.cleanup_wrong_posts_for_riddle(riddle_id)
         await self.cleanup_vote_messages_for_riddle(riddle_id)
@@ -559,8 +632,8 @@ class RiddleCog(commands.Cog):
 
         await self.normalize_after_structure_change(guild_id)
         if await self.repo.is_enabled(guild_id):
-            # Slot 1 changed -> definitely a fresh post; first_posted_at is NULL
-            # so the countdown and the timing display start over.
+            # Slot 1 changed -> fresh post; first_posted_at is NULL, so countdown,
+            # grace period and timing display all start over.
             await self._publish_slot1_post_unlocked(
                 guild_id, force_repost=True, allow_role_ping=ping_new_slot1)
         return ok
@@ -576,6 +649,7 @@ class RiddleCog(commands.Cog):
         r = await self.repo.get_riddle_by_id(guild_id, riddle_id)
         if not r or str(r.get("status")) != "open":
             return False
+        self.cancel_submit_unlock(guild_id)
         await self.delete_message_ref(r.get("posted_channel_id"), r.get("posted_message_id"))
         await self.cleanup_wrong_posts_for_riddle(riddle_id)
         await self.cleanup_vote_messages_for_riddle(riddle_id)
@@ -666,17 +740,23 @@ class RiddleCog(commands.Cog):
         xp_gain = max(0, to_int(ctx.get("xp_gain"), 0))
         submitted_answer = str(ctx.get("answer") or "")
 
+        self.cancel_submit_unlock(gid)
+
         # Reload the riddle so we have the freshest fields; ctx fills the gaps.
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "solution", "xp", "image_url", "solution_url", "riddle_no",
                   "posted_channel_id", "posted_message_id", "mention_role_ids",
-                  "first_posted_at", "solved_at"):
+                  "first_posted_at"):
             if not riddle_row.get(k):
                 riddle_row[k] = ctx.get(k)
-        # Timing: first_posted_at survives the solve because approve_submission
-        # only flips status to 'solved' and clear_all_open_post_refs touches
-        # status='open' rows only.
-        riddle_row["solved_at"] = riddle_row.get("solved_at") or ctx.get("solved_at")
+
+        # --- TIMING ---
+        # "Solved" is the moment the winning answer was SUBMITTED, not the moment
+        # a manager pressed 👍. Otherwise moderator response time would show up
+        # as riddle difficulty. riddles.solved_at keeps the vote time for audits,
+        # which is why solved_at must NOT be filled from the DB row here.
+        riddle_row["solved_at"] = ctx.get("submitted_at") or ctx.get("solved_at")
+        riddle_row["voted_at"] = ctx.get("voted_at") or ctx.get("solved_at")
 
         solver_mention, solver_name, solver_avatar = await self.resolve_user_label(
             guild, solver_id)
@@ -686,10 +766,10 @@ class RiddleCog(commands.Cog):
 
         logger.info(
             "Riddle %s (No.%s) solved by %s (%s) – %s XP – approved by %s (%s) – "
-            "excluded=%s – posted=%s solved=%s",
+            "excluded=%s – posted=%s submitted=%s voted=%s",
             rid, riddle_row.get("riddle_no"), solver_id, solver_name, xp_gain,
             moderator.id, moderator, is_excluded,
-            riddle_row.get("first_posted_at"), riddle_row.get("solved_at"))
+            riddle_row.get("first_posted_at"), ctx.get("submitted_at"), ctx.get("voted_at"))
 
         # ---- 1) DB STATE FIRST ----
         try:
@@ -745,6 +825,8 @@ class RiddleCog(commands.Cog):
                 logger.exception("Failed to post solved ping message")
 
         # ---- 6) clean up remaining vote messages ----
+        # The winning submission's vote post is kept and then annotated with
+        # "✅ Approved by …" by the button handler.
         await self.cleanup_vote_messages_for_riddle(rid, exclude_submission_id=sid)
 
         # ---- 7) XP reminder ----
@@ -824,7 +906,8 @@ class RiddleCog(commands.Cog):
         await self.repo.cancel_pending_for_non_open()
 
         for gid in gids:
-            # enforce_enabled_state respects hiatus + rotation
+            # A restart re-posts Slot 1, so the grace period starts again –
+            # intentional, since the old post (and its button) is gone.
             res = await self.enforce_enabled_state(gid, allow_ping=False, force_repost=True)
             logger.info("Startup reconcile guild %s -> %s", gid, res)
 
@@ -883,13 +966,15 @@ class RiddleCog(commands.Cog):
         """
         Fires on EVERY reconnect, not just the first start. Therefore:
           * no force_repost – otherwise the riddle jumps to the channel bottom
-            on every connection hiccup
+            on every connection hiccup (and its grace period would restart)
           * repost_pending_votes is idempotent
         """
         if not self._startup_done:
             return  # first startup is owned by _auto_worker -> startup_rebuild
         try:
-            # Re-register persistent views defensively (idempotent)
+            # Re-register persistent views defensively (idempotent). The
+            # unlocked variant is registered – Discord routes interactions by
+            # custom_id, and the callback re-checks the lock against the DB.
             self.bot.add_view(SubmitButtonView(self))
             self.bot.add_view(VoteButtons(self))
             for gid in await self.repo.list_all_guild_ids():
@@ -915,14 +1000,16 @@ class RiddleCog(commands.Cog):
         if self._auto_task and not self._auto_task.done():
             self._auto_task.cancel()
             tasks.append(self._auto_task)
-        for t in self._stats_rebuild_tasks.values():
-            if not t.done():
-                t.cancel()
-                tasks.append(t)
+        for bucket in (self._stats_rebuild_tasks, self._unlock_tasks):
+            for t in bucket.values():
+                if not t.done():
+                    t.cancel()
+                    tasks.append(t)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._auto_task = None
         self._stats_rebuild_tasks.clear()
+        self._unlock_tasks.clear()
         logger.info("RiddleCog unloaded, background tasks stopped.")
 
     # ==========================================================================
@@ -1037,10 +1124,10 @@ async def setup(bot: commands.Bot):
         await repo.close()
         raise
     _repo = repo
-    logger.info("Riddle extension loaded (slots=%s, rotation=%sh, hard cap=%sh, "
-                "hiatus=%sh, tick=%ss)",
-                MAX_RIDDLE_SLOTS, UNSOLVED_ROTATION_HOURS, ROTATION_HARD_CAP_HOURS,
-                SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS)
+    logger.info("Riddle extension loaded (slots=%s, submit delay=%smin, rotation=%sh, "
+                "hard cap=%sh, hiatus=%sh, tick=%ss)",
+                MAX_RIDDLE_SLOTS, SUBMIT_DELAY_MINUTES, UNSOLVED_ROTATION_HOURS,
+                ROTATION_HARD_CAP_HOURS, SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS)
 
 
 async def teardown(bot: commands.Bot):

@@ -12,12 +12,13 @@ from riddle_core import (
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES,
     DEFAULT_IMAGE_URL, SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     VOTE_CHANNEL_ID, UNSOLVED_ROTATION_HOURS, ROTATION_HARD_CAP_HOURS,
-    PANEL_TIMEOUT_SECONDS, LEVEL_TIERS, MAX_XP_INPUT, DUPLICATE_PENDING,
+    SUBMIT_DELAY_MINUTES, PANEL_TIMEOUT_SECONDS, LEVEL_TIERS, MAX_XP_INPUT,
+    DUPLICATE_PENDING,
     logger, to_int, clean_value, is_http_url, truncate_text, parse_xp_input,
     clamp_embed_value, clamp_embed_description, extract_first_url, footer_text,
     parse_csv_role_ids, safe_defer, member_has_role, quiet_followup, quiet_respond,
     iso_in_future, hours_until, hours_since, discord_ts, duration_between_iso,
-    format_duration_hours,
+    format_duration_hours, submit_unlock_iso, submit_is_locked,
 )
 
 if TYPE_CHECKING:
@@ -78,14 +79,19 @@ def _add_xp_level(embed: discord.Embed, xp: int, *, award_name: str = "🏆 Awar
 
 
 def _add_timing_field(embed: discord.Embed, riddle: dict, *,
-                      compact: bool = False) -> None:
+                      compact: bool = False, show_vote_time: bool = False) -> None:
     """
-    Timing display: when the riddle was FIRST posted, when it was solved, and
-    how long it took. Uses Discord dynamic timestamps, so every viewer sees the
-    times in their own local timezone.
+    Timing display.
+
+    IMPORTANT: `solved_at` here means "the winning answer was SUBMITTED", not
+    "a manager pressed 👍". Callers must pass the submission timestamp,
+    otherwise moderator response time inflates the solve duration.
+    `voted_at` is the approval moment and is only shown on request.
     """
     first_posted = riddle.get("first_posted_at")
     solved_at = riddle.get("solved_at")
+    voted_at = riddle.get("voted_at")
+
     posted_abs = discord_ts(first_posted, "f")
     posted_rel = discord_ts(first_posted, "R")
     solved_abs = discord_ts(solved_at, "f")
@@ -95,8 +101,12 @@ def _add_timing_field(embed: discord.Embed, riddle: dict, *,
     if not posted_abs and not solved_abs:
         return
 
+    # Guard: "Post Now" can reset first_posted_at while a submission is already
+    # pending, which would yield a negative duration. Don't print nonsense.
+    duration_valid = took_h is not None and took_h >= 0
+
     if compact:
-        if took_h is not None and took_h >= 0:
+        if duration_valid:
             embed.add_field(name="⏱️ Time to solve",
                             value=f"`{format_duration_hours(took_h)}`", inline=True)
         elif posted_rel:
@@ -108,8 +118,17 @@ def _add_timing_field(embed: discord.Embed, riddle: dict, *,
         lines.append(f"📌 **Posted:** {posted_abs}" + (f" · {posted_rel}" if posted_rel else ""))
     if solved_abs:
         lines.append(f"🏁 **Solved:** {solved_abs}" + (f" · {solved_rel}" if solved_rel else ""))
-    if took_h is not None and took_h >= 0:
+    if duration_valid:
         lines.append(f"⌛ **Took:** `{format_duration_hours(took_h)}`")
+
+    if show_vote_time:
+        voted_abs = discord_ts(voted_at, "f")
+        review_h = duration_between_iso(solved_at, voted_at)
+        if voted_abs:
+            suffix = ""
+            if review_h is not None and review_h >= 0:
+                suffix = f" · review took `{format_duration_hours(review_h)}`"
+            lines.append(f"✅ **Approved:** {voted_abs}{suffix}")
 
     embed.add_field(name="⏱️ Timing", value=clamp_embed_value("\n".join(lines)), inline=False)
 
@@ -133,7 +152,12 @@ def level_badge(xp: int) -> str:
 # =============================================================================
 # EMBED BUILDERS
 # =============================================================================
-def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict) -> discord.Embed:
+def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
+                              posted_at_override: Optional[str] = None) -> discord.Embed:
+    """
+    posted_at_override is used for the very first post, where first_posted_at is
+    not in the DB yet – so the "opens at" hint matches the stored anchor exactly.
+    """
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
     e = discord.Embed(
@@ -146,9 +170,26 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict) -> d
         e.set_author(name=guild.name, icon_url=guild.icon.url if guild.icon else None)
     _add_xp_level(e, xp)
 
-    posted_rel = discord_ts(riddle.get("first_posted_at"), "R")
-    if posted_rel:
-        e.add_field(name="📌 Online since", value=posted_rel, inline=True)
+    unlock = submit_unlock_iso(riddle, posted_at_override=posted_at_override)
+    locked = submit_is_locked(riddle, posted_at_override=posted_at_override)
+
+    if locked and unlock:
+        # The relative timestamp counts down on its own, so this hint stays
+        # accurate without the bot editing the message every minute.
+        e.add_field(
+            name="🔒 Riddle opens at",
+            value=(f"{discord_ts(unlock, 'T')} · {discord_ts(unlock, 'R')}\n"
+                   f"*Submissions are locked for the first "
+                   f"{SUBMIT_DELAY_MINUTES} minutes — everyone gets a fair "
+                   f"chance to read it.*"),
+            inline=False,
+        )
+        e.color = discord.Color.dark_grey()
+    else:
+        posted_rel = discord_ts(riddle.get("first_posted_at")
+                                or posted_at_override, "R")
+        if posted_rel:
+            e.add_field(name="📌 Online since", value=posted_rel, inline=True)
 
     img = riddle.get("image_url")
     if not is_http_url(img):
@@ -314,7 +355,7 @@ def build_xp_reminder_embed(
     e.add_field(name="Amount",   value=f"**{xp} XP**",   inline=True)
     e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
     if riddle:
-        _add_timing_field(e, riddle)
+        _add_timing_field(e, riddle, show_vote_time=True)
     if solver_avatar_url:
         e.set_thumbnail(url=solver_avatar_url)
     e.set_footer(text=footer_text(guild))
@@ -398,6 +439,16 @@ class SubmitSolutionModal(Modal):
         riddle = await self.cog.repo.get_open_riddle_by_id(interaction.guild.id, self.riddle_id)
         if not riddle:
             await quiet_followup(interaction, "⚠️ This riddle is no longer active.")
+            return
+
+        # Re-check the grace period server-side. The button check can be bypassed
+        # by a stale client, so this is the authoritative gate.
+        if submit_is_locked(riddle):
+            unlock = submit_unlock_iso(riddle)
+            await quiet_followup(
+                interaction,
+                f"🔒 This riddle is not open yet. Submissions open "
+                f"{discord_ts(unlock, 'R')} ({discord_ts(unlock, 'T')}).")
             return
 
         ans = clean_value(str(self.answer.value or ""))
@@ -702,9 +753,26 @@ class PingRolesPickerView(View):
 # PERSISTENT VIEWS
 # =============================================================================
 class SubmitButton(discord.ui.Button):
-    def __init__(self, cog: "RiddleCog"):
-        super().__init__(label="🧠 Submit Solution", style=discord.ButtonStyle.primary,
-                         custom_id=SUBMIT_BUTTON_ID)
+    """
+    Two layers of protection during the grace period:
+      1. rendered `disabled` so Discord blocks the click client-side
+      2. a DB check inside the callback, because a stale client or a restart
+         must not be able to bypass the lock
+    """
+
+    def __init__(self, cog: "RiddleCog", *, locked: bool = False,
+                 unlock_at: Optional[str] = None):
+        remaining_h = hours_until(unlock_at) if unlock_at else None
+        label = "🧠 Submit Solution"
+        if locked:
+            label = (f"🔒 Opens in {format_duration_hours(remaining_h)}"
+                     if remaining_h else "🔒 Not open yet")
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary if locked else discord.ButtonStyle.primary,
+            custom_id=SUBMIT_BUTTON_ID,
+            disabled=locked,
+        )
         self.cog = cog
 
     async def callback(self, interaction: Interaction):
@@ -719,15 +787,26 @@ class SubmitButton(discord.ui.Button):
         if not r:
             await quiet_respond(interaction, "⚠️ There is no active riddle right now.")
             return
+
+        if submit_is_locked(r):
+            unlock = submit_unlock_iso(r)
+            await quiet_respond(
+                interaction,
+                f"🔒 **Not open yet.** This riddle accepts submissions "
+                f"{discord_ts(unlock, 'R')} ({discord_ts(unlock, 'T')}).\n"
+                f"Use the time to read it properly — everyone starts together.")
+            return
+
         with contextlib.suppress(discord.HTTPException, discord.NotFound):
             await interaction.response.send_modal(
                 SubmitSolutionModal(self.cog, to_int(r.get("id"), 0)))
 
 
 class SubmitButtonView(LoggedPersistentView):
-    def __init__(self, cog: "RiddleCog"):
+    def __init__(self, cog: "RiddleCog", *, locked: bool = False,
+                 unlock_at: Optional[str] = None):
         super().__init__(timeout=None)
-        self.add_item(SubmitButton(cog))
+        self.add_item(SubmitButton(cog, locked=locked, unlock_at=unlock_at))
 
 
 class _VoteBaseButton(discord.ui.Button):
@@ -975,6 +1054,19 @@ class RiddleAdminPanelView(View):
             return "🟢 ON", discord.Color.green()
         return "🟠 OFF", discord.Color.orange()
 
+    def _submit_lock_display(self) -> Optional[str]:
+        """Grace-period status of the currently published Slot 1 riddle."""
+        if SUBMIT_DELAY_MINUTES <= 0:
+            return None
+        slot1 = self.slot_map.get(1)
+        if not slot1 or not slot1.get("first_posted_at"):
+            return None
+        unlock = submit_unlock_iso(slot1)
+        if submit_is_locked(slot1):
+            return (f"🔒 **LOCKED** — submissions open {discord_ts(unlock, 'R')} "
+                    f"({discord_ts(unlock, 'T')})")
+        return f"🔓 open — unlocked {discord_ts(unlock, 'R')}"
+
     async def _slot1_auto_move_status(self) -> Optional[str]:
         slot1_row = self.slot_map.get(1)
         if not slot1_row:
@@ -1023,6 +1115,12 @@ class RiddleAdminPanelView(View):
         main.add_field(name="❓ Slot", value=str(self.selected_slot), inline=True)
         main.add_field(name="⁉️ Solved", value=str(solved_cached), inline=True)
 
+        lock_line = self._submit_lock_display()
+        if lock_line:
+            main.add_field(
+                name=f"🧠 Submit Button ({SUBMIT_DELAY_MINUTES} min grace period)",
+                value=clamp_embed_value(lock_line), inline=False)
+
         auto_move_line = await self._slot1_auto_move_status()
         if auto_move_line:
             main.add_field(
@@ -1048,8 +1146,12 @@ class RiddleAdminPanelView(View):
             active_tag = ""
             if slot == 1:
                 age = hours_since(row.get("first_posted_at"))
-                active_tag = (f" · 👉 online {format_duration_hours(age)}"
-                              if age is not None else " · 👉 not posted yet")
+                if age is None:
+                    active_tag = " · 👉 not posted yet"
+                elif submit_is_locked(row):
+                    active_tag = f" · 👉 online {format_duration_hours(age)} · 🔒"
+                else:
+                    active_tag = f" · 👉 online {format_duration_hours(age)}"
             lines.append(
                 f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · {level_badge(xp)} "
                 f"· +{len(extras)} roles{active_tag} — _{preview}_")
@@ -1098,9 +1200,13 @@ class RiddleAdminPanelView(View):
                                   value=clamp_embed_value(s_url or "*not set*"), inline=False)
                 posted_abs = discord_ts(row.get("first_posted_at"), "f")
                 if posted_abs:
+                    unlock = submit_unlock_iso(row)
+                    extra = (f"\n🔓 Submissions open: {discord_ts(unlock, 'T')} "
+                             f"({discord_ts(unlock, 'R')})") if unlock else ""
                     preview.add_field(
                         name="📌 First posted",
-                        value=f"{posted_abs} · {discord_ts(row.get('first_posted_at'), 'R')}",
+                        value=f"{posted_abs} · "
+                              f"{discord_ts(row.get('first_posted_at'), 'R')}{extra}",
                         inline=False)
                 preview.set_footer(text=f"Full preview · riddle_id={to_int(row.get('id'), 0)}")
                 embeds.append(preview)
@@ -1318,7 +1424,8 @@ class RiddleAdminPanelView(View):
                 await self.cog.repo.set_enabled(gid, True)
                 await self.cog.repo.set_hiatus_until(gid, None)
                 res = await self.cog.force_repost_slot1_fresh(gid, allow_ping=True)
-                self.last_info = f"✅ System turned ON (`{res}`). Rotation timer restarted."
+                self.last_info = (f"✅ System turned ON (`{res}`). Timer restarted, "
+                                  f"submissions locked for {SUBMIT_DELAY_MINUTES} min.")
         await self.safe_edit_panel()
 
     async def _act_post_now(self, interaction: Interaction, gid: int):
@@ -1328,7 +1435,8 @@ class RiddleAdminPanelView(View):
             await self.cog.repo.set_enabled(gid, True)
             await self.cog.repo.set_hiatus_until(gid, None)  # bypass hiatus
             res = await self.cog.force_repost_slot1_fresh(gid, allow_ping=True)
-            self.last_info = f"✅ Posted now (`{res}`). Hiatus cleared, timer restarted."
+            self.last_info = (f"✅ Posted now (`{res}`). Hiatus cleared, "
+                              f"submissions locked for {SUBMIT_DELAY_MINUTES} min.")
         await self.safe_edit_panel()
 
     async def _act_close_active(self, interaction: Interaction, gid: int):
