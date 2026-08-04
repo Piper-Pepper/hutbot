@@ -14,9 +14,9 @@ from riddle_core import (
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID,
     EXCLUDED_COUNT_ROLE_ID, EXCLUDED_GAMEMASTER_ROLE_ID, EXTRA_EXCLUDED_ROLE_IDS_CSV,
     DEFAULT_IMAGE_URL, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES,
-    SUBMIT_DELAY_MINUTES,
-    UNSOLVED_ROTATION_HOURS, ROTATION_HARD_CAP_HOURS, SOLVED_HIATUS_HOURS,
-    ROTATION_TICK_SECONDS, STATS_REBUILD_DEBOUNCE_SECONDS,
+    SUBMIT_DELAY_MINUTES, UNSOLVED_ROTATION_HOURS, ROTATION_HARD_CAP_HOURS,
+    UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP,
+    SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS, STATS_REBUILD_DEBOUNCE_SECONDS,
     SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     UNKNOWN_MESSAGE, MessageLookup,
     logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
@@ -34,6 +34,7 @@ from riddle_ui import (
     build_xp_reminder_embed,
     build_vote_embed,
     build_rotation_warning_embed,
+    build_rotation_bonus_embed,
     SubmitButtonView,
     VoteButtons,
     RiddleAdminPanelView,
@@ -54,12 +55,12 @@ class RiddleCog(commands.Cog):
     asyncio.Lock is NOT reentrant, so every locked public method delegates to
     an `_*_unlocked` counterpart which internal callers use.
 
-    Submit grace period
-    -------------------
-    After a fresh post the Submit button is rendered disabled for
-    SUBMIT_DELAY_MINUTES and additionally checked server-side on every click.
-    A short-lived unlock task re-renders the message when the period ends, so
-    users don't have to wait for the next worker tick.
+    Unsolved rotation XP bonus
+    --------------------------
+    `xp_bonus` defaults to 0 everywhere. ONLY the two automatic rotation paths
+    in _enforce_enabled_state_unlocked pass UNSOLVED_ROTATION_XP_BONUS. A manual
+    "Move to End" from the admin panel therefore never raises the reward and
+    never touches rotation_count.
     """
 
     def __init__(self, bot: commands.Bot, repo: RiddleRepo):
@@ -87,9 +88,9 @@ class RiddleCog(commands.Cog):
     def schedule_submit_unlock(self, guild_id: int, unlock_iso: Optional[str]):
         """
         Re-render the active riddle post once the grace period expires, so the
-        Submit button becomes clickable without waiting up to a full worker tick.
-        Purely cosmetic – the authoritative gate is the DB check in the button
-        callback, so a lost task only costs a slightly late-looking button.
+        Submit button becomes clickable without waiting for the next worker
+        tick. Purely cosmetic – the authoritative gate is the DB check in the
+        button callback, so a lost task only makes the button look late.
         """
         old = self._unlock_tasks.get(guild_id)
         if old and not old.done():
@@ -196,7 +197,7 @@ class RiddleCog(commands.Cog):
                                delay: float = STATS_REBUILD_DEBOUNCE_SECONDS):
         """
         Debounced rebuild. A role sync touching 500 members fires 500
-        on_member_update events – we want exactly one rebuild, not 500.
+        on_member_update events – we want one rebuild, not 500.
         """
         existing = self._stats_rebuild_tasks.get(guild_id)
         if existing and not existing.done():
@@ -247,9 +248,9 @@ class RiddleCog(commands.Cog):
           * None             – definitely gone (404)
           * UNKNOWN_MESSAGE  – undeterminable (permissions, 5xx, timeout)
 
-        Callers MUST treat UNKNOWN_MESSAGE as "assume it still exists".
-        The old blanket `except Exception: return None` turned every transient
-        API hiccup into a duplicate post.
+        Callers MUST treat UNKNOWN_MESSAGE as "assume it still exists". The old
+        blanket `except Exception: return None` turned every transient API
+        hiccup into a duplicate post.
         """
         cid = safe_int(channel_id, None)
         mid = safe_int(message_id, None)
@@ -344,7 +345,7 @@ class RiddleCog(commands.Cog):
         return False
 
     async def delete_button_messages_in_channel(self, channel_id: int,
-                                                custom_ids: set[str], limit: int = 400):
+                                                custom_ids: set[str], limit: int = 200):
         """
         Legacy safety net for orphaned button messages created before per-guild
         locking existed. With locks + DB refs this should find nothing, so the
@@ -426,6 +427,20 @@ class RiddleCog(commands.Cog):
         except Exception:
             logger.exception("Failed to post rotation warning")
 
+    async def post_rotation_bonus(self, guild: Optional[discord.Guild],
+                                  riddle: dict, bump: dict):
+        """Announce an XP increase caused by an automatic unsolved rotation."""
+        if VOTE_CHANNEL_ID <= 0 or not bump:
+            return
+        ch = await self.resolve_channel(VOTE_CHANNEL_ID)
+        if ch is None or not hasattr(ch, "send"):
+            return
+        try:
+            await ch.send(embed=build_rotation_bonus_embed(guild, riddle, bump),
+                          allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            logger.exception("Failed to post rotation bonus notice")
+
     # ==========================================================================
     # POSTING  (locked public / unlocked internal)
     # ==========================================================================
@@ -487,9 +502,9 @@ class RiddleCog(commands.Cog):
                 return "updated"
 
             # ---- FRESH POST path ----
-            # first_posted_at is not in the DB yet, so we mint the anchor here and
-            # hand the SAME value to the embed, the button and the DB write. That
-            # keeps the "opens at" hint and the stored anchor perfectly in sync.
+            # first_posted_at is not in the DB yet, so we mint the anchor here
+            # and hand the SAME value to embed, button and DB write. That keeps
+            # the "opens at" hint and the stored anchor perfectly in sync.
             post_ts = now_iso_utc()
             unlock = submit_unlock_iso({}, posted_at_override=post_ts)
             locked = submit_is_locked({}, posted_at_override=post_ts)
@@ -552,8 +567,10 @@ class RiddleCog(commands.Cog):
           disabled              -> remove active posts
           hiatus active         -> remove active posts, do nothing
           hiatus expired        -> clear it, continue
-          slot1 age >= rotation -> auto-rotate (hard cap overrides pending votes)
+          slot1 too old         -> AUTO-rotate (+XP bonus, rotation_count += 1)
           otherwise             -> publish / refresh
+
+        The two rotate calls below are the ONLY places that pass an xp_bonus.
         """
         await self.normalize_after_structure_change(guild_id)
 
@@ -580,22 +597,26 @@ class RiddleCog(commands.Cog):
         if age_h is not None and age_h >= UNSOLVED_ROTATION_HOURS:
             rid_s1 = to_int(slot1.get("id"), 0)
             pending = await self.repo.count_pending_submissions_for_riddle(rid_s1)
+
             if pending == 0:
-                await self._rotate_riddle_to_end_unlocked(guild_id, rid_s1,
-                                                           ping_new_slot1=True)
-                logger.info("Auto-rotated riddle %s (age %.1fh, no pending votes)",
+                logger.info("Auto-rotating riddle %s (age %.1fh, no pending votes)",
                             rid_s1, age_h)
+                await self._rotate_riddle_to_end_unlocked(
+                    guild_id, rid_s1, ping_new_slot1=True,
+                    xp_bonus=UNSOLVED_ROTATION_XP_BONUS)
                 return "auto_rotated"
+
             if age_h >= ROTATION_HARD_CAP_HOURS:
                 # Safety valve: an un-voted submission must not block the queue
-                # forever.
+                # forever. Still counts as "unsolved", so the bonus applies.
                 logger.warning(
                     "Hard-cap rotation: riddle %s age %.1fh with %s pending vote(s)",
                     rid_s1, age_h, pending)
                 await self.post_rotation_warning(self.bot.get_guild(guild_id),
                                                   slot1, pending, age_h)
-                await self._rotate_riddle_to_end_unlocked(guild_id, rid_s1,
-                                                           ping_new_slot1=True)
+                await self._rotate_riddle_to_end_unlocked(
+                    guild_id, rid_s1, ping_new_slot1=True,
+                    xp_bonus=UNSOLVED_ROTATION_XP_BONUS)
                 return "auto_rotated_forced"
             # else: within grace period – wait for managers to vote
 
@@ -606,21 +627,54 @@ class RiddleCog(commands.Cog):
     # ROTATION / CLOSING
     # ==========================================================================
     async def rotate_riddle_to_end(self, guild_id: int, riddle_id: int, *,
-                                   ping_new_slot1: bool) -> bool:
+                                   ping_new_slot1: bool, xp_bonus: int = 0) -> bool:
+        """
+        Public entry point. xp_bonus defaults to 0 – callers that represent a
+        MANUAL move (admin panel) simply omit it and nothing is bumped.
+        """
         async with self._lock(guild_id):
             return await self._rotate_riddle_to_end_unlocked(
-                guild_id, riddle_id, ping_new_slot1=ping_new_slot1)
+                guild_id, riddle_id, ping_new_slot1=ping_new_slot1, xp_bonus=xp_bonus)
 
     async def _rotate_riddle_to_end_unlocked(self, guild_id: int, riddle_id: int, *,
-                                             ping_new_slot1: bool) -> bool:
+                                             ping_new_slot1: bool,
+                                             xp_bonus: int = 0) -> bool:
         """
         Move a riddle to the end of the open queue AND clean up all its Discord
         artifacts (posted message, wrong-answer posts, vote posts, pending
         submissions). Then publish the new Slot 1.
+
+        xp_bonus > 0 marks this as an AUTOMATIC unsolved rotation:
+        the riddle's XP is raised (capped at MAX_RIDDLE_XP) and rotation_count
+        is incremented. The bump happens BEFORE the DB move, while the riddle
+        is still status='open' – bump_riddle_xp_on_rotation only touches open
+        rows, and it is atomic, so a crash mid-rotation cannot double-count.
         """
         r = await self.repo.get_riddle_by_id(guild_id, riddle_id)
         if not r or str(r.get("status")) != "open":
             return False
+
+        guild = self.bot.get_guild(guild_id)
+
+        # ---- XP bonus for going unsolved (automatic rotations only) ----
+        bump: Optional[dict] = None
+        if xp_bonus > 0:
+            try:
+                bump = await self.repo.bump_riddle_xp_on_rotation(
+                    guild_id, riddle_id, bonus=xp_bonus, max_xp=MAX_RIDDLE_XP)
+            except Exception:
+                # A failed bump must never abort the rotation itself, otherwise
+                # the queue would stall on a DB hiccup.
+                logger.exception("XP bonus bump failed for riddle %s – rotating anyway",
+                                 riddle_id)
+            if bump:
+                logger.info(
+                    "Unsolved rotation bonus: riddle %s  xp %s -> %s (+%s)  "
+                    "rotation_count=%s%s",
+                    riddle_id, bump["old_xp"], bump["new_xp"], bump["gained"],
+                    bump["rotation_count"], "  [CAPPED]" if bump.get("capped") else "")
+                # Refresh the local snapshot so the announcement shows new values.
+                r = await self.repo.get_riddle_by_id(guild_id, riddle_id) or r
 
         self.cancel_submit_unlock(guild_id)
         await self.delete_message_ref(r.get("posted_channel_id"), r.get("posted_message_id"))
@@ -630,10 +684,13 @@ class RiddleCog(commands.Cog):
 
         ok = await self.repo.move_open_riddle_to_end(guild_id, riddle_id)
 
+        if bump and to_int(bump.get("rotation_count"), 0) >= 1:
+            await self.post_rotation_bonus(guild, r, bump)
+
         await self.normalize_after_structure_change(guild_id)
         if await self.repo.is_enabled(guild_id):
-            # Slot 1 changed -> fresh post; first_posted_at is NULL, so countdown,
-            # grace period and timing display all start over.
+            # Slot 1 changed -> fresh post; first_posted_at is NULL, so
+            # countdown, grace period and timing display all start over.
             await self._publish_slot1_post_unlocked(
                 guild_id, force_repost=True, allow_role_ping=ping_new_slot1)
         return ok
@@ -695,6 +752,7 @@ class RiddleCog(commands.Cog):
                 "image_url": row.get("image_url"),
                 "riddle_no": row.get("riddle_no"),
                 "first_posted_at": row.get("first_posted_at"),
+                "rotation_count": row.get("rotation_count"),
             }
             embed = build_vote_embed(guild, riddle_view, uid, uname, uavatar,
                                      row.get("answer") or "")
@@ -723,7 +781,7 @@ class RiddleCog(commands.Cog):
         1) DB state first: XP, solved counter, slot geometry, solved hiatus
         2) Delete the original riddle post
         3) Delete all wrong-answer posts for this riddle
-        4) Post the FRESH BIG solved post (no pings) incl. timing
+        4) Post the FRESH BIG solved post (no pings) incl. timing + rotations
         5) Post the SMALL ping post (Base + Extras + Winner)
         6) Clean up the remaining vote messages
         7) XP reminder into the VOTE channel
@@ -742,12 +800,12 @@ class RiddleCog(commands.Cog):
 
         self.cancel_submit_unlock(gid)
 
-        # Reload the riddle so we have the freshest fields; ctx fills the gaps.
+        # Reload the riddle for the freshest fields; ctx fills the gaps.
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
-        for k in ("text", "solution", "xp", "image_url", "solution_url", "riddle_no",
-                  "posted_channel_id", "posted_message_id", "mention_role_ids",
-                  "first_posted_at"):
-            if not riddle_row.get(k):
+        for k in ("text", "solution", "xp", "base_xp", "rotation_count", "image_url",
+                  "solution_url", "riddle_no", "posted_channel_id", "posted_message_id",
+                  "mention_role_ids", "first_posted_at"):
+            if riddle_row.get(k) in (None, "", 0) and ctx.get(k) is not None:
                 riddle_row[k] = ctx.get(k)
 
         # --- TIMING ---
@@ -764,10 +822,11 @@ class RiddleCog(commands.Cog):
         # Single exclusion check instead of three separate lookups.
         is_excluded = (solver_id <= 0) or await self.user_is_excluded(guild, solver_id)
 
+        rot = max(0, to_int(riddle_row.get("rotation_count"), 0))
         logger.info(
-            "Riddle %s (No.%s) solved by %s (%s) – %s XP – approved by %s (%s) – "
-            "excluded=%s – posted=%s submitted=%s voted=%s",
-            rid, riddle_row.get("riddle_no"), solver_id, solver_name, xp_gain,
+            "Riddle %s (No.%s) solved by %s (%s) – %s XP – rotations=%s – approved by "
+            "%s (%s) – excluded=%s – posted=%s submitted=%s voted=%s",
+            rid, riddle_row.get("riddle_no"), solver_id, solver_name, xp_gain, rot,
             moderator.id, moderator, is_excluded,
             riddle_row.get("first_posted_at"), ctx.get("submitted_at"), ctx.get("voted_at"))
 
@@ -856,8 +915,8 @@ class RiddleCog(commands.Cog):
 
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "xp", "image_url", "riddle_no", "mention_role_ids",
-                  "first_posted_at"):
-            if not riddle_row.get(k):
+                  "first_posted_at", "rotation_count"):
+            if riddle_row.get(k) in (None, "", 0) and ctx.get(k) is not None:
                 riddle_row[k] = ctx.get(k)
 
         logger.info("Riddle %s: answer by %s rejected by %s (%s)",
@@ -933,7 +992,8 @@ class RiddleCog(commands.Cog):
                     self._startup_done = True
                 for gid in await self.repo.list_all_guild_ids():
                     await self.repo.ensure_guild_state(gid)
-                    # handles: disabled, hiatus, rotation, hard cap, refresh
+                    # handles: disabled, hiatus, rotation (+XP bonus),
+                    # hard cap, refresh
                     await self.enforce_enabled_state(gid, allow_ping=False,
                                                      force_repost=False)
             except asyncio.CancelledError:
@@ -966,7 +1026,7 @@ class RiddleCog(commands.Cog):
         """
         Fires on EVERY reconnect, not just the first start. Therefore:
           * no force_repost – otherwise the riddle jumps to the channel bottom
-            on every connection hiccup (and its grace period would restart)
+            on every hiccup (and its grace period would restart)
           * repost_pending_votes is idempotent
         """
         if not self._startup_done:
@@ -1124,10 +1184,12 @@ async def setup(bot: commands.Bot):
         await repo.close()
         raise
     _repo = repo
-    logger.info("Riddle extension loaded (slots=%s, submit delay=%smin, rotation=%sh, "
-                "hard cap=%sh, hiatus=%sh, tick=%ss)",
-                MAX_RIDDLE_SLOTS, SUBMIT_DELAY_MINUTES, UNSOLVED_ROTATION_HOURS,
-                ROTATION_HARD_CAP_HOURS, SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS)
+    logger.info(
+        "Riddle extension loaded (slots=%s, submit delay=%smin, rotation=%sh, "
+        "hard cap=%sh, rotation bonus=+%s XP up to %s, hiatus=%sh, tick=%ss)",
+        MAX_RIDDLE_SLOTS, SUBMIT_DELAY_MINUTES, UNSOLVED_ROTATION_HOURS,
+        ROTATION_HARD_CAP_HOURS, UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP,
+        SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS)
 
 
 async def teardown(bot: commands.Bot):

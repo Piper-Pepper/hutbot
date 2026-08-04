@@ -12,20 +12,20 @@ from riddle_core import (
     RIDDLE_ROLE_ID, RIDDLE_MANAGER_ROLE_ID, MAX_RIDDLE_SLOTS, MAX_EXTRA_PING_ROLES,
     DEFAULT_IMAGE_URL, SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
     VOTE_CHANNEL_ID, UNSOLVED_ROTATION_HOURS, ROTATION_HARD_CAP_HOURS,
+    UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP,
     SUBMIT_DELAY_MINUTES, PANEL_TIMEOUT_SECONDS, LEVEL_TIERS, MAX_XP_INPUT,
     DUPLICATE_PENDING,
     logger, to_int, clean_value, is_http_url, truncate_text, parse_xp_input,
     clamp_embed_value, clamp_embed_description, extract_first_url, footer_text,
     parse_csv_role_ids, safe_defer, member_has_role, quiet_followup, quiet_respond,
     iso_in_future, hours_until, hours_since, discord_ts, duration_between_iso,
-    format_duration_hours, submit_unlock_iso, submit_is_locked,
+    format_duration_hours, format_clock_time, submit_unlock_iso, submit_is_locked,
 )
 
 if TYPE_CHECKING:
     from riddle import RiddleCog
 
 
-# Discord hard limits
 _DISCORD_SELECT_MAX = 25
 _ROLE_SELECT_MAX = max(1, min(_DISCORD_SELECT_MAX, MAX_EXTRA_PING_ROLES))
 
@@ -66,9 +66,8 @@ def _add_solution_field(embed: discord.Embed, riddle: dict) -> None:
         parts.append(f"[🔗 MORE]({more_url})")
     if not parts:
         return
-    joined = "\n\n".join(parts)
     embed.add_field(name="✅ Solution",
-                    value=clamp_embed_value(f"||{joined}||"), inline=False)
+                    value=clamp_embed_value(f"||{chr(10).join(parts)}||"), inline=False)
 
 
 def _add_xp_level(embed: discord.Embed, xp: int, *, award_name: str = "🏆 Award",
@@ -78,15 +77,41 @@ def _add_xp_level(embed: discord.Embed, xp: int, *, award_name: str = "🏆 Awar
     embed.add_field(name="🎚️ Level", value=level_badge(x), inline=True)
 
 
+def _add_rotation_field(embed: discord.Embed, riddle: dict, *,
+                        compact: bool = False) -> None:
+    """
+    Show the unsolved-rotation history. Only rendered when the riddle was
+    actually AUTO-rotated at least once – which should be rare. Manual
+    "Move to End" never increments the counter, so nothing shows up for it.
+    """
+    rot = max(0, to_int(riddle.get("rotation_count"), 0))
+    if rot < 1:
+        return
+
+    times = "once" if rot == 1 else f"{rot}×"
+    base_xp = to_int(riddle.get("base_xp"), None) if riddle.get("base_xp") is not None else None
+    xp_now = max(0, to_int(riddle.get("xp"), 0))
+
+    if compact:
+        embed.add_field(name="🔁 Rotations", value=f"`{rot}`", inline=True)
+        return
+
+    lines = [f"🔁 Nobody solved this in time — rotated **{times}**."]
+    if base_xp is not None and xp_now > base_xp:
+        lines.append(f"💹 Reward raised: `{base_xp} XP` → **`{xp_now} XP`** "
+                     f"(+{xp_now - base_xp})")
+        if xp_now >= MAX_RIDDLE_XP:
+            lines.append(f"🧱 XP ceiling reached (`{MAX_RIDDLE_XP}`) — no further increase.")
+    embed.add_field(name="🔥 Unsolved Bonus", value=clamp_embed_value("\n".join(lines)),
+                    inline=False)
+
+
 def _add_timing_field(embed: discord.Embed, riddle: dict, *,
                       compact: bool = False, show_vote_time: bool = False) -> None:
     """
-    Timing display.
-
     IMPORTANT: `solved_at` here means "the winning answer was SUBMITTED", not
     "a manager pressed 👍". Callers must pass the submission timestamp,
     otherwise moderator response time inflates the solve duration.
-    `voted_at` is the approval moment and is only shown on request.
     """
     first_posted = riddle.get("first_posted_at")
     solved_at = riddle.get("solved_at")
@@ -101,8 +126,8 @@ def _add_timing_field(embed: discord.Embed, riddle: dict, *,
     if not posted_abs and not solved_abs:
         return
 
-    # Guard: "Post Now" can reset first_posted_at while a submission is already
-    # pending, which would yield a negative duration. Don't print nonsense.
+    # "Post Now" can reset first_posted_at while a submission is pending, which
+    # would yield a negative duration. Don't print nonsense.
     duration_valid = took_h is not None and took_h >= 0
 
     if compact:
@@ -125,9 +150,8 @@ def _add_timing_field(embed: discord.Embed, riddle: dict, *,
         voted_abs = discord_ts(voted_at, "f")
         review_h = duration_between_iso(solved_at, voted_at)
         if voted_abs:
-            suffix = ""
-            if review_h is not None and review_h >= 0:
-                suffix = f" · review took `{format_duration_hours(review_h)}`"
+            suffix = (f" · review took `{format_duration_hours(review_h)}`"
+                      if review_h is not None and review_h >= 0 else "")
             lines.append(f"✅ **Approved:** {voted_abs}{suffix}")
 
     embed.add_field(name="⏱️ Timing", value=clamp_embed_value("\n".join(lines)), inline=False)
@@ -160,8 +184,14 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
     """
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
+    rot = max(0, to_int(riddle.get("rotation_count"), 0))
+
+    title = f"🧩 Riddle No.{r_no}"
+    if rot >= 1:
+        title += "  🔥"  # visual cue that this one carries a bonus
+
     e = discord.Embed(
-        title=f"🧩 Riddle No.{r_no}",
+        title=title,
         description=clamp_embed_description(
             (riddle.get("text") or "*No riddle text set.*").strip()),
         color=discord.Color.blurple(),
@@ -174,22 +204,21 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
     locked = submit_is_locked(riddle, posted_at_override=posted_at_override)
 
     if locked and unlock:
-        # The relative timestamp counts down on its own, so this hint stays
-        # accurate without the bot editing the message every minute.
+        # Fixed clock time (same as the button label) plus a Discord relative
+        # timestamp, which counts down by itself – no per-minute edits needed.
         e.add_field(
             name="🔒 Riddle opens at",
-            value=(f"{discord_ts(unlock, 'T')} · {discord_ts(unlock, 'R')}\n"
-                   f"*Submissions are locked for the first "
-                   f"{SUBMIT_DELAY_MINUTES} minutes — everyone gets a fair "
-                   f"chance to read it.*"),
-            inline=False,
-        )
+            value=(f"**{format_clock_time(unlock)}** · {discord_ts(unlock, 'R')}\n"
+                   f"*Submissions are locked for the first {SUBMIT_DELAY_MINUTES} "
+                   f"minutes — everyone gets a fair chance to read it.*"),
+            inline=False)
         e.color = discord.Color.dark_grey()
     else:
-        posted_rel = discord_ts(riddle.get("first_posted_at")
-                                or posted_at_override, "R")
+        posted_rel = discord_ts(riddle.get("first_posted_at") or posted_at_override, "R")
         if posted_rel:
             e.add_field(name="📌 Online since", value=posted_rel, inline=True)
+
+    _add_rotation_field(e, riddle)
 
     img = riddle.get("image_url")
     if not is_http_url(img):
@@ -201,11 +230,8 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
 
 
 def build_fresh_solved_post_embed(
-    guild: Optional[discord.Guild],
-    riddle: dict,
-    solver_mention: str,
-    solver_display_name: str,
-    solver_avatar_url: Optional[str],
+    guild: Optional[discord.Guild], riddle: dict, solver_mention: str,
+    solver_display_name: str, solver_avatar_url: Optional[str],
     submitted_answer: str,
 ) -> discord.Embed:
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
@@ -226,6 +252,7 @@ def build_fresh_solved_post_embed(
     _add_answer_field(e, submitted_answer)
     _add_solution_field(e, riddle)
     _add_xp_level(e, xp)
+    _add_rotation_field(e, riddle)
     _add_timing_field(e, riddle)
 
     if is_http_url(riddle.get("image_url")):
@@ -237,11 +264,8 @@ def build_fresh_solved_post_embed(
 
 
 def build_solved_ping_post_embed(
-    guild: Optional[discord.Guild],
-    riddle: dict,
-    solver_mention: str,
-    solver_avatar_url: Optional[str],
-    submitted_answer: str = "",
+    guild: Optional[discord.Guild], riddle: dict, solver_mention: str,
+    solver_avatar_url: Optional[str], submitted_answer: str = "",
 ) -> discord.Embed:
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
@@ -255,6 +279,7 @@ def build_solved_ping_post_embed(
     _add_solution_field(e, riddle)
     _add_xp_level(e, xp, award_name="🏆 XP", suffix="")
     _add_timing_field(e, riddle, compact=True)
+    _add_rotation_field(e, riddle, compact=True)
 
     if solver_avatar_url:
         e.set_thumbnail(url=solver_avatar_url)
@@ -263,12 +288,8 @@ def build_solved_ping_post_embed(
 
 
 def build_wrong_post_embed(
-    guild: Optional[discord.Guild],
-    riddle: dict,
-    submitter_mention: str,
-    submitter_name: str,
-    submitter_avatar_url: Optional[str],
-    submitted_answer: str,
+    guild: Optional[discord.Guild], riddle: dict, submitter_mention: str,
+    submitter_name: str, submitter_avatar_url: Optional[str], submitted_answer: str,
 ) -> discord.Embed:
     r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
     xp = max(0, to_int(riddle.get("xp"), 0))
@@ -284,11 +305,10 @@ def build_wrong_post_embed(
     else:
         e.set_author(name=submitter_name)
 
-    e.add_field(
-        name="🧩 Riddle",
-        value=clamp_embed_value(truncate_text((riddle.get("text") or "*No text*").strip(), 80)),
-        inline=False,
-    )
+    e.add_field(name="🧩 Riddle",
+                value=clamp_embed_value(
+                    truncate_text((riddle.get("text") or "*No text*").strip(), 80)),
+                inline=False)
     _add_answer_field(e, submitted_answer, name="🧠 Submitted Answer")
     _add_xp_level(e, xp, award_name="🏆 Award (still up for grabs)")
 
@@ -324,6 +344,10 @@ def build_vote_embed(
     _add_xp_level(e, xp)
     e.add_field(name="🆔 User ID", value=str(submitter_id), inline=True)
 
+    rot = max(0, to_int(riddle.get("rotation_count"), 0))
+    if rot >= 1:
+        e.add_field(name="🔁 Rotations", value=f"`{rot}` (XP was raised)", inline=True)
+
     posted_abs = discord_ts(riddle.get("first_posted_at"), "f")
     if posted_abs:
         age = hours_since(riddle.get("first_posted_at"))
@@ -355,6 +379,7 @@ def build_xp_reminder_embed(
     e.add_field(name="Amount",   value=f"**{xp} XP**",   inline=True)
     e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
     if riddle:
+        _add_rotation_field(e, riddle)
         _add_timing_field(e, riddle, show_vote_time=True)
     if solver_avatar_url:
         e.set_thumbnail(url=solver_avatar_url)
@@ -379,6 +404,39 @@ def build_rotation_warning_embed(guild: Optional[discord.Guild], riddle: dict,
     posted_abs = discord_ts(riddle.get("first_posted_at"), "f")
     if posted_abs:
         e.add_field(name="📌 Was posted", value=posted_abs, inline=False)
+    e.set_footer(text=footer_text(guild))
+    return e
+
+
+def build_rotation_bonus_embed(guild: Optional[discord.Guild], riddle: dict,
+                               bump: dict) -> discord.Embed:
+    """Posted to the vote channel when an auto-rotation raised a riddle's XP."""
+    r_no = to_int(riddle.get("riddle_no"), to_int(riddle.get("id"), 0))
+    old_xp = to_int(bump.get("old_xp"), 0)
+    new_xp = to_int(bump.get("new_xp"), 0)
+    gained = to_int(bump.get("gained"), 0)
+    rot = to_int(bump.get("rotation_count"), 0)
+    times = "once" if rot == 1 else f"{rot}×"
+
+    e = discord.Embed(
+        title="🔥 Unsolved — reward increased",
+        description=clamp_embed_description(
+            f"Riddle **No.{r_no}** went unsolved for "
+            f"`{UNSOLVED_ROTATION_HOURS}h` and was moved to the end of the queue.\n"
+            f"It has now been auto-rotated **{times}**."),
+        color=discord.Color.orange(),
+    )
+    if gained > 0:
+        e.add_field(name="💹 XP", value=f"`{old_xp}` → **`{new_xp}`** (+{gained})",
+                    inline=True)
+        e.add_field(name="🎚️ New Level", value=level_badge(new_xp), inline=True)
+    else:
+        e.add_field(name="🧱 XP", value=f"`{new_xp}` (ceiling {MAX_RIDDLE_XP} reached)",
+                    inline=True)
+    if bump.get("capped"):
+        e.add_field(name="Note",
+                    value=f"The bonus was clipped at the `{MAX_RIDDLE_XP}` XP ceiling.",
+                    inline=False)
     e.set_footer(text=footer_text(guild))
     return e
 
@@ -441,14 +499,14 @@ class SubmitSolutionModal(Modal):
             await quiet_followup(interaction, "⚠️ This riddle is no longer active.")
             return
 
-        # Re-check the grace period server-side. The button check can be bypassed
-        # by a stale client, so this is the authoritative gate.
+        # Authoritative grace-period gate. The disabled button can be bypassed
+        # by a stale client, this cannot.
         if submit_is_locked(riddle):
             unlock = submit_unlock_iso(riddle)
             await quiet_followup(
                 interaction,
-                f"🔒 This riddle is not open yet. Submissions open "
-                f"{discord_ts(unlock, 'R')} ({discord_ts(unlock, 'T')}).")
+                f"🔒 This riddle is not open yet. Submissions open at "
+                f"**{format_clock_time(unlock)}** ({discord_ts(unlock, 'R')}).")
             return
 
         ans = clean_value(str(self.answer.value or ""))
@@ -492,9 +550,9 @@ class SubmitSolutionModal(Modal):
             await quiet_followup(interaction, "❌ Vote channel not available. Tell an admin.")
             return
 
-        embed = build_vote_embed(
-            interaction.guild, riddle, interaction.user.id,
-            str(interaction.user), interaction.user.display_avatar.url, ans)
+        embed = build_vote_embed(interaction.guild, riddle, interaction.user.id,
+                                 str(interaction.user),
+                                 interaction.user.display_avatar.url, ans)
         try:
             vm = await vote_channel.send(embed=embed, view=VoteButtons(self.cog))
             await self.cog.repo.set_submission_vote_message(sid, vm.id)
@@ -543,6 +601,9 @@ class RiddleContentModal(Modal):
             await self.panel.safe_edit_panel()
             return
 
+        had_rotations = max(0, to_int((self.panel.slot_map.get(self.slot_no) or {})
+                                      .get("rotation_count"), 0))
+
         try:
             if self.riddle_id:
                 changed = await self.panel.cog.repo.update_open_riddle_content_by_id(
@@ -572,7 +633,11 @@ class RiddleContentModal(Modal):
         if await self.panel.cog.repo.is_enabled(gid):
             await self.panel.cog.enforce_enabled_state(gid, allow_ping=False,
                                                        force_repost=False)
-        self.panel.last_info = f"✅ Saved. XP set to **{xp}**."
+        note = ""
+        if had_rotations:
+            note = (f" 🔁 Rotation counter reset (was {had_rotations}) — "
+                    f"{xp} XP is the new baseline.")
+        self.panel.last_info = f"✅ Saved. XP set to **{xp}**.{note}"
         await self.panel.safe_edit_panel()
 
 
@@ -644,8 +709,7 @@ class PingRolesPickerView(View):
         with contextlib.suppress(Exception):
             self.role_select.default_values = [
                 discord.SelectDefaultValue(id=rid, type=discord.SelectDefaultValueType.role)
-                for rid in current_ids[:_ROLE_SELECT_MAX]
-            ]
+                for rid in current_ids[:_ROLE_SELECT_MAX]]
         self.role_select.callback = self.on_role_select
         self.add_item(self.role_select)
 
@@ -754,25 +818,25 @@ class PingRolesPickerView(View):
 # =============================================================================
 class SubmitButton(discord.ui.Button):
     """
-    Two layers of protection during the grace period:
+    Two protection layers during the grace period:
       1. rendered `disabled` so Discord blocks the click client-side
-      2. a DB check inside the callback, because a stale client or a restart
-         must not be able to bypass the lock
+      2. a DB check in the callback, because a stale client or a restart must
+         not be able to bypass the lock
     """
 
     def __init__(self, cog: "RiddleCog", *, locked: bool = False,
                  unlock_at: Optional[str] = None):
-        remaining_h = hours_until(unlock_at) if unlock_at else None
         label = "🧠 Submit Solution"
         if locked:
-            label = (f"🔒 Opens in {format_duration_hours(remaining_h)}"
-                     if remaining_h else "🔒 Not open yet")
+            # Absolute clock time, NOT a countdown: the label is baked into the
+            # message at render time and never refreshes, so "Opens in 5m" would
+            # still say 5m when 30 seconds are left.
+            clock = format_clock_time(unlock_at)
+            label = f"🔒 Opens at {clock}" if clock else "🔒 Not open yet"
         super().__init__(
             label=label,
             style=discord.ButtonStyle.secondary if locked else discord.ButtonStyle.primary,
-            custom_id=SUBMIT_BUTTON_ID,
-            disabled=locked,
-        )
+            custom_id=SUBMIT_BUTTON_ID, disabled=locked)
         self.cog = cog
 
     async def callback(self, interaction: Interaction):
@@ -792,8 +856,8 @@ class SubmitButton(discord.ui.Button):
             unlock = submit_unlock_iso(r)
             await quiet_respond(
                 interaction,
-                f"🔒 **Not open yet.** This riddle accepts submissions "
-                f"{discord_ts(unlock, 'R')} ({discord_ts(unlock, 'T')}).\n"
+                f"🔒 **Not open yet.** This riddle accepts submissions at "
+                f"**{format_clock_time(unlock)}** ({discord_ts(unlock, 'R')}).\n"
                 f"Use the time to read it properly — everyone starts together.")
             return
 
@@ -937,8 +1001,10 @@ class FilledSlotsSelect(_BaseSlotSelect):
             r = panel.slot_map.get(slot)
             if not r:
                 continue
+            rot = max(0, to_int(r.get("rotation_count"), 0))
             opts.append(discord.SelectOption(
-                label=f"Slot {slot}", value=str(slot),
+                label=f"Slot {slot}" + (f"  🔁{rot}" if rot else ""),
+                value=str(slot),
                 description=_first_line(r.get("solution"), 90)[:100],
                 default=(slot == panel.selected_slot), emoji="🧩"))
         super().__init__(panel, options=opts, row=row)
@@ -988,7 +1054,7 @@ class PanelButton(discord.ui.Button):
 class RiddleAdminPanelView(View):
     def __init__(self, cog: "RiddleCog", owner_id: int, guild_id: int):
         # Below the 15 min webhook-token lifetime, so on_timeout can still
-        # disable the buttons instead of dying with error 50027.
+        # disable the buttons instead of failing with error 50027.
         super().__init__(timeout=PANEL_TIMEOUT_SECONDS)
         self.cog = cog
         self.owner_id = owner_id
@@ -1055,7 +1121,6 @@ class RiddleAdminPanelView(View):
         return "🟠 OFF", discord.Color.orange()
 
     def _submit_lock_display(self) -> Optional[str]:
-        """Grace-period status of the currently published Slot 1 riddle."""
         if SUBMIT_DELAY_MINUTES <= 0:
             return None
         slot1 = self.slot_map.get(1)
@@ -1063,8 +1128,8 @@ class RiddleAdminPanelView(View):
             return None
         unlock = submit_unlock_iso(slot1)
         if submit_is_locked(slot1):
-            return (f"🔒 **LOCKED** — submissions open {discord_ts(unlock, 'R')} "
-                    f"({discord_ts(unlock, 'T')})")
+            return (f"🔒 **LOCKED** — opens at **{format_clock_time(unlock)}** "
+                    f"({discord_ts(unlock, 'R')})")
         return f"🔓 open — unlocked {discord_ts(unlock, 'R')}"
 
     async def _slot1_auto_move_status(self) -> Optional[str]:
@@ -1087,17 +1152,19 @@ class RiddleAdminPanelView(View):
         pending = await self.cog.repo.count_pending_submissions_for_riddle(rid_s1)
         remaining_h = UNSOLVED_ROTATION_HOURS - age_h
         cap_remaining_h = ROTATION_HARD_CAP_HOURS - age_h
+        bonus_note = (f" · would add **+{UNSOLVED_ROTATION_XP_BONUS} XP**"
+                      if UNSOLVED_ROTATION_XP_BONUS > 0 else "")
 
         if remaining_h > 0:
-            base = f"🕒 auto-move in `{format_duration_hours(remaining_h)}`"
+            base = f"🕒 auto-move in `{format_duration_hours(remaining_h)}`{bonus_note}"
             if pending:
-                return (f"{base} · ⚠️ {pending} pending vote(s) will delay it "
+                return (f"{base}\n⚠️ {pending} pending vote(s) will delay it "
                         f"(hard cap in `{format_duration_hours(cap_remaining_h)}`)")
             return base
 
         if not pending:
             return (f"🚨 auto-move on next tick "
-                    f"(overdue by `{format_duration_hours(remaining_h)}`)")
+                    f"(overdue by `{format_duration_hours(remaining_h)}`){bonus_note}")
         if cap_remaining_h > 0:
             return (f"⛔ blocked by {pending} pending vote(s) — forced rotation in "
                     f"`{format_duration_hours(cap_remaining_h)}` "
@@ -1117,9 +1184,8 @@ class RiddleAdminPanelView(View):
 
         lock_line = self._submit_lock_display()
         if lock_line:
-            main.add_field(
-                name=f"🧠 Submit Button ({SUBMIT_DELAY_MINUTES} min grace period)",
-                value=clamp_embed_value(lock_line), inline=False)
+            main.add_field(name=f"🧠 Submit Button ({SUBMIT_DELAY_MINUTES} min grace period)",
+                           value=clamp_embed_value(lock_line), inline=False)
 
         auto_move_line = await self._slot1_auto_move_status()
         if auto_move_line:
@@ -1142,7 +1208,10 @@ class RiddleAdminPanelView(View):
             shown_no = solved_cached + slot
             extras = parse_csv_role_ids(row.get("mention_role_ids"))
             xp = to_int(row.get("xp"), 0)
-            preview = _first_line(row.get("solution"), 60)
+            rot = max(0, to_int(row.get("rotation_count"), 0))
+            # Rotation marker only when it actually happened (auto-rotation only).
+            rot_tag = f" · 🔁{rot}" if rot >= 1 else ""
+            preview = _first_line(row.get("solution"), 55)
             active_tag = ""
             if slot == 1:
                 age = hours_since(row.get("first_posted_at"))
@@ -1153,15 +1222,15 @@ class RiddleAdminPanelView(View):
                 else:
                     active_tag = f" · 👉 online {format_duration_hours(age)}"
             lines.append(
-                f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · {level_badge(xp)} "
-                f"· +{len(extras)} roles{active_tag} — _{preview}_")
+                f"{marker} **Slot {slot}** · No.{shown_no} · {xp}XP · {level_badge(xp)}"
+                f"{rot_tag} · +{len(extras)} roles{active_tag} — _{preview}_")
         main.add_field(name="Slots",
                        value=clamp_embed_value("\n".join(lines)) if lines else "*none*",
                        inline=False)
 
         if self.last_info:
-            main.add_field(name="ℹ️ Info",
-                           value=clamp_embed_value(self.last_info), inline=False)
+            main.add_field(name="ℹ️ Info", value=clamp_embed_value(self.last_info),
+                           inline=False)
 
         embeds: list[discord.Embed] = [main]
 
@@ -1171,6 +1240,8 @@ class RiddleAdminPanelView(View):
             r_url = clean_value(row.get("image_url"))
             s_url = clean_value(row.get("solution_url"))
             xp_val = to_int(row.get("xp"), 0)
+            rot = max(0, to_int(row.get("rotation_count"), 0))
+            base_xp = to_int(row.get("base_xp"), xp_val)
 
             if self.show_full_preview:
                 preview = discord.Embed(
@@ -1190,6 +1261,12 @@ class RiddleAdminPanelView(View):
                 preview.add_field(name="🎚️ Level", value=level_badge(xp_val), inline=True)
                 preview.add_field(name="🆔 Riddle ID",
                                   value=str(to_int(row.get("id"), 0)), inline=True)
+                if rot >= 1:
+                    preview.add_field(
+                        name="🔁 Auto-Rotations",
+                        value=f"`{rot}` · base was `{base_xp} XP` → now `{xp_val} XP` "
+                              f"(+{max(0, xp_val - base_xp)})",
+                        inline=False)
                 sol = row.get("solution")
                 preview.add_field(name="✅ Solution (stored)",
                                   value=clamp_embed_value(_spoiler(sol) if sol else "*not set*"),
@@ -1201,7 +1278,7 @@ class RiddleAdminPanelView(View):
                 posted_abs = discord_ts(row.get("first_posted_at"), "f")
                 if posted_abs:
                     unlock = submit_unlock_iso(row)
-                    extra = (f"\n🔓 Submissions open: {discord_ts(unlock, 'T')} "
+                    extra = (f"\n🔓 Submissions open: **{format_clock_time(unlock)}** "
                              f"({discord_ts(unlock, 'R')})") if unlock else ""
                     preview.add_field(
                         name="📌 First posted",
@@ -1222,10 +1299,12 @@ class RiddleAdminPanelView(View):
                     t.set_thumbnail(url=s_url)
                     embeds.append(t)
             else:
+                desc = f"**Solution (1st line):**\n{_first_line(row.get('solution'), 200)}"
+                if rot >= 1:
+                    desc += f"\n\n🔁 Auto-rotated `{rot}×` · base `{base_xp} XP`"
                 preview = discord.Embed(
                     title=f"🔍 Slot {self.selected_slot} · Riddle No.{shown_no}",
-                    description=clamp_embed_description(
-                        f"**Solution (1st line):**\n{_first_line(row.get('solution'), 200)}"),
+                    description=clamp_embed_description(desc),
                     color=discord.Color.blurple())
                 preview.add_field(name="🏆 XP", value=str(xp_val), inline=True)
                 preview.add_field(name="🎚️ Level", value=level_badge(xp_val), inline=True)
@@ -1381,15 +1460,17 @@ class RiddleAdminPanelView(View):
             await self.safe_edit_panel()
             return
         was_enabled = await self._auto_disable_if_enabled(gid)
+        # xp_bonus omitted on purpose: a MANUAL move is just reordering, it must
+        # not raise the reward or touch rotation_count.
         moved = await self.cog.rotate_riddle_to_end(gid, to_int(row.get("id"), 0),
                                                     ping_new_slot1=False)
         if not moved:
             self.last_info = "⚠️ Move failed — riddle no longer open."
         elif was_enabled:
-            self.last_info = ("✅ Moved to end. System auto-set to 🟠 OFF — "
-                              "use 🟢 Turn ON or 📢 Post Now to resume.")
+            self.last_info = ("✅ Moved to end (no XP bonus — manual move). System auto-set "
+                              "to 🟠 OFF — use 🟢 Turn ON or 📢 Post Now to resume.")
         else:
-            self.last_info = "✅ Moved to end."
+            self.last_info = "✅ Moved to end (no XP bonus — manual move)."
         await self.safe_edit_panel()
 
     async def _act_delete_slot(self, interaction: Interaction, gid: int):
