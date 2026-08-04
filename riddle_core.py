@@ -98,7 +98,7 @@ PANEL_TIMEOUT_SECONDS = 840
 
 # (upper_bound_exclusive, label, emoji). Last entry catches all.
 LEVEL_TIERS: tuple[tuple[Optional[int], str, str], ...] = (
-    (1500, "EASY", "🟢"),
+    (1900, "EASY", "🟢"),
     (3000, "MEDIUM", "🟡"),
     (4000, "HARD", "🔴"),
     (None, "BRAIN-DEAD", "💀"),
