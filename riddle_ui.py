@@ -307,7 +307,7 @@ def build_wrong_post_embed(
 
     e.add_field(name="🧩 Riddle",
                 value=clamp_embed_value(
-                    truncate_text((riddle.get("text") or "*No text*").strip(), 80)),
+                    truncate_text((riddle.get("text") or "*No text*").strip(), 20)),
                 inline=False)
     _add_answer_field(e, submitted_answer, name="🧠 Submitted Answer")
     _add_xp_level(e, xp, award_name="🏆 Award (still up for grabs)")
