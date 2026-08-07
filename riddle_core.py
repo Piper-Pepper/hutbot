@@ -45,12 +45,8 @@ DB_PATH = _env_str("RIDDLE_DB_PATH", "data/riddle.sqlite3")
 # SINGLE-GUILD OPERATION
 # ---------------------------------------------------------------------------
 # Channel and role IDs below are GLOBAL env vars, so the riddle system can only
-# ever serve ONE guild correctly. If the bot is in several guilds, every guild
-# would post into the same channel and the manager-role check would target the
-# wrong server.
-#
-# RIDDLE_GUILD_ID pins the system to exactly one guild. Leave it at 0 only if
-# the bot is guaranteed to be in a single guild.
+# ever serve ONE guild correctly. RIDDLE_GUILD_ID pins it to that guild; leave
+# it at 0 only if the bot is guaranteed to be in a single server.
 # ---------------------------------------------------------------------------
 RIDDLE_GUILD_ID = _env_int("RIDDLE_GUILD_ID", 0)
 
@@ -68,11 +64,6 @@ ACCESS_DENIED_IMAGE_URL = _env_str("RIDDLE_ACCESS_DENIED_IMAGE_URL", "")
 
 MAX_RIDDLE_SLOTS = _env_int("RIDDLE_MAX_SLOTS", 10)
 MAX_EXTRA_PING_ROLES = _env_int("RIDDLE_MAX_EXTRA_PING_ROLES", 3)
-
-# How many slots the admin panel prints in full. Everything beyond is collapsed
-# into a single summary line – ten multi-part slot lines are unreadable on a
-# phone.
-PANEL_SLOT_LIST_LIMIT = _env_int("RIDDLE_PANEL_SLOT_LIST_LIMIT", 5)
 
 # Timezone for FIXED text (button labels). Embeds use Discord timestamps and
 # localise per viewer, but a button label is a static string baked into the
@@ -94,11 +85,20 @@ UNSOLVED_ROTATION_XP_BONUS = _env_int("RIDDLE_ROTATION_XP_BONUS", 200)
 # Hard ceiling so a permanently unsolved riddle cannot inflate forever.
 MAX_RIDDLE_XP = _env_int("RIDDLE_MAX_XP", 50_000)
 
-# Safety valve: rotate even with pending votes once this age is reached, so a
-# single un-voted submission can never block the queue forever.
-ROTATION_HARD_CAP_HOURS = _env_int(
-    "RIDDLE_ROTATION_HARD_CAP_HOURS", max(1, UNSOLVED_ROTATION_HOURS * 2)
-)
+# ---------------------------------------------------------------------------
+# PENDING VOTES BLOCK ROTATION – ALWAYS
+# ---------------------------------------------------------------------------
+# A riddle with un-voted submissions is NEVER rotated, no matter how old it
+# gets. Rotating it would cancel those submissions, and a player who possibly
+# solved the riddle correctly would lose the reward because a manager was slow.
+# That is not an acceptable trade for queue throughput.
+#
+# Instead the system nags the managers: every N hours a reminder is posted into
+# the vote channel naming the riddle and the number of open votes. Rotation
+# resumes automatically the moment the last vote is cast.
+# 0 disables the reminder (the block itself always stays active).
+# ---------------------------------------------------------------------------
+ROTATION_BLOCKED_REMINDER_HOURS = _env_int("RIDDLE_ROTATION_BLOCKED_REMINDER_HOURS", 6)
 
 # After a solve the system stays ON, but no new Slot 1 riddle is posted during
 # this hiatus. Bypassable via "Post Now".
@@ -123,10 +123,9 @@ LEVEL_TIERS: tuple[tuple[Optional[int], str, str], ...] = (
     (None, "BRAIN-DEAD", "💀"),
 )
 
-# Upper bound for manual XP entry in the admin modal. MUST NOT exceed
-# MAX_RIDDLE_XP: a manually set value above the rotation ceiling would be
-# silently clipped DOWNWARDS on the first auto-rotation. validate_config()
-# enforces this.
+# Upper bound for manual XP entry. MUST NOT exceed MAX_RIDDLE_XP: a manually
+# set value above the rotation ceiling would be silently clipped DOWNWARDS on
+# the first auto-rotation. validate_config() enforces this.
 MAX_XP_INPUT = _env_int("RIDDLE_MAX_XP_INPUT", MAX_RIDDLE_XP)
 
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
@@ -151,9 +150,6 @@ def validate_config() -> list[str]:
                         "(Discord select menus allow at most 25 options).")
     if not (1 <= MAX_EXTRA_PING_ROLES <= 25):
         problems.append(f"RIDDLE_MAX_EXTRA_PING_ROLES={MAX_EXTRA_PING_ROLES} must be 1..25.")
-    if not (1 <= PANEL_SLOT_LIST_LIMIT <= MAX_RIDDLE_SLOTS):
-        problems.append(f"RIDDLE_PANEL_SLOT_LIST_LIMIT={PANEL_SLOT_LIST_LIMIT} must be "
-                        f"1..RIDDLE_MAX_SLOTS ({MAX_RIDDLE_SLOTS}).")
     if SUBMIT_DELAY_MINUTES < 0:
         problems.append("RIDDLE_SUBMIT_DELAY_MINUTES must be >= 0.")
     if UNSOLVED_ROTATION_HOURS <= 0:
@@ -175,10 +171,8 @@ def validate_config() -> list[str]:
             f"A manager could set an XP value above the rotation ceiling, which the "
             f"first auto-rotation would clip DOWNWARDS – the riddle would silently "
             f"lose reward. Lower RIDDLE_MAX_XP_INPUT or raise RIDDLE_MAX_XP.")
-    if ROTATION_HARD_CAP_HOURS < UNSOLVED_ROTATION_HOURS:
-        problems.append(
-            f"RIDDLE_ROTATION_HARD_CAP_HOURS={ROTATION_HARD_CAP_HOURS} must be >= "
-            f"RIDDLE_UNSOLVED_ROTATION_HOURS={UNSOLVED_ROTATION_HOURS}.")
+    if ROTATION_BLOCKED_REMINDER_HOURS < 0:
+        problems.append("RIDDLE_ROTATION_BLOCKED_REMINDER_HOURS must be >= 0.")
     if SOLVED_HIATUS_HOURS < 0:
         problems.append("RIDDLE_SOLVED_HIATUS_HOURS must be >= 0.")
     if RIDDLE_CHANNEL_ID > 0 and RIDDLE_CHANNEL_ID == VOTE_CHANNEL_ID:
@@ -189,11 +183,10 @@ def validate_config() -> list[str]:
 
 def guild_is_served(guild_id: Optional[int]) -> bool:
     """
-    True if the riddle system is responsible for this guild.
-
-    Channel/role config is global, so exactly one guild can be served. With
-    RIDDLE_GUILD_ID unset we fall back to "serve everything" for backwards
-    compatibility – setup() logs a loud warning in that case.
+    True if the riddle system is responsible for this guild. Channel/role config
+    is global, so exactly one guild can be served. With RIDDLE_GUILD_ID unset we
+    fall back to "serve everything" for backwards compatibility – setup() logs a
+    loud warning in that case.
     """
     if RIDDLE_GUILD_ID <= 0:
         return True
@@ -225,7 +218,6 @@ def parse_iso_utc(s: Optional[str]) -> Optional[dt.datetime]:
     DB edits can contain an offset ("...+02:00"). fromisoformat would then hand
     back an AWARE datetime and every subtraction against utcnow_naive() would
     raise TypeError inside the worker tick, killing the whole guild loop.
-    So: normalise to UTC and strip the tzinfo.
     """
     if not s:
         return None
@@ -291,13 +283,10 @@ def format_clock_time(iso_ts: Optional[str], *, with_zone: bool = True) -> Optio
     Stored UTC timestamp -> fixed wall clock, e.g. "16:35 (UTC)".
 
     Needed for button labels: Discord renders those once and never refreshes
-    them, so "opens in 5m" is already wrong a minute later. A clock time stays
-    correct until the message is edited.
+    them, so "opens in 5m" is already wrong a minute later.
 
     with_zone=False for button labels – Discord truncates long labels on narrow
     phone screens and "(UTC)" is the first thing to get cut, leaving "(U…".
-    The zone is redundant there anyway because the embed above carries a
-    per-viewer localised <t:...:R> timestamp.
     """
     t = parse_iso_utc(iso_ts)
     if t is None:
@@ -341,8 +330,8 @@ def format_duration_hours(hours: Optional[float], *, short: bool = False) -> str
     3.7 -> '3h 42m' · 50.2 -> '2d 2h' · 0.05 -> '3m'
     short=True drops the spaces ('3h42m') for tight mobile layouts.
 
-    NOTE: the sign is dropped on purpose – callers that can produce negative
-    values (overdue countdowns) phrase them as "overdue by X" themselves.
+    The sign is dropped on purpose – callers that can produce negative values
+    (overdue countdowns) phrase them as "overdue by X" themselves.
     """
     if hours is None:
         return "unknown"
@@ -618,7 +607,7 @@ UNKNOWN_MESSAGE = UnknownMessage()
 MessageLookup = Union[discord.Message, UnknownMessage, None]
 
 # create_submission_pending result codes
-DUPLICATE_PENDING = -1     # user already has an open submission for that riddle
+DUPLICATE_PENDING = -1      # user already has an open submission for that riddle
 SUBMISSION_NOT_ACTIVE = -2  # riddle is not open / no longer in slot 1
 
 
@@ -639,8 +628,7 @@ class RiddleRepo:
     buys dirty reads. An unlocked SELECT can land in the middle of an open
     BEGIN IMMEDIATE on the same connection and observe uncommitted rows; if
     that transaction then rolls back, the caller has already acted on data that
-    never existed. count_pending_submissions_for_riddle() feeding the rotation
-    decision is exactly that hazard.
+    never existed.
 
     Re-entrancy: asyncio.Lock is NOT reentrant. Methods that hold the lock use
     `self.db.execute` directly and must never call `_one`/`_all`/`_exec`.
@@ -674,8 +662,7 @@ class RiddleRepo:
         """
         Guard for the few places that must interpolate an identifier into SQL
         (PRAGMA and ALTER TABLE take no parameters). Everything passed here is
-        hard-coded today – this keeps it that way if someone later wires a
-        variable through.
+        hard-coded today – this keeps it that way.
         """
         for n in names:
             if not _SQL_IDENT_RE.match(n or ""):
@@ -722,6 +709,7 @@ class RiddleRepo:
             posted_channel_id INTEGER,
             posted_message_id INTEGER,
             first_posted_at TEXT,
+            blocked_reminder_at TEXT,
             solved_by INTEGER,
             solved_at TEXT,
             solved_post_channel_id INTEGER,
@@ -801,22 +789,19 @@ class RiddleRepo:
             await self._add_col_if_missing("riddles", "solved_post_message_id",
                                            "solved_post_message_id INTEGER")
             await self._add_col_if_missing("riddles", "first_posted_at", "first_posted_at TEXT")
-            # Rotation XP bonus tracking
             await self._add_col_if_missing("riddles", "rotation_count",
                                            "rotation_count INTEGER NOT NULL DEFAULT 0")
             await self._add_col_if_missing("riddles", "base_xp", "base_xp INTEGER")
+            # Throttles the "rotation blocked by open votes" reminder.
+            await self._add_col_if_missing("riddles", "blocked_reminder_at",
+                                           "blocked_reminder_at TEXT")
             await self._add_col_if_missing("guild_riddle_state", "hiatus_until",
                                            "hiatus_until TEXT")
-            # Indexed duplicate-answer lookup
             await self._add_col_if_missing("submissions", "answer_norm", "answer_norm TEXT")
 
-            # Backfill base_xp for rows that existed before the bonus feature.
             await self.db.execute(
                 "UPDATE riddles SET base_xp = xp WHERE base_xp IS NULL")
 
-            # Backfill answer_norm. Done in Python because SQLite has no
-            # "collapse inner whitespace" function; batched so a large table
-            # does not build one giant statement.
             await self._backfill_answer_norm()
             await self.db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sub_riddle_norm "
@@ -824,9 +809,8 @@ class RiddleRepo:
 
             # riddle_no used to be recomputed as (solved_total + slot_no) on
             # every tick, which produced duplicates whenever an excluded user
-            # solved something (the total does not move then). It is an
-            # identity now: assigned once at creation, never rewritten.
-            # Repair any row that still has NULL.
+            # solved something. It is an identity now: assigned once at
+            # creation, never rewritten. Repair rows that still have NULL.
             await self._backfill_riddle_no()
 
             # One pending submission per (riddle, user). Clean historical
@@ -963,7 +947,7 @@ class RiddleRepo:
 
     async def list_all_guild_ids(self) -> list[int]:
         """
-        Every guild that has state anywhere. Filtered by RIDDLE_GUILD_ID when
+        Every guild that has state anywhere, filtered by RIDDLE_GUILD_ID when
         set, so a stray invite into a second server cannot make the worker post
         that guild's riddles into the configured channel.
         """
@@ -1013,6 +997,21 @@ class RiddleRepo:
     async def get_open_slot1(self, guild_id: int) -> Optional[dict]:
         return await self._one("SELECT * FROM riddles WHERE guild_id=? AND status='open' "
                                "AND slot_no=1 LIMIT 1", (guild_id,))
+
+    async def first_free_slot(self, guild_id: int) -> Optional[int]:
+        """
+        Lowest unoccupied slot number, or None when the queue is full. New
+        riddles always land at the end anyway, so the panel offers a single
+        "New Riddle" action instead of a dropdown of every empty slot.
+        """
+        rows = await self._all(
+            "SELECT slot_no FROM riddles WHERE guild_id=? AND status='open' "
+            "AND slot_no BETWEEN 1 AND ?", (guild_id, MAX_RIDDLE_SLOTS))
+        used = {to_int(r.get("slot_no"), 0) for r in rows}
+        for s in range(1, MAX_RIDDLE_SLOTS + 1):
+            if s not in used:
+                return s
+        return None
 
     async def get_open_riddle_by_id(self, guild_id: int, riddle_id: int) -> Optional[dict]:
         return await self._one("SELECT * FROM riddles WHERE guild_id=? AND id=? "
@@ -1124,13 +1123,9 @@ class RiddleRepo:
         increment its rotation counter. Only touches OPEN riddles.
 
         The ceiling can only ever HOLD the value, never lower it: a riddle whose
-        XP already sits above max_xp (possible with legacy data or a raised
-        ceiling that was later lowered) keeps what it has. Clipping downwards
-        used to silently destroy reward, and both the bonus embed and the
-        rotation field rendered it as "ceiling reached" so nobody noticed.
-
-        Returns {"old_xp", "new_xp", "gained", "rotation_count", "capped"} or
-        None if the riddle is gone / no longer open.
+        XP already sits above max_xp keeps what it has. Clipping downwards used
+        to silently destroy reward while the embeds rendered it as "ceiling
+        reached", so nobody noticed.
         """
         if self.db is None:
             return None
@@ -1153,9 +1148,7 @@ class RiddleRepo:
                 old_xp = max(0, to_int(row["xp"], 0))
                 base_xp = to_int(row["base_xp"], old_xp)
                 rot = max(0, to_int(row["rotation_count"], 0)) + 1
-
-                # never below old_xp – see docstring
-                new_xp = max(old_xp, min(old_xp + bonus, ceiling))
+                new_xp = max(old_xp, min(old_xp + bonus, ceiling))  # never below old
                 capped = (old_xp + bonus) > new_xp
 
                 await self.db.execute(
@@ -1170,6 +1163,11 @@ class RiddleRepo:
                     await self.db.rollback()
                 raise
 
+    # --------------------------------------------------- blocked-rotation nag
+    async def set_blocked_reminder_at(self, riddle_id: int, iso_ts: Optional[str]):
+        await self._exec("UPDATE riddles SET blocked_reminder_at=? WHERE id=?",
+                         (iso_ts, riddle_id))
+
     # ---------------------------------------------------------- slot geometry
     async def compact_open_slots(self, guild_id: int):
         """
@@ -1180,8 +1178,7 @@ class RiddleRepo:
 
         NOTE: clearing a post ref only forgets the message, it does not delete
         it. Callers that can reach Discord should use pop_non_slot1_post_refs()
-        BEFORE calling this and delete whatever comes back – otherwise a live
-        Submit button is left behind with nothing pointing at it.
+        BEFORE calling this and delete whatever comes back.
         """
         if self.db is None:
             return
@@ -1219,13 +1216,14 @@ class RiddleRepo:
                     elif i <= MAX_RIDDLE_SLOTS:
                         await self.db.execute(
                             "UPDATE riddles SET slot_no=?, is_active=0, first_posted_at=NULL, "
-                            "posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
-                            "WHERE id=?", (i, now, rid))
+                            "blocked_reminder_at=NULL, posted_channel_id=NULL, "
+                            "posted_message_id=NULL, updated_at=? WHERE id=?", (i, now, rid))
                     else:
                         await self.db.execute(
                             "UPDATE riddles SET status='closed', closed_by=0, closed_at=?, "
-                            "first_posted_at=NULL, posted_channel_id=NULL, "
-                            "posted_message_id=NULL, updated_at=? WHERE id=?", (now, now, rid))
+                            "first_posted_at=NULL, blocked_reminder_at=NULL, "
+                            "posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
+                            "WHERE id=?", (now, now, rid))
                         await self.db.execute(
                             "UPDATE submissions SET status='cancelled', voted_by=0, voted_at=? "
                             "WHERE riddle_id=? AND status='pending'", (now, rid))
@@ -1256,11 +1254,10 @@ class RiddleRepo:
 
                 now = now_iso_utc()
                 if len(ids) <= 1:
-                    # Nothing to reorder, but reset the timer so the single
-                    # riddle gets a fresh countdown + grace period.
                     await self.db.execute(
-                        "UPDATE riddles SET first_posted_at=NULL, posted_channel_id=NULL, "
-                        "posted_message_id=NULL, updated_at=? WHERE id=?", (now, riddle_id))
+                        "UPDATE riddles SET first_posted_at=NULL, blocked_reminder_at=NULL, "
+                        "posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
+                        "WHERE id=?", (now, riddle_id))
                     await self.db.commit()
                     return True
 
@@ -1268,8 +1265,8 @@ class RiddleRepo:
                 ids.append(riddle_id)
                 await self.db.execute(
                     "UPDATE riddles SET slot_no=NULL, is_active=0, first_posted_at=NULL, "
-                    "posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
-                    "WHERE guild_id=? AND status='open'", (now, guild_id))
+                    "blocked_reminder_at=NULL, posted_channel_id=NULL, posted_message_id=NULL, "
+                    "updated_at=? WHERE guild_id=? AND status='open'", (now, guild_id))
                 for idx, rid in enumerate(ids, start=1):
                     await self.db.execute(
                         "UPDATE riddles SET slot_no=?, is_active=?, updated_at=? WHERE id=?",
@@ -1300,8 +1297,9 @@ class RiddleRepo:
                 now = now_iso_utc()
                 await self.db.execute(
                     "UPDATE riddles SET status='closed', slot_no=NULL, is_active=0, "
-                    "first_posted_at=NULL, posted_channel_id=NULL, posted_message_id=NULL, "
-                    "closed_by=?, closed_at=?, updated_at=? WHERE id=? AND status='open'",
+                    "first_posted_at=NULL, blocked_reminder_at=NULL, posted_channel_id=NULL, "
+                    "posted_message_id=NULL, closed_by=?, closed_at=?, updated_at=? "
+                    "WHERE id=? AND status='open'",
                     (closed_by, now, now, riddle_id))
                 await self.db.execute(
                     "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? "
@@ -1319,8 +1317,7 @@ class RiddleRepo:
         """
         first_posted_at is written only when currently NULL (COALESCE), so
         refreshes/edits reset neither the rotation countdown, the submit grace
-        period, nor the timing display. The caller may pass the exact anchor it
-        used for the "opens at" hint so both cannot drift apart.
+        period, nor the timing display.
         """
         now = now_iso_utc()
         await self._exec(
@@ -1331,7 +1328,8 @@ class RiddleRepo:
     async def reset_riddle_post_state(self, riddle_id: int):
         await self._exec(
             "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
-            "first_posted_at=NULL, updated_at=? WHERE id=?", (now_iso_utc(), riddle_id))
+            "first_posted_at=NULL, blocked_reminder_at=NULL, updated_at=? WHERE id=?",
+            (now_iso_utc(), riddle_id))
 
     async def set_solved_post_ref(self, riddle_id: int, channel_id: int, message_id: int):
         await self._exec(
@@ -1345,14 +1343,11 @@ class RiddleRepo:
 
         reset_timer=False keeps first_posted_at intact. Startup MUST use that:
         the old messages are deleted and re-posted, but the ROTATION CLOCK must
-        survive. With the timer reset on every boot, a bot that restarts more
-        often than RIDDLE_UNSOLVED_ROTATION_HOURS (deploys, OOM-restarts,
-        flapping healthchecks) would never rotate a single riddle and the
-        unsolved XP bonus would never fire – silently, with no error anywhere.
-        Keeping the anchor also means the submit grace period is not re-armed
-        on a riddle that has already been online for hours.
+        survive. With the timer reset on every boot, a bot restarting more often
+        than RIDDLE_UNSOLVED_ROTATION_HOURS would never rotate a single riddle
+        and the unsolved XP bonus would never fire – silently.
         """
-        timer = ", first_posted_at=NULL" if reset_timer else ""
+        timer = ", first_posted_at=NULL, blocked_reminder_at=NULL" if reset_timer else ""
         if guild_id is None:
             await self._exec(
                 f"UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL{timer}, "
@@ -1367,10 +1362,8 @@ class RiddleRepo:
                                          keep_riddle_id: int) -> list[dict]:
         """
         Clear post refs of every open riddle except the keeper AND return what
-        was cleared, so the caller can delete those messages. Returning them is
-        the point: a forgotten ref leaves a live Submit button in the channel
-        that no DB row points at, and the button's fallback would then submit
-        against whatever riddle happens to be in slot 1.
+        was cleared, so the caller can delete those messages. A forgotten ref
+        leaves a live Submit button in the channel that no DB row points at.
         """
         if self.db is None:
             return []
@@ -1386,7 +1379,7 @@ class RiddleRepo:
                 if rows:
                     await self.db.execute(
                         "UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
-                        "first_posted_at=NULL, updated_at=? "
+                        "first_posted_at=NULL, blocked_reminder_at=NULL, updated_at=? "
                         "WHERE guild_id=? AND status='open' AND id<>? "
                         "AND posted_message_id IS NOT NULL",
                         (now_iso_utc(), guild_id, keep_riddle_id))
@@ -1432,8 +1425,7 @@ class RiddleRepo:
             "WHERE guild_id=? AND status='open' AND posted_message_id IS NOT NULL", (guild_id,))
 
     async def clear_stale_posted_refs(self, riddle_id: int):
-        """Drop refs of a riddle whose message we just deleted (keeps the unique
-        index on posted_message_id free of dead entries)."""
+        """Drop refs of a riddle whose message we just deleted."""
         await self._exec("UPDATE riddles SET posted_channel_id=NULL, posted_message_id=NULL, "
                          "updated_at=? WHERE id=?", (now_iso_utc(), riddle_id))
 
@@ -1461,10 +1453,9 @@ class RiddleRepo:
         check and the write are one atomic step.
 
         Why slot_no matters: a user can open the modal, type for a minute, and
-        submit after the worker rotated the riddle to slot 10. The riddle is
-        still 'open', so a status-only check passes – and approving that
-        submission would mark a riddle solved that was never on screen,
-        triggering the full solved flow for the wrong riddle.
+        submit after the riddle moved. It is still 'open', so a status-only
+        check passes – and approving that submission would mark a riddle solved
+        that was never on screen.
 
         Returns: new submission id
                  DUPLICATE_PENDING (-1)     – user already has one pending
@@ -1549,6 +1540,14 @@ class RiddleRepo:
         row = await self._one("SELECT COUNT(*) AS c FROM submissions WHERE riddle_id=? "
                               "AND status='pending'", (riddle_id,))
         return to_int(row.get("c"), 0) if row else 0
+
+    async def oldest_pending_submission_at(self, riddle_id: int) -> Optional[str]:
+        """Timestamp of the longest-waiting open vote – used in the reminder."""
+        row = await self._one(
+            "SELECT MIN(created_at) AS t FROM submissions WHERE riddle_id=? "
+            "AND status='pending'", (riddle_id,))
+        v = row.get("t") if row else None
+        return str(v) if v else None
 
     async def pending_open_submissions(self) -> list[dict]:
         return await self._all(
