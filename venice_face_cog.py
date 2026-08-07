@@ -159,9 +159,9 @@ MODES: dict[str, dict[str, Any]] = {
         "prompt_limit": 5000,
     },
     "clothed_free": {
-        "label": "👗 Clothed (Free)",
+        "label": "👗 Clothed",
         "short_label": "👗 Clothed",
-        "button_label": "👗 Clothed (Free)",
+        "button_label": "👗 Clothed",
         "model": "nano-banana-2-edit",
         "danger": False,
         "prompt_limit": 10000,
@@ -985,7 +985,7 @@ async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]
             "**Buttons on the starter message:**\n"
             "• 🔞 `Nude V1` — qwen-edit-uncensored\n"
             "• 🔞 `Nude V2` — seedream-v5-pro-edit\n"
-            "• 👗 `Clothed (Free)` — nano-banana-2-edit\n\n"
+            "• 👗 `Clothed` — nano-banana-2-edit\n\n"
             f"`safe_mode` is hard-locked to **{FACE_SAFE_MODE_VALUE}** (uncensored output)."
         ),
         color=discord.Color.purple(),
