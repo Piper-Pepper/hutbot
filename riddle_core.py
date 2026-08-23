@@ -289,7 +289,7 @@ def _resolve_display_tz() -> dt.tzinfo:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, KeyError):
         logger.warning("RIDDLE_DISPLAY_TIMEZONE=%r is not a valid IANA zone – using UTC. "
-                       "(On Windows you may need the 'tzdata' package.)", name)
+                       "(On Windows / slim containers install the 'tzdata' package.)", name)
         return dt.timezone.utc
 
 
@@ -458,10 +458,61 @@ def is_http_url(url: Optional[str]) -> bool:
 
 
 def truncate_text(text: Optional[str], max_len: int = 180) -> str:
+    """Hard character cut. For previews prefer truncate_words()."""
     t = text or ""
     if max_len <= 1:
         return t[:max_len]
     return t[: max_len - 1].rstrip() + "…" if len(t) > max_len else t
+
+
+# ---------------------------------------------------------------------------
+# MARKDOWN-SAFE PREVIEWS
+# ---------------------------------------------------------------------------
+# Truncating raw user text is unsafe the moment it contains markdown: cutting
+# "**Werner Heisenberg said**" after 20 characters leaves an UNMATCHED "**",
+# which Discord then prints literally – and inside the italic wrapper the admin
+# panel uses, a stray "*" can swallow the formatting of the whole line.
+#
+# Previews are therefore stripped of markup entirely. They are teasers, not
+# content; nobody needs bold inside a 20-character excerpt.
+# ---------------------------------------------------------------------------
+_MD_INLINE_RE = re.compile(r"[*_~`|]")
+_MD_LINE_PREFIX_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)", re.MULTILINE)
+_MD_LINK_RE = re.compile(r"$$([^$$]*)$$$$[^)]*$$")
+
+
+def strip_markdown(text: Optional[str]) -> str:
+    """
+    Plain-text version of user input, whitespace collapsed to single spaces.
+    Only for previews/excerpts – never for content meant to be read in full.
+    """
+    if not text:
+        return ""
+    out = _MD_LINK_RE.sub(r"\1", str(text))   # [label](url) -> label
+    out = _MD_LINE_PREFIX_RE.sub("", out)     # headings, quotes, bullets
+    out = _MD_INLINE_RE.sub("", out)          # * _ ~ ` |
+    return " ".join(out.split())
+
+
+def truncate_words(text: Optional[str], max_len: int = 20, *,
+                   ellipsis: str = "…", min_ratio: float = 0.55) -> str:
+    """
+    Truncate on a WORD boundary instead of mid-syllable.
+
+    Cuts at the last space that still fits. If the very first word alone blows
+    the budget (URLs, long compounds) a hard cut is used instead; min_ratio
+    prevents returning a three-letter stub just because word two started early.
+    """
+    t = " ".join((text or "").split())
+    if len(t) <= max_len:
+        return t
+    budget = max(1, max_len - len(ellipsis))
+    head = t[:budget]
+    cut = head.rfind(" ")
+    if cut >= max(1, int(budget * min_ratio)):
+        head = head[:cut]
+    return head.rstrip(" ,;:.!?–—-") + ellipsis
 
 
 def clamp_embed_value(text: Optional[str], limit: int = 1024) -> str:
@@ -484,17 +535,17 @@ def extract_first_url(text: Optional[str]) -> tuple[str, Optional[str]]:
 
 def excerpt(text: Optional[str], max_len: int = POST_EXCERPT_CHARS) -> str:
     """
-    Single-line, URL-free teaser used as a "which riddle was this?" anchor.
+    Single-line, URL-free, markdown-free teaser used as a "which riddle was
+    this?" anchor in wrong-answer and solved posts.
 
-    Wrong-answer and solved posts used to repeat the ENTIRE riddle text, which
-    on a phone meant scrolling past the same 40 lines for the third time. The
-    original post is a few messages up – a short anchor is enough.
+    Markdown is stripped BEFORE truncating – a riddle starting with "**" would
+    otherwise leave a dangling bold marker in the anchor.
     """
     body, _ = extract_first_url(text or "")
-    flat = " ".join((body or "").split())
+    flat = strip_markdown(body)
     if not flat:
         return "*no text*"
-    return truncate_text(flat, max_len)
+    return truncate_words(flat, max_len)
 
 
 def parse_csv_role_ids(s: Optional[str]) -> list[int]:

@@ -19,6 +19,7 @@ from riddle_core import (
     DUPLICATE_PENDING, SUBMISSION_NOT_ACTIVE,
     logger, to_int, clean_value, is_http_url, truncate_text, parse_xp_input,
     clamp_embed_value, clamp_embed_description, extract_first_url, excerpt,
+    strip_markdown, truncate_words,
     footer_text, parse_csv_role_ids, safe_defer, member_has_role,
     quiet_followup, quiet_respond,
     iso_in_future, hours_until, hours_since, discord_ts, duration_between_iso,
@@ -31,6 +32,12 @@ if TYPE_CHECKING:
 
 _DISCORD_SELECT_MAX = 25
 _ROLE_SELECT_MAX = max(1, min(_DISCORD_SELECT_MAX, MAX_EXTRA_PING_ROLES))
+
+# Completeness icons. Used IDENTICALLY in the slot list, the select menu and
+# the summary line – that consistency is what makes the legend unnecessary.
+ICON_NO_ROLES = "🎯"
+ICON_NO_IMAGE = "🖼"
+ICON_NO_SOLUTION_IMAGE = "🧩"
 
 
 # =============================================================================
@@ -68,12 +75,24 @@ def _spoiler(text: Optional[str]) -> str:
 
 
 def _first_line(text: Optional[str], max_len: int = 200) -> str:
+    """
+    First meaningful line as PLAIN text, cut on a word boundary.
+
+    Markdown must be stripped before truncating. A solution starting with
+    "**Werner Heisenberg said**" cut at 20 characters leaves an unmatched "**"
+    that Discord prints literally – and since the panel wraps this in _italics_,
+    a stray "*" also breaks the formatting of the entire slot line.
+    """
     if not text:
         return "*no solution set*"
     body, _ = extract_first_url(text)
-    base = (body or text).strip()
-    line = base.split("\n", 1)[0].strip() if base else ""
-    return truncate_text(line, max_len) if line else "*no solution set*"
+    raw = body or text
+    flat = strip_markdown(raw.split("\n", 1)[0])
+    if not flat:
+        # First line was pure markup (a heading, "**", a lone URL) – fall back
+        # to the whole text rather than showing an empty preview.
+        flat = strip_markdown(raw)
+    return truncate_words(flat, max_len) if flat else "*no solution set*"
 
 
 def _riddle_display_no(riddle: dict) -> int:
@@ -247,47 +266,39 @@ def level_badge(xp: int) -> str:
 # =============================================================================
 # COMPLETENESS  (admin panel only)
 # =============================================================================
-def riddle_missing_parts(riddle: dict) -> list[str]:
+def riddle_missing_icons(riddle: dict) -> str:
     """
-    Which optional-but-expected pieces a riddle is still missing.
-    Returns short codes: "roles", "img", "sol_img".
+    Icons for whatever this riddle is still missing, "" when it is complete.
+
+    One icon per missing piece, and the SAME icon everywhere it appears, so the
+    meaning is learned once instead of explained in every message:
+        🎯 no extra ping roles · 🖼 no riddle image · 🧩 no solution image
     """
-    missing: list[str] = []
+    out = ""
     if not parse_csv_role_ids(riddle.get("mention_role_ids")):
-        missing.append("roles")
+        out += ICON_NO_ROLES
     if not is_http_url(clean_value(riddle.get("image_url"))):
-        missing.append("img")
+        out += ICON_NO_IMAGE
     if not is_http_url(clean_value(riddle.get("solution_url"))):
-        missing.append("sol_img")
-    return missing
+        out += ICON_NO_SOLUTION_IMAGE
+    return out
 
 
-def incomplete_marker(riddle: dict) -> str:
-    """
-    Compact warning badge for the slot list. A riddle counts as unfinished as
-    soon as ONE piece is missing, so it stands out before it goes live.
-    """
-    missing = riddle_missing_parts(riddle)
-    if not missing:
-        return ""
-    out = " ⚠️"
-    if "roles" in missing:
-        out += "🎯"
-    if "img" in missing or "sol_img" in missing:
-        out += "🖼"
+def riddle_missing_words(riddle: dict) -> list[str]:
+    """Spelled-out version – only used in the single-riddle detail preview."""
+    out: list[str] = []
+    if not parse_csv_role_ids(riddle.get("mention_role_ids")):
+        out.append("ping roles")
+    if not is_http_url(clean_value(riddle.get("image_url"))):
+        out.append("riddle image")
+    if not is_http_url(clean_value(riddle.get("solution_url"))):
+        out.append("solution image")
     return out
 
 
 def incomplete_detail(riddle: dict) -> Optional[str]:
-    missing = riddle_missing_parts(riddle)
-    if not missing:
-        return None
-    human = {
-        "roles": "no extra ping roles",
-        "img": "no riddle image",
-        "sol_img": "no solution image",
-    }
-    return "⚠️ Unfinished: " + ", ".join(human[m] for m in missing)
+    missing = riddle_missing_words(riddle)
+    return f"⚠️ Missing: {', '.join(missing)}" if missing else None
 
 
 # =============================================================================
@@ -556,14 +567,14 @@ def build_rotation_blocked_embed(guild: Optional[discord.Guild], riddle: dict,
     bits: list[str] = []
     if oldest_pending_at:
         waited = hours_since(oldest_pending_at)
-        bits.append(f"⌛ longest wait **{format_duration_hours(waited)}**"
-                    if waited is not None else "")
+        if waited is not None:
+            bits.append(f"⌛ longest wait **{format_duration_hours(waited)}**")
     posted_rel = discord_ts(riddle.get("first_posted_at"), "R")
     if posted_rel:
         bits.append(f"📌 posted {posted_rel}")
-    line = " · ".join(b for b in bits if b)
-    if line:
-        e.add_field(name="ℹ️ Context", value=clamp_embed_value(line), inline=False)
+    if bits:
+        e.add_field(name="ℹ️ Context", value=clamp_embed_value(" · ".join(bits)),
+                    inline=False)
 
     if ROTATION_BLOCKED_REMINDER_HOURS > 0:
         e.set_footer(text=f"Repeats every {ROTATION_BLOCKED_REMINDER_HOURS}h "
@@ -796,8 +807,8 @@ class RiddleContentModal(Modal):
                 return
             self.panel.selected_slot = slot_no or 1
             self.panel.last_info = (
-                f"✅ New riddle created in **#{slot_no}** with **{xp} XP**. "
-                f"Don't forget 🖼️ images and 🎯 ping roles.")
+                f"✅ Created **#{slot_no}** with **{xp} XP** — "
+                f"still needs {ICON_NO_ROLES}{ICON_NO_IMAGE}{ICON_NO_SOLUTION_IMAGE}.")
             await self.panel.safe_edit_panel()
             return
 
@@ -865,12 +876,13 @@ class RiddleImagesModal(Modal):
         ok, reason = await self.panel.cog.save_slot_images(
             interaction.guild.id, self.riddle_id, interaction.user.id, r_img, s_img)
         if ok:
-            still = [] if (r_img and s_img) else (
-                ["riddle image"] if not r_img else []) + (
-                ["solution image"] if not s_img else [])
+            missing = ""
+            if not r_img:
+                missing += ICON_NO_IMAGE
+            if not s_img:
+                missing += ICON_NO_SOLUTION_IMAGE
             self.panel.last_info = ("✅ Images updated."
-                                    + (f" ⚠️ Still missing: {', '.join(still)}."
-                                       if still else ""))
+                                    + (f" Still missing: {missing}" if missing else ""))
         else:
             self.panel.last_info = {
                 "conflict": "⚠️ Riddle no longer open.",
@@ -981,8 +993,7 @@ class PingRolesPickerView(View):
         if not await safe_defer(interaction, ephemeral=True):
             return
         await self._persist(interaction, None,
-                            "✅ Cleared all extra ping roles. ⚠️ Riddle now counts "
-                            "as unfinished.")
+                            f"✅ Cleared all extra ping roles {ICON_NO_ROLES}")
 
     async def on_cancel(self, interaction: Interaction):
         if not await safe_defer(interaction, ephemeral=True):
@@ -1207,9 +1218,8 @@ class XPDoneButton(discord.ui.Button):
             await quiet_respond(interaction, "❌ Could not delete the reminder.")
             return
 
-        # The message is gone, so responding to the interaction at all is
-        # optional – but an unanswered interaction shows "This interaction
-        # failed" on the clicker's screen.
+        # The message is gone, so responding at all is optional – but an
+        # unanswered interaction shows "This interaction failed" to the clicker.
         with contextlib.suppress(discord.HTTPException, discord.NotFound,
                                  discord.InteractionResponded):
             await interaction.response.send_message("✅ Reminder cleared.", ephemeral=True)
@@ -1242,7 +1252,9 @@ class FilledSlotsSelect(Select):
             label = f"#{slot}"
             if rot:
                 label += f" 🔁{rot}"
-            label += incomplete_marker(r)
+            missing = riddle_missing_icons(r)
+            if missing:
+                label += f"  {missing}"
             opts.append(discord.SelectOption(
                 label=label[:100],
                 value=str(slot),
@@ -1433,10 +1445,6 @@ class RiddleAdminPanelView(View):
         """
         One dense line per occupied slot.
 
-        "Slot 1 · No.12" collapsed to "#1 · No.12" -> "#1" plus the riddle
-        number only where it differs, because the panel is about queue POSITION
-        and the position is what a manager acts on.
-
         Empty slots are collapsed into a single trailing line instead of one
         line per slot – ten "EMPTY" rows carry no information.
         """
@@ -1452,8 +1460,8 @@ class RiddleAdminPanelView(View):
             xp = to_int(row.get("xp"), 0)
             rot = max(0, to_int(row.get("rotation_count"), 0))
             rot_tag = f" 🔁{rot}" if rot >= 1 else ""
-            extras = parse_csv_role_ids(row.get("mention_role_ids"))
-            warn = incomplete_marker(row)
+            missing = riddle_missing_icons(row)
+            warn = f" {missing}" if missing else ""
             preview = _first_line(row.get("solution"), PANEL_PREVIEW_CHARS)
 
             active_tag = ""
@@ -1467,36 +1475,27 @@ class RiddleAdminPanelView(View):
                     active_tag = f" · 👉 {format_duration_hours(age, short=True)}"
 
             lines.append(
-                f"{marker} **#{slot}**{rot_tag}{warn} · {xp}XP {level_badge(xp)} · "
-                f"🎯{len(extras)}{active_tag} — _{preview}_")
+                f"{marker} **#{slot}**{rot_tag}{warn} · {xp}XP {level_badge(xp)}"
+                f"{active_tag} — _{preview}_")
 
         if empty:
             if len(empty) == 1:
                 lines.append(f"⬜ **#{empty[0]}** — `EMPTY` · next new riddle lands here")
             else:
                 lines.append(f"⬜ **#{empty[0]}–#{empty[-1]}** — `EMPTY` "
-                             f"({len(empty)} free) · next new riddle → **#{empty[0]}**")
+                             f"({len(empty)} free) · next → **#{empty[0]}**")
         return lines
 
     def _incomplete_summary(self) -> Optional[str]:
-        """Roll-up so a manager sees at a glance that something needs finishing."""
-        bad = [(slot, riddle_missing_parts(row))
-               for slot, row in sorted(self.slot_map.items())
-               if riddle_missing_parts(row)]
-        if not bad:
-            return None
-        parts: list[str] = []
-        for slot, missing in bad[:MAX_RIDDLE_SLOTS]:
-            codes = []
-            if "roles" in missing:
-                codes.append("🎯")
-            if "img" in missing:
-                codes.append("🖼")
-            if "sol_img" in missing:
-                codes.append("🧩")
-            parts.append(f"**#{slot}**{''.join(codes)}")
-        return ("⚠️ Unfinished: " + " · ".join(parts)
-                + "\n🎯 no extra ping roles · 🖼 no riddle image · 🧩 no solution image")
+        """
+        One compact line, no legend: the icons are the same ones already shown
+        on each slot row, so a manager reads the mapping straight off the list
+        instead of from an explanation nobody needs twice.
+        """
+        parts = [f"**#{slot}**{icons}"
+                 for slot, row in sorted(self.slot_map.items())
+                 if (icons := riddle_missing_icons(row))]
+        return " · ".join(parts) if parts else None
 
     async def build_embeds(self) -> list[discord.Embed]:
         guild = self.guild
@@ -1531,7 +1530,7 @@ class RiddleAdminPanelView(View):
 
         warn = self._incomplete_summary()
         if warn:
-            main.add_field(name="🚧 Needs attention", value=clamp_embed_value(warn),
+            main.add_field(name="🚧 Unfinished", value=clamp_embed_value(warn),
                            inline=False)
 
         if self.last_info:
@@ -1561,7 +1560,7 @@ class RiddleAdminPanelView(View):
                 extra_ids = parse_csv_role_ids(
                     row.get("mention_role_ids"))[:MAX_EXTRA_PING_ROLES]
                 extra_mentions = (", ".join(f"<@&{rid}>" for rid in extra_ids)
-                                  if extra_ids else "*none* ⚠️")
+                                  if extra_ids else f"*none* {ICON_NO_ROLES}")
                 preview.add_field(
                     name="🔔 Ping Roles",
                     value=clamp_embed_value(
@@ -1581,12 +1580,14 @@ class RiddleAdminPanelView(View):
                 preview.add_field(name="✅ Solution (stored)",
                                   value=clamp_embed_value(_spoiler(sol) if sol else "*not set*"),
                                   inline=False)
-                preview.add_field(name="🖼️ Riddle Image URL",
-                                  value=clamp_embed_value(r_url or "*not set* ⚠️"),
-                                  inline=False)
-                preview.add_field(name="🧩 Solution Image URL",
-                                  value=clamp_embed_value(s_url or "*not set* ⚠️"),
-                                  inline=False)
+                preview.add_field(
+                    name="🖼️ Riddle Image URL",
+                    value=clamp_embed_value(r_url or f"*not set* {ICON_NO_IMAGE}"),
+                    inline=False)
+                preview.add_field(
+                    name="🧩 Solution Image URL",
+                    value=clamp_embed_value(s_url or f"*not set* {ICON_NO_SOLUTION_IMAGE}"),
+                    inline=False)
                 posted_abs = discord_ts(row.get("first_posted_at"), "f")
                 if posted_abs:
                     unlock = submit_unlock_iso(row)
