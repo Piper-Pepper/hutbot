@@ -34,12 +34,28 @@ _DISCORD_SELECT_MAX = 25
 _ROLE_SELECT_MAX = max(1, min(_DISCORD_SELECT_MAX, MAX_EXTRA_PING_ROLES))
 
 # Completeness icons. Used IDENTICALLY in the slot list, the select menu and
-# the summary line – that consistency is what makes the legend unnecessary.
+# the summary line – that consistency is what makes a legend unnecessary.
 ICON_NO_ROLES = "🎯"
 ICON_NO_IMAGE = "🖼"
 ICON_NO_SOLUTION_IMAGE = "🧩"
 
 
+# =============================================================================
+# WHERE THE RIDDLE TEXT APPEARS IN FULL – AND WHERE IT DOES NOT
+# =============================================================================
+#   FULL TEXT
+#     * active riddle post   – what players actually read
+#     * vote post            – a manager must judge without scrolling back
+#     * big solved post      – the PERMANENT RECORD. The active post is deleted
+#                              on solve, so this message is the only place the
+#                              riddle survives. Never truncate it.
+#
+#   50-CHARACTER ANCHOR
+#     * solved ping post     – the message that pings; may be opened straight
+#                              from a notification, so it needs a hint of what
+#                              this was about, not the whole text
+#     * wrong-answer post    – several of these pile up per riddle
+#
 # =============================================================================
 # MOBILE LAYOUT RULES  (public channel posts)
 # =============================================================================
@@ -127,11 +143,8 @@ def _set_author_user(embed: discord.Embed, name: str, avatar_url: Optional[str])
 def _add_riddle_anchor(embed: discord.Embed, riddle: dict,
                        name: str = "🧩 Riddle") -> None:
     """
-    Short "which riddle was this?" reminder.
-
-    Wrong-answer and solved posts used to reprint the whole riddle text. On a
-    phone that meant scrolling past the same block for the third time, and the
-    original post is only a few messages up anyway.
+    Short "which riddle was this?" reminder for the SECONDARY posts only.
+    Never used where the text has to survive – see the table at the top.
     """
     embed.add_field(name=name,
                     value=clamp_embed_value(excerpt(riddle.get("text"),
@@ -204,6 +217,18 @@ def _add_rotation_field(embed: discord.Embed, riddle: dict, *,
                         inline=False)
 
 
+def _solve_duration(riddle: dict) -> Optional[float]:
+    """
+    Hours between first post and the winning SUBMISSION.
+
+    "Post Now" can reset first_posted_at while a submission is pending, which
+    would yield a negative duration – filtered out here so no caller has to
+    remember it.
+    """
+    took = duration_between_iso(riddle.get("first_posted_at"), riddle.get("solved_at"))
+    return took if (took is not None and took >= 0) else None
+
+
 def _timing_line(riddle: dict, *, with_vote: bool = False) -> Optional[str]:
     """
     ONE line instead of a three-line block.
@@ -212,28 +237,29 @@ def _timing_line(riddle: dict, *, with_vote: bool = False) -> Optional[str]:
     "a manager pressed the button". Callers must pass the submission timestamp,
     otherwise moderator response time inflates the solve duration.
 
+    The relative "x minutes ago" is only added when there is NO duration to
+    show: Discord already stamps every message with its own time, so printing
+    "solved in 10m · 13 minutes ago" says the same thing twice.
+
     Durations are bold rather than inline code: Discord does not wrap inside a
     code span, so a long value like "2d 2h 15m" forces an early break or
     overflows on narrow screens.
     """
-    first_posted = riddle.get("first_posted_at")
-    solved_at = riddle.get("solved_at")
-    took_h = duration_between_iso(first_posted, solved_at)
-
     parts: list[str] = []
-    # "Post Now" can reset first_posted_at while a submission is pending, which
-    # would yield a negative duration. Don't print nonsense.
-    if took_h is not None and took_h >= 0:
-        parts.append(f"⌛ solved in **{format_duration_hours(took_h)}**")
+    took_h = _solve_duration(riddle)
 
-    solved_rel = discord_ts(solved_at, "R")
-    if solved_rel:
-        parts.append(f"🏁 {solved_rel}")
-    elif discord_ts(first_posted, "R"):
-        parts.append(f"📌 posted {discord_ts(first_posted, 'R')}")
+    if took_h is not None:
+        parts.append(f"⌛ solved in **{format_duration_hours(took_h)}**")
+    else:
+        solved_rel = discord_ts(riddle.get("solved_at"), "R")
+        posted_rel = discord_ts(riddle.get("first_posted_at"), "R")
+        if solved_rel:
+            parts.append(f"🏁 {solved_rel}")
+        elif posted_rel:
+            parts.append(f"📌 posted {posted_rel}")
 
     if with_vote:
-        review_h = duration_between_iso(solved_at, riddle.get("voted_at"))
+        review_h = duration_between_iso(riddle.get("solved_at"), riddle.get("voted_at"))
         if review_h is not None and review_h >= 0:
             parts.append(f"✅ review **{format_duration_hours(review_h)}**")
 
@@ -307,8 +333,10 @@ def incomplete_detail(riddle: dict) -> Optional[str]:
 def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
                               posted_at_override: Optional[str] = None) -> discord.Embed:
     """
-    The one post where the FULL riddle text belongs – this is what players read.
-    Only here does the riddle image get the full-width slot.
+    The post players actually read. FULL riddle text, always.
+
+    clamp_embed_description() is a guard against Discord's 4096 limit, not a
+    truncation policy – the content modal caps input at 4000, so it never fires.
 
     posted_at_override is used for the very first post, where first_posted_at is
     not in the DB yet – so the "opens at" hint matches the stored anchor exactly.
@@ -367,26 +395,27 @@ def build_fresh_solved_post_embed(
     submitted_answer: str,
 ) -> discord.Embed:
     """
-    The big winner post.
+    The big winner post – successor of the active riddle post.
 
-    Layout notes:
-      * winner avatar -> author icon (NOT thumbnail), so the congratulation line
-        spans the full width instead of wrapping around a floating box
-      * riddle text -> short anchor only; the full text is a few messages up and
-        the solution is right here
-      * timing + rotations collapsed to one line each
-      * solution image gets the full-width bottom slot
+    FULL riddle text, never truncated. On solve the original post is DELETED,
+    so this message becomes the permanent record: anyone scrolling back weeks
+    later must still be able to read what was actually asked.
+
+    Layout: winner avatar as author icon (never a thumbnail – that squeezes the
+    text against the left edge on mobile), solution image full width at the
+    bottom.
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
+    riddle_text = (riddle.get("text") or "*No riddle text*").strip()
 
     e = discord.Embed(
         title=f"🎉 Riddle {_tag(riddle)} solved!",
-        description=f"Congratulations {solver_mention}! 🏆",
+        description=clamp_embed_description(
+            f"Congratulations {solver_mention}! 🏆\n\n{riddle_text}"),
         color=discord.Color.gold(),
     )
     _set_author_user(e, solver_display_name, solver_avatar_url)
 
-    _add_riddle_anchor(e, riddle)
     _add_answer_field(e, submitted_answer)
     _add_solution_field(e, riddle)
     _add_xp_level(e, xp)
@@ -408,24 +437,35 @@ def build_solved_ping_post_embed(
     solver_avatar_url: Optional[str], submitted_answer: str = "",
 ) -> discord.Embed:
     """
-    The small notification twin of the winner post. Deliberately minimal: the
-    big post directly above already carries answer, solution and images, so
-    repeating them here just doubles the scroll distance on mobile.
+    The notification twin of the winner post.
+
+    This is the message that actually pings, so it may well be opened straight
+    from a notification with zero context – hence the SHORT riddle anchor.
+    Answer, solution and images stay out; the big post sits directly above.
+
+    Reward, level and duration share ONE line: two half-width fields holding a
+    single word each look like a broken table on a phone.
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
 
     e = discord.Embed(
         title=f"🧩 Riddle {_tag(riddle)} — solved",
-        description=f"Congratulations {solver_mention}! 🎉\n"
-                    f"*Answer & solution in the post above.*",
+        # Deliberately NOT another "Congratulations" – the post above already
+        # says it, two centimetres higher.
+        description=f"{solver_mention} cracked it! 🎉",
         color=discord.Color.green(),
     )
-    _add_xp_level(e, xp, award_name="🏆 XP", suffix="")
+    _add_riddle_anchor(e, riddle)
 
-    line = _timing_line(riddle)
-    if line:
-        e.add_field(name="⏱️ Timing", value=clamp_embed_value(line), inline=False)
-    e.set_footer(text=footer_text(guild))
+    bits = [f"🏆 **{xp} XP**", level_badge(xp)]
+    took = _solve_duration(riddle)
+    if took is not None:
+        bits.append(f"⌛ **{format_duration_hours(took)}**")
+    # Zero-width space: Discord rejects an empty field name but renders this as
+    # a blank line, which keeps the row from growing a redundant header.
+    e.add_field(name="\u200b", value=" · ".join(bits), inline=False)
+
+    e.set_footer(text="Answer & solution in the post above")
     return e
 
 
