@@ -17,8 +17,9 @@ from riddle_core import (
     SUBMIT_DELAY_MINUTES, UNSOLVED_ROTATION_HOURS, ROTATION_BLOCKED_REMINDER_HOURS,
     UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP,
     SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS, STATS_REBUILD_DEBOUNCE_SECONDS,
-    SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID,
-    UNKNOWN_MESSAGE, MessageLookup,
+    CHUNK_TIMEOUT_SECONDS,
+    SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID, XP_DONE_BUTTON_ID,
+    UNKNOWN_MESSAGE, MessageLookup, SLOT_QUEUE_FULL,
     logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
     now_iso_utc, iso_in_future, iso_utc_in_hours, hours_since, seconds_until,
     submit_unlock_iso, submit_is_locked,
@@ -38,6 +39,7 @@ from riddle_ui import (
     build_rotation_bonus_embed,
     SubmitButtonView,
     VoteButtons,
+    XPDoneView,
     RiddleAdminPanelView,
     ChampionsView,
 )
@@ -55,6 +57,10 @@ class RiddleCog(commands.Cog):
 
     asyncio.Lock is NOT reentrant, so every locked public method delegates to
     an `_*_unlocked` counterpart which internal callers use.
+
+    NOTHING SLOW UNDER THE LOCK: member chunking and full stats rebuilds can
+    take seconds. They are never awaited while a guild lock is held – the
+    solved flow schedules a debounced rebuild instead.
 
     Rotation vs. pending votes
     --------------------------
@@ -83,6 +89,8 @@ class RiddleCog(commands.Cog):
         self.repo = repo
         self._auto_task: Optional[asyncio.Task] = None
         self._startup_done = False
+        self._closing = False
+        self._views_registered = False
         self._guild_locks: dict[int, asyncio.Lock] = {}
         self._stats_rebuild_tasks: dict[int, asyncio.Task] = {}
         self._unlock_tasks: dict[int, asyncio.Task] = {}
@@ -91,6 +99,26 @@ class RiddleCog(commands.Cog):
         # guild_id -> signature of what is currently rendered in the channel,
         # so the worker can skip a pointless message edit every tick.
         self._render_sig: dict[int, tuple] = {}
+
+    # ==========================================================================
+    # PERSISTENT VIEWS
+    # ==========================================================================
+    def _register_persistent_views(self):
+        """
+        Register the persistent views EXACTLY ONCE per process.
+
+        on_ready fires on every gateway reconnect. Calling add_view there kept
+        appending copies to the client's persistent-view store; after a few days
+        of flaky network a single button click was dispatched to dozens of
+        stale view objects.
+        """
+        if self._views_registered:
+            return
+        self.bot.add_view(SubmitButtonView(self))
+        self.bot.add_view(VoteButtons(self))
+        self.bot.add_view(XPDoneView(self))
+        self._views_registered = True
+        logger.info("Persistent riddle views registered.")
 
     # ==========================================================================
     # LOCKING
@@ -111,10 +139,13 @@ class RiddleCog(commands.Cog):
         tick. Purely cosmetic – the authoritative gate is the DB check in the
         button callback.
         """
+        if self._closing:
+            return
         old = self._unlock_tasks.get(guild_id)
         if old and not old.done():
             old.cancel()
         if not unlock_iso:
+            self._unlock_tasks.pop(guild_id, None)
             return
         delay = seconds_until(unlock_iso)
         if delay is None:
@@ -130,6 +161,11 @@ class RiddleCog(commands.Cog):
                 raise
             except Exception:
                 logger.exception("Submit unlock re-render failed for guild %s", guild_id)
+            finally:
+                # Do not leak finished tasks into the dict forever.
+                cur = self._unlock_tasks.get(guild_id)
+                if cur is asyncio.current_task():
+                    self._unlock_tasks.pop(guild_id, None)
 
         self._unlock_tasks[guild_id] = asyncio.create_task(
             _run(), name=f"riddle_submit_unlock_{guild_id}")
@@ -160,9 +196,12 @@ class RiddleCog(commands.Cog):
     async def user_is_excluded(self, guild: discord.Guild, user_id: int, *,
                                allow_fetch: bool = True) -> bool:
         """allow_fetch=False avoids one REST call per user – mandatory in loops."""
+        if user_id <= 0:
+            return False
         m = guild.get_member(user_id)
         if m is None and allow_fetch:
-            with contextlib.suppress(discord.HTTPException, discord.NotFound):
+            with contextlib.suppress(discord.HTTPException, discord.NotFound,
+                                     asyncio.TimeoutError):
                 m = await guild.fetch_member(user_id)
         if m is None:
             return False
@@ -172,6 +211,8 @@ class RiddleCog(commands.Cog):
     async def ensure_guild_chunked(self, guild: discord.Guild):
         """
         Fill the member cache once so bulk filtering needs zero REST calls.
+
+        NEVER call this while holding a guild lock – a chunk can take seconds.
 
         The guild is only marked done AFTER a successful chunk. Marking it
         upfront meant a single chunk timeout silently disabled excluded-role
@@ -191,7 +232,15 @@ class RiddleCog(commands.Cog):
             self._chunked_guilds.add(guild.id)
             return
         try:
-            await guild.chunk(cache=True)
+            # A hung gateway response must not stall the caller forever.
+            await asyncio.wait_for(guild.chunk(cache=True), timeout=CHUNK_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning("Chunking guild %s timed out after %ss – excluded-role "
+                           "filtering may be incomplete, will retry on next rebuild",
+                           guild.id, CHUNK_TIMEOUT_SECONDS)
+            return
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to chunk guild %s – excluded-role filtering may be "
                              "incomplete, will retry on next rebuild", guild.id)
@@ -235,6 +284,8 @@ class RiddleCog(commands.Cog):
         The previous leading-edge throttle dropped every request arriving while
         a task was sleeping.
         """
+        if self._closing:
+            return
         existing = self._stats_rebuild_tasks.get(guild_id)
         if existing and not existing.done():
             existing.cancel()
@@ -248,6 +299,10 @@ class RiddleCog(commands.Cog):
                 raise
             except Exception:
                 logger.exception("Debounced stats rebuild failed for guild %s", guild_id)
+            finally:
+                cur = self._stats_rebuild_tasks.get(guild_id)
+                if cur is asyncio.current_task():
+                    self._stats_rebuild_tasks.pop(guild_id, None)
 
         self._stats_rebuild_tasks[guild_id] = asyncio.create_task(
             _run(), name=f"riddle_stats_rebuild_{guild_id}")
@@ -287,9 +342,38 @@ class RiddleCog(commands.Cog):
             return ch
         try:
             return await self.bot.fetch_channel(channel_id)
-        except Exception:
-            logger.warning("Could not resolve channel %s", channel_id)
+        except (discord.NotFound, discord.Forbidden):
+            logger.warning("Channel %s is missing or not accessible", channel_id)
             return None
+        except (discord.HTTPException, asyncio.TimeoutError):
+            logger.warning("Transient failure resolving channel %s", channel_id, exc_info=True)
+            return None
+
+    @staticmethod
+    def _can_send(channel) -> bool:
+        """
+        A channel object alone proves nothing – it may be a forum, a category,
+        or one where the bot lost Send Messages. Every send site used to only
+        check hasattr(ch, "send").
+        """
+        if channel is None or not hasattr(channel, "send"):
+            return False
+        perms = getattr(channel, "permissions_for", None)
+        me = getattr(getattr(channel, "guild", None), "me", None)
+        if perms is None or me is None:
+            return True  # DM/partial channel – let the API decide
+        p = perms(me)
+        return bool(p.send_messages and p.embed_links)
+
+    async def resolve_sendable(self, channel_id: int):
+        ch = await self.resolve_channel(channel_id)
+        if ch is None:
+            return None
+        if not self._can_send(ch):
+            logger.warning("Cannot send in channel %s (missing Send Messages / "
+                           "Embed Links, or wrong channel type)", channel_id)
+            return None
+        return ch
 
     async def fetch_message_safe(self, channel_id: Optional[int],
                                  message_id: Optional[int]) -> MessageLookup:
@@ -336,23 +420,27 @@ class RiddleCog(commands.Cog):
         except discord.Forbidden:
             logger.warning("Missing permission to delete message %s/%s", cid, mid)
             return False
-        except discord.HTTPException:
+        except (discord.HTTPException, asyncio.TimeoutError):
             logger.warning("Failed to delete message %s/%s", cid, mid, exc_info=True)
             return False
 
     async def resolve_user_label(
         self, guild: Optional[discord.Guild], uid: int
     ) -> tuple[str, str, Optional[str]]:
+        if uid <= 0:
+            return "*unknown user*", "Unknown User", None
         if guild:
             m = guild.get_member(uid)
             if m is None:
-                with contextlib.suppress(discord.HTTPException, discord.NotFound):
+                with contextlib.suppress(discord.HTTPException, discord.NotFound,
+                                         asyncio.TimeoutError):
                     m = await guild.fetch_member(uid)
             if m:
                 return m.mention, m.display_name, m.display_avatar.url
         u = self.bot.get_user(uid)
         if u is None:
-            with contextlib.suppress(discord.HTTPException, discord.NotFound):
+            with contextlib.suppress(discord.HTTPException, discord.NotFound,
+                                     asyncio.TimeoutError):
                 u = await self.bot.fetch_user(uid)
         if u:
             return u.mention, u.display_name, u.display_avatar.url
@@ -407,6 +495,8 @@ class RiddleCog(commands.Cog):
         except discord.Forbidden:
             logger.warning("No history permission in channel %s – skipping orphan sweep",
                            channel_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Orphan sweep failed in channel %s", channel_id)
         if removed:
@@ -444,14 +534,19 @@ class RiddleCog(commands.Cog):
                                                riddle: Optional[dict] = None):
         if VOTE_CHANNEL_ID <= 0 or xp_gain <= 0:
             return
-        ch = await self.resolve_channel(VOTE_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "send"):
+        ch = await self.resolve_sendable(VOTE_CHANNEL_ID)
+        if ch is None:
             return
         mention, name, avatar = await self.resolve_user_label(guild, user_id)
         embed = build_xp_reminder_embed(guild, mention, name, avatar,
                                         xp_gain, riddle_no, riddle)
         try:
-            await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            # "✅ Done" lets a manager clear the reminder once the XP is granted,
+            # instead of leaving the vote channel full of stale to-dos.
+            await ch.send(embed=embed, view=XPDoneView(self),
+                          allowed_mentions=discord.AllowedMentions.none())
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to post XP reminder to vote channel")
 
@@ -459,12 +554,14 @@ class RiddleCog(commands.Cog):
                                   riddle: dict, bump: dict):
         if VOTE_CHANNEL_ID <= 0 or not bump:
             return
-        ch = await self.resolve_channel(VOTE_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "send"):
+        ch = await self.resolve_sendable(VOTE_CHANNEL_ID)
+        if ch is None:
             return
         try:
             await ch.send(embed=build_rotation_bonus_embed(guild, riddle, bump),
                           allowed_mentions=discord.AllowedMentions.none())
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to post rotation bonus notice")
 
@@ -486,8 +583,8 @@ class RiddleCog(commands.Cog):
             if since is not None and since < ROTATION_BLOCKED_REMINDER_HOURS:
                 return
         rid = to_int(riddle.get("id"), 0)
-        ch = await self.resolve_channel(VOTE_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "send"):
+        ch = await self.resolve_sendable(VOTE_CHANNEL_ID)
+        if ch is None:
             return
         oldest = await self.repo.oldest_pending_submission_at(rid)
         try:
@@ -498,6 +595,8 @@ class RiddleCog(commands.Cog):
             await self.repo.set_blocked_reminder_at(rid, now_iso_utc())
             logger.info("Rotation blocked reminder posted for riddle %s "
                         "(%s pending, age %.1fh)", rid, pending, age_h)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to post rotation-blocked reminder")
 
@@ -538,10 +637,7 @@ class RiddleCog(commands.Cog):
 
         PING RULE: the role ping fires when this riddle has never been posted
         before (first_posted_at IS NULL). Derived here, not passed in, because
-        it is a property of the RIDDLE. This used to be an `allow_role_ping`
-        flag that the worker always passed as False – so the single most
-        important notification ("a new riddle is up after the hiatus") never
-        actually notified anyone.
+        it is a property of the RIDDLE.
           ping_on_first_post=False -> suppress even on a first post (restart)
           force_ping=True          -> ping regardless ("Post Now" / "Turn ON")
         """
@@ -549,8 +645,8 @@ class RiddleCog(commands.Cog):
         if not slot1:
             return "no_slot1"
         guild = self.bot.get_guild(guild_id)
-        ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "send"):
+        ch = await self.resolve_sendable(RIDDLE_CHANNEL_ID)
+        if ch is None:
             return "no_channel"
 
         rid = to_int(slot1.get("id"), 0)
@@ -628,6 +724,8 @@ class RiddleCog(commands.Cog):
             logger.error("Missing permissions to post in riddle channel %s",
                          RIDDLE_CHANNEL_ID)
             return "no_permission"
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("publish_slot1_post failed for guild %s", guild_id)
             return "error"
@@ -759,6 +857,8 @@ class RiddleCog(commands.Cog):
             try:
                 bump = await self.repo.bump_riddle_xp_on_rotation(
                     guild_id, riddle_id, bonus=xp_bonus, max_xp=MAX_RIDDLE_XP)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 # A failed bump must never abort the rotation, otherwise the
                 # queue stalls on a DB hiccup.
@@ -862,10 +962,48 @@ class RiddleCog(commands.Cog):
     # publishes stale content and then clears post refs by an id that has since
     # moved to a different slot. So: same guild lock as everything else.
 
+    async def create_slot_content(self, guild_id: int, user_id: int, text: str,
+                                  solution: str, xp: int) -> tuple[bool, str, Optional[int]]:
+        """
+        Create a NEW riddle in the lowest free slot.
+
+        The slot is chosen inside the DB transaction, not by the caller. Two
+        managers pressing "New Riddle" at the same moment used to be handed the
+        same slot number by first_free_slot(); the loser hit the unique index
+        and got a bare "error".
+
+        Returns (ok, reason, slot_no). reason: saved | queue_full | empty | error
+        """
+        async with self._lock(guild_id):
+            try:
+                rid, slot_no = await self.repo.create_riddle_in_free_slot(
+                    guild_id=guild_id, user_id=user_id,
+                    text=text, solution=solution, xp=xp)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("create_slot_content failed (guild=%s)", guild_id)
+                return False, "error", None
+
+            if rid == SLOT_QUEUE_FULL:
+                return False, "queue_full", None
+            if not rid:
+                return False, "empty", None
+
+            self._render_sig.pop(guild_id, None)
+            await self.normalize_after_structure_change(guild_id)
+            if await self.repo.is_enabled(guild_id):
+                await self._enforce_enabled_state_unlocked(
+                    guild_id, force_repost=False, ping_on_first_post=True)
+            return True, "saved", slot_no
+
     async def save_slot_content(self, guild_id: int, user_id: int, slot_no: int,
                                 riddle_id: Optional[int], text: str, solution: str,
                                 xp: int) -> tuple[bool, str]:
-        """Returns (ok, reason). reason in: saved | conflict | empty | error."""
+        """
+        Update an EXISTING riddle. New riddles go through create_slot_content.
+        Returns (ok, reason). reason in: saved | conflict | empty | error.
+        """
         async with self._lock(guild_id):
             try:
                 if riddle_id:
@@ -879,6 +1017,8 @@ class RiddleCog(commands.Cog):
                         text=text, solution=solution, xp=xp)
                     if not rid:
                         return False, "empty"
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("save_slot_content failed (guild=%s slot=%s)",
                                  guild_id, slot_no)
@@ -898,6 +1038,8 @@ class RiddleCog(commands.Cog):
             try:
                 good = await self.repo.set_riddle_images_by_id_open(
                     guild_id, riddle_id, image_url, solution_url, user_id)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("save_slot_images failed (riddle=%s)", riddle_id)
                 return False, "error"
@@ -915,6 +1057,8 @@ class RiddleCog(commands.Cog):
             try:
                 good = await self.repo.set_riddle_mentions_by_id_open(
                     guild_id, riddle_id, csv, user_id)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("save_slot_mentions failed (riddle=%s)", riddle_id)
                 return False, "error"
@@ -951,8 +1095,8 @@ class RiddleCog(commands.Cog):
         rows = await self.repo.pending_open_submissions()
         if not rows:
             return
-        vote_channel = await self.resolve_channel(VOTE_CHANNEL_ID)
-        if vote_channel is None or not hasattr(vote_channel, "send"):
+        vote_channel = await self.resolve_sendable(VOTE_CHANNEL_ID)
+        if vote_channel is None:
             logger.warning("Vote channel unavailable – cannot restore pending votes")
             return
 
@@ -987,6 +1131,8 @@ class RiddleCog(commands.Cog):
                 await self.repo.set_submission_vote_message(
                     to_int(row["submission_id"], 0), vm.id)
                 restored += 1
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("Failed to restore vote message for submission %s",
                                  row.get("submission_id"))
@@ -1043,7 +1189,12 @@ class RiddleCog(commands.Cog):
 
         solver_mention, solver_name, solver_avatar = await self.resolve_user_label(
             guild, solver_id)
-        is_excluded = (solver_id <= 0) or await self.user_is_excluded(guild, solver_id)
+
+        # allow_fetch=False: we hold the guild lock. A cache miss here means the
+        # member is not cached, and a REST round-trip (or worse, a rate-limited
+        # one) would block every other riddle operation for this guild.
+        is_excluded = (solver_id <= 0) or await self.user_is_excluded(
+            guild, solver_id, allow_fetch=False)
 
         rot = max(0, to_int(riddle_row.get("rotation_count"), 0))
         logger.info(
@@ -1059,12 +1210,16 @@ class RiddleCog(commands.Cog):
                 await self.repo.apply_solve_xp(gid, solver_id, xp_gain)
                 await self.repo.inc_cached_solved_total(gid, 1)
             else:
-                await self.rebuild_cached_solved_total_for_guild(gid)
+                # Debounced, NOT inline: a full rebuild may need to chunk the
+                # guild, which can take seconds – all of it under this lock.
+                self.schedule_stats_rebuild(gid, delay=5.0)
 
             await self.normalize_after_structure_change(gid)
             await self.repo.clear_all_open_post_refs(gid, reset_timer=False)
             if await self.repo.is_enabled(gid) and SOLVED_HIATUS_HOURS > 0:
                 await self.repo.set_hiatus_until(gid, iso_utc_in_hours(SOLVED_HIATUS_HOURS))
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("CRITICAL: DB state update failed after approving "
                              "submission %s (riddle %s)", sid, rid)
@@ -1078,8 +1233,8 @@ class RiddleCog(commands.Cog):
         # ---- 3) delete all wrong-answer posts ----
         await self.cleanup_wrong_posts_for_riddle(rid)
 
-        ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
-        if ch is not None and hasattr(ch, "send"):
+        ch = await self.resolve_sendable(RIDDLE_CHANNEL_ID)
+        if ch is not None:
             # ---- 4) fresh big solved post (no pings) ----
             try:
                 fresh_msg = await ch.send(
@@ -1088,6 +1243,8 @@ class RiddleCog(commands.Cog):
                         solver_avatar, submitted_answer),
                     allowed_mentions=discord.AllowedMentions.none())
                 await self.repo.set_solved_post_ref(rid, fresh_msg.channel.id, fresh_msg.id)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("Failed to post fresh solved message")
 
@@ -1103,6 +1260,8 @@ class RiddleCog(commands.Cog):
                         submitted_answer=submitted_answer),
                     allowed_mentions=discord.AllowedMentions(
                         users=True, roles=True, everyone=False))
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("Failed to post solved ping message")
 
@@ -1146,8 +1305,8 @@ class RiddleCog(commands.Cog):
                     rid, submitter_id, moderator.id, moderator)
 
         mention, name, avatar = await self.resolve_user_label(guild, submitter_id)
-        ch = await self.resolve_channel(RIDDLE_CHANNEL_ID)
-        if ch is None or not hasattr(ch, "send"):
+        ch = await self.resolve_sendable(RIDDLE_CHANNEL_ID)
+        if ch is None:
             return
 
         try:
@@ -1158,6 +1317,8 @@ class RiddleCog(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(
                     users=True, roles=False, everyone=False))
             await self.repo.add_wrong_post(gid, rid, sent.channel.id, sent.id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to post wrong-answer message")
 
@@ -1181,6 +1342,8 @@ class RiddleCog(commands.Cog):
 
         await self.delete_button_messages_in_channel(
             RIDDLE_CHANNEL_ID, {SUBMIT_BUTTON_ID}, limit=200)
+        # XP reminders are cleared by their own Done button, so they are NOT
+        # swept here – only the vote buttons, which get reposted below.
         await self.delete_button_messages_in_channel(
             VOTE_CHANNEL_ID, {VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID}, limit=200)
 
@@ -1210,27 +1373,40 @@ class RiddleCog(commands.Cog):
     async def _auto_worker(self):
         await self.bot.wait_until_ready()
         self._warn_if_multi_guild()
-        if not self._startup_done:
-            try:
-                await self.startup_rebuild()
-                self._startup_done = True
-            except Exception:
-                logger.exception("startup_rebuild failed – will retry next cycle")
 
-        while not self.bot.is_closed():
+        failures = 0
+        while not self.bot.is_closed() and not self._closing:
             try:
                 if not self._startup_done:
                     await self.startup_rebuild()
                     self._startup_done = True
+
                 for gid in await self.repo.list_all_guild_ids():
-                    await self.repo.ensure_guild_state(gid)
-                    await self.enforce_enabled_state(gid, force_repost=False,
-                                                     ping_on_first_post=True)
+                    # One bad guild must not abort the whole sweep.
+                    try:
+                        await self.repo.ensure_guild_state(gid)
+                        await self.enforce_enabled_state(gid, force_repost=False,
+                                                         ping_on_first_post=True)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("Worker tick failed for guild %s", gid)
+                failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("auto worker cycle error")
-            await asyncio.sleep(max(60, ROTATION_TICK_SECONDS))
+                failures += 1
+                logger.exception("auto worker cycle error (consecutive=%s)", failures)
+
+            # Exponential backoff after repeated hard failures so a permanently
+            # broken DB does not hammer the log 96 times a day.
+            delay = max(60, ROTATION_TICK_SECONDS)
+            if failures:
+                delay = min(delay * (2 ** min(failures, 4)), 3600)
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                raise
 
     def _warn_if_multi_guild(self):
         """
@@ -1276,22 +1452,38 @@ class RiddleCog(commands.Cog):
         await self.ensure_guild_chunked(guild)
 
     @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        """Drop per-guild runtime state so nothing leaks after a kick."""
+        self._chunked_guilds.discard(guild.id)
+        self._render_sig.pop(guild.id, None)
+        self.cancel_submit_unlock(guild.id)
+        task = self._stats_rebuild_tasks.pop(guild.id, None)
+        if task and not task.done():
+            task.cancel()
+
+    @commands.Cog.listener()
     async def on_ready(self):
         """
         Fires on EVERY reconnect. Therefore: no force_repost (the riddle would
         jump to the channel bottom on every hiccup), no ping (a reconnect is not
-        a new riddle), and repost_pending_votes is idempotent.
+        a new riddle), no re-registering of persistent views, and
+        repost_pending_votes is idempotent.
         """
         if not self._startup_done:
             return  # first startup is owned by _auto_worker -> startup_rebuild
         try:
-            self.bot.add_view(SubmitButtonView(self))
-            self.bot.add_view(VoteButtons(self))
             for gid in await self.repo.list_all_guild_ids():
-                await self.enforce_enabled_state(gid, force_repost=False,
-                                                 ping_on_first_post=False)
+                try:
+                    await self.enforce_enabled_state(gid, force_repost=False,
+                                                     ping_on_first_post=False)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("on_ready reconcile failed for guild %s", gid)
             await self.repost_pending_votes()
             logger.info("on_ready: reconciled active riddles + pending votes")
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("on_ready reconnect recovery failed")
 
@@ -1299,20 +1491,20 @@ class RiddleCog(commands.Cog):
     # LIFECYCLE
     # ==========================================================================
     async def cog_load(self):
-        self.bot.add_view(SubmitButtonView(self))
-        self.bot.add_view(VoteButtons(self))
+        self._register_persistent_views()
         if self._auto_task is None or self._auto_task.done():
             self._auto_task = asyncio.create_task(self._auto_worker(),
                                                   name="riddle_auto_worker")
 
     async def cog_unload(self):
         """Await cancellation so no task touches the repo after it was closed."""
+        self._closing = True
         tasks: list[asyncio.Task] = []
         if self._auto_task and not self._auto_task.done():
             self._auto_task.cancel()
             tasks.append(self._auto_task)
         for bucket in (self._stats_rebuild_tasks, self._unlock_tasks):
-            for t in bucket.values():
+            for t in list(bucket.values()):
                 if not t.done():
                     t.cancel()
                     tasks.append(t)
@@ -1361,9 +1553,7 @@ class RiddleCog(commands.Cog):
         if interaction.guild is None:
             return
 
-        is_manager = (isinstance(interaction.user, discord.Member)
-                      and any(r.id == RIDDLE_MANAGER_ROLE_ID
-                              for r in interaction.user.roles))
+        is_manager = member_has_role_safe(interaction.user, RIDDLE_MANAGER_ROLE_ID)
         if not is_manager:
             visible = False
             mention = None
@@ -1414,12 +1604,18 @@ class RiddleCog(commands.Cog):
             await send_wrong_guild(interaction)
             return
         logger.exception("Riddle command error: %s", error)
-        with contextlib.suppress(discord.HTTPException, discord.NotFound):
+        with contextlib.suppress(discord.HTTPException, discord.NotFound,
+                                 discord.InteractionResponded):
             msg = "❌ Something went wrong running that command. Check the logs."
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
+
+
+def member_has_role_safe(user: discord.abc.User, role_id: int) -> bool:
+    return (role_id > 0 and isinstance(user, discord.Member)
+            and any(r.id == role_id for r in user.roles))
 
 
 # =============================================================================
@@ -1469,7 +1665,8 @@ async def setup(bot: commands.Bot):
 
 async def teardown(bot: commands.Bot):
     global _repo
-    if _repo is not None:
-        await _repo.close()
-        _repo = None
+    repo, _repo = _repo, None
+    if repo is not None:
+        with contextlib.suppress(Exception):
+            await repo.close()
     logger.info("Riddle extension unloaded.")

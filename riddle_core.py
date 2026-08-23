@@ -74,12 +74,9 @@ DISPLAY_TIMEZONE = _env_str("RIDDLE_DISPLAY_TIMEZONE", "UTC")
 SUBMIT_DELAY_MINUTES = _env_int("RIDDLE_SUBMIT_DELAY_MINUTES", 5)
 
 # Hours a riddle may sit in Slot 1 unsolved before it is auto-moved to the end.
-# Countdown starts at the FIRST post; refreshes/edits do NOT reset it, and a
-# bot restart no longer resets it either (see clear_all_open_post_refs).
 UNSOLVED_ROTATION_HOURS = _env_int("RIDDLE_UNSOLVED_ROTATION_HOURS", 6)
 
 # XP added every time a riddle is AUTO-rotated because nobody solved it.
-# Manual "Move to End" from the admin panel does NOT bump XP.
 UNSOLVED_ROTATION_XP_BONUS = _env_int("RIDDLE_ROTATION_XP_BONUS", 200)
 
 # Hard ceiling so a permanently unsolved riddle cannot inflate forever.
@@ -88,14 +85,9 @@ MAX_RIDDLE_XP = _env_int("RIDDLE_MAX_XP", 50_000)
 # ---------------------------------------------------------------------------
 # PENDING VOTES BLOCK ROTATION – ALWAYS
 # ---------------------------------------------------------------------------
-# A riddle with un-voted submissions is NEVER rotated, no matter how old it
-# gets. Rotating it would cancel those submissions, and a player who possibly
-# solved the riddle correctly would lose the reward because a manager was slow.
-# That is not an acceptable trade for queue throughput.
-#
-# Instead the system nags the managers: every N hours a reminder is posted into
-# the vote channel naming the riddle and the number of open votes. Rotation
-# resumes automatically the moment the last vote is cast.
+# A riddle with un-voted submissions is NEVER rotated. Rotating it would cancel
+# those submissions and a player who possibly solved it correctly would lose
+# the reward because a manager was slow. Managers get nagged instead.
 # 0 disables the reminder (the block itself always stays active).
 # ---------------------------------------------------------------------------
 ROTATION_BLOCKED_REMINDER_HOURS = _env_int("RIDDLE_ROTATION_BLOCKED_REMINDER_HOURS", 6)
@@ -107,13 +99,25 @@ SOLVED_HIATUS_HOURS = _env_int("RIDDLE_SOLVED_HIATUS_HOURS", 6)
 ROTATION_TICK_SECONDS = _env_int("RIDDLE_ROTATION_TICK_SECONDS", 900)  # 15 min
 STATS_REBUILD_DEBOUNCE_SECONDS = _env_int("RIDDLE_STATS_REBUILD_DEBOUNCE", 45)
 
+# Upper bound for a single guild.chunk() call. Without it a hung gateway
+# response blocks the caller forever – and the caller may hold a guild lock.
+CHUNK_TIMEOUT_SECONDS = _env_int("RIDDLE_CHUNK_TIMEOUT_SECONDS", 60)
+
 SUBMIT_BUTTON_ID = "riddle_submit_solution_v2"
 VOTE_UP_BUTTON_ID = "riddle_vote_up_v2"
 VOTE_DOWN_BUTTON_ID = "riddle_vote_down_v2"
+XP_DONE_BUTTON_ID = "riddle_xp_done_v1"
 
 # Must stay below the 15 min interaction webhook token lifetime, otherwise
 # on_timeout can no longer disable the panel buttons.
 PANEL_TIMEOUT_SECONDS = 840
+
+# Characters used for the "which riddle was this again?" anchor inside wrong /
+# solved posts. The full text is never repeated – it is already on screen.
+POST_EXCERPT_CHARS = _env_int("RIDDLE_POST_EXCERPT_CHARS", 50)
+
+# Characters for the solution preview inside the admin slot list.
+PANEL_PREVIEW_CHARS = _env_int("RIDDLE_PANEL_PREVIEW_CHARS", 20)
 
 # (upper_bound_exclusive, label, emoji). Last entry catches all.
 LEVEL_TIERS: tuple[tuple[Optional[int], str, str], ...] = (
@@ -123,9 +127,7 @@ LEVEL_TIERS: tuple[tuple[Optional[int], str, str], ...] = (
     (None, "BRAIN-DEAD", "💀"),
 )
 
-# Upper bound for manual XP entry. MUST NOT exceed MAX_RIDDLE_XP: a manually
-# set value above the rotation ceiling would be silently clipped DOWNWARDS on
-# the first auto-rotation. validate_config() enforces this.
+# Upper bound for manual XP entry. MUST NOT exceed MAX_RIDDLE_XP.
 MAX_XP_INPUT = _env_int("RIDDLE_MAX_XP_INPUT", MAX_RIDDLE_XP)
 
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
@@ -145,6 +147,8 @@ def validate_config() -> list[str]:
     for name, val in required.items():
         if val <= 0:
             problems.append(f"{name} is missing or 0 – the riddle system cannot function.")
+    if RIDDLE_GUILD_ID < 0:
+        problems.append("RIDDLE_GUILD_ID must be >= 0.")
     if not (1 <= MAX_RIDDLE_SLOTS <= 25):
         problems.append(f"RIDDLE_MAX_SLOTS={MAX_RIDDLE_SLOTS} must be 1..25 "
                         "(Discord select menus allow at most 25 options).")
@@ -175,9 +179,20 @@ def validate_config() -> list[str]:
         problems.append("RIDDLE_ROTATION_BLOCKED_REMINDER_HOURS must be >= 0.")
     if SOLVED_HIATUS_HOURS < 0:
         problems.append("RIDDLE_SOLVED_HIATUS_HOURS must be >= 0.")
+    if not (10 <= POST_EXCERPT_CHARS <= 500):
+        problems.append("RIDDLE_POST_EXCERPT_CHARS must be 10..500.")
+    if not (5 <= PANEL_PREVIEW_CHARS <= 90):
+        problems.append("RIDDLE_PANEL_PREVIEW_CHARS must be 5..90.")
     if RIDDLE_CHANNEL_ID > 0 and RIDDLE_CHANNEL_ID == VOTE_CHANNEL_ID:
         problems.append("RIDDLE_CHANNEL_ID equals RIDDLE_VOTE_CHANNEL_ID – "
                         "solutions would leak publicly.")
+
+    # Fail early instead of at the first write: an unwritable DB directory is a
+    # config problem, not a runtime surprise three hours into operation.
+    try:
+        Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        problems.append(f"RIDDLE_DB_PATH={DB_PATH!r} – cannot create directory: {e}")
     return problems
 
 
@@ -223,7 +238,10 @@ def parse_iso_utc(s: Optional[str]) -> Optional[dt.datetime]:
         return None
     try:
         t = dt.datetime.fromisoformat(str(s).strip().rstrip("Z"))
+    except (ValueError, TypeError):
+        return None
     except Exception:
+        logger.debug("Unexpected failure parsing timestamp %r", s, exc_info=True)
         return None
     if t.tzinfo is not None:
         t = t.astimezone(dt.timezone.utc).replace(tzinfo=None)
@@ -248,7 +266,7 @@ def iso_to_unix(iso_ts: Optional[str]) -> Optional[int]:
         return None
     try:
         return int(t.replace(tzinfo=dt.timezone.utc).timestamp())
-    except Exception:
+    except (OverflowError, OSError, ValueError):
         return None
 
 
@@ -361,7 +379,7 @@ def submit_unlock_iso(riddle: dict, *, posted_at_override: Optional[str] = None)
     in the DB yet – caller passes the timestamp it is about to store, so hint
     and anchor cannot drift apart.
     """
-    anchor = posted_at_override or riddle.get("first_posted_at")
+    anchor = posted_at_override or (riddle or {}).get("first_posted_at")
     if not anchor:
         return None
     if SUBMIT_DELAY_MINUTES <= 0:
@@ -441,7 +459,9 @@ def is_http_url(url: Optional[str]) -> bool:
 
 def truncate_text(text: Optional[str], max_len: int = 180) -> str:
     t = text or ""
-    return t[:max_len] + "…" if len(t) > max_len else t
+    if max_len <= 1:
+        return t[:max_len]
+    return t[: max_len - 1].rstrip() + "…" if len(t) > max_len else t
 
 
 def clamp_embed_value(text: Optional[str], limit: int = 1024) -> str:
@@ -462,6 +482,21 @@ def extract_first_url(text: Optional[str]) -> tuple[str, Optional[str]]:
     return URL_RE.sub("", text, count=1).strip(), m.group(1)
 
 
+def excerpt(text: Optional[str], max_len: int = POST_EXCERPT_CHARS) -> str:
+    """
+    Single-line, URL-free teaser used as a "which riddle was this?" anchor.
+
+    Wrong-answer and solved posts used to repeat the ENTIRE riddle text, which
+    on a phone meant scrolling past the same 40 lines for the third time. The
+    original post is a few messages up – a short anchor is enough.
+    """
+    body, _ = extract_first_url(text or "")
+    flat = " ".join((body or "").split())
+    if not flat:
+        return "*no text*"
+    return truncate_text(flat, max_len)
+
+
 def parse_csv_role_ids(s: Optional[str]) -> list[int]:
     if not s:
         return []
@@ -472,7 +507,7 @@ def parse_csv_role_ids(s: Optional[str]) -> list[int]:
         if not p:
             continue
         rid = safe_int(p, None)
-        if rid is None or rid in seen:
+        if rid is None or rid <= 0 or rid in seen:
             continue
         seen.add(rid)
         out.append(rid)
@@ -505,7 +540,7 @@ async def safe_defer(interaction: Interaction, *, ephemeral: bool = False,
     try:
         await interaction.response.defer(ephemeral=ephemeral, thinking=thinking)
         return True
-    except (discord.NotFound, discord.HTTPException):
+    except (discord.NotFound, discord.HTTPException, discord.InteractionResponded):
         return False
 
 
@@ -515,7 +550,8 @@ async def quiet_followup(interaction: Interaction, content: str, *, ephemeral: b
 
 
 async def quiet_respond(interaction: Interaction, content: str, *, ephemeral: bool = True):
-    with contextlib.suppress(discord.HTTPException, discord.NotFound):
+    with contextlib.suppress(discord.HTTPException, discord.NotFound,
+                             discord.InteractionResponded):
         if interaction.response.is_done():
             await interaction.followup.send(content, ephemeral=ephemeral)
         else:
@@ -571,7 +607,8 @@ async def send_access_denied(interaction: Interaction):
     if is_http_url(ACCESS_DENIED_IMAGE_URL):
         embed.set_image(url=ACCESS_DENIED_IMAGE_URL)
     embed.set_footer(text="Riddle Manager role required")
-    with contextlib.suppress(discord.HTTPException, discord.NotFound):
+    with contextlib.suppress(discord.HTTPException, discord.NotFound,
+                             discord.InteractionResponded):
         if interaction.response.is_done():
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
@@ -610,6 +647,9 @@ MessageLookup = Union[discord.Message, UnknownMessage, None]
 DUPLICATE_PENDING = -1      # user already has an open submission for that riddle
 SUBMISSION_NOT_ACTIVE = -2  # riddle is not open / no longer in slot 1
 
+# create_riddle_in_free_slot result codes
+SLOT_QUEUE_FULL = -1
+
 
 # =============================================================================
 # DB REPO
@@ -625,10 +665,7 @@ class RiddleRepo:
     Why reads take the lock too: WAL gives you concurrent readers across
     SEPARATE connections. We have exactly one, driven by a single aiosqlite
     worker thread, so an unlocked read buys no parallelism whatsoever – it only
-    buys dirty reads. An unlocked SELECT can land in the middle of an open
-    BEGIN IMMEDIATE on the same connection and observe uncommitted rows; if
-    that transaction then rolls back, the caller has already acted on data that
-    never existed.
+    buys dirty reads.
 
     Re-entrancy: asyncio.Lock is NOT reentrant. Methods that hold the lock use
     `self.db.execute` directly and must never call `_one`/`_all`/`_exec`.
@@ -641,20 +678,34 @@ class RiddleRepo:
     # ---------------------------------------------------------------- lifecycle
     async def start(self):
         Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        self.db = await aiosqlite.connect(DB_PATH, isolation_level=None)
-        self.db.row_factory = aiosqlite.Row
-        await self.db.execute("PRAGMA journal_mode=WAL;")
-        await self.db.execute("PRAGMA foreign_keys=ON;")
-        await self.db.execute("PRAGMA busy_timeout=5000;")
-        await self.db.execute("PRAGMA synchronous=NORMAL;")
-        await self._init_db()
+        db = await aiosqlite.connect(DB_PATH, isolation_level=None)
+        try:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA journal_mode=WAL;")
+            await db.execute("PRAGMA foreign_keys=ON;")
+            await db.execute("PRAGMA busy_timeout=5000;")
+            await db.execute("PRAGMA synchronous=NORMAL;")
+            self.db = db
+            await self._init_db()
+        except Exception:
+            # Never leave a half-initialised connection behind – the cog would
+            # keep using it and every query would fail against a broken schema.
+            self.db = None
+            with contextlib.suppress(Exception):
+                await db.close()
+            raise
         logger.info("RiddleRepo ready (db=%s)", DB_PATH)
 
     async def close(self):
-        if self.db:
-            with contextlib.suppress(Exception):
-                await self.db.close()
-            self.db = None
+        db, self.db = self.db, None
+        if db is None:
+            return
+        # Take the lock so we never close underneath an in-flight query.
+        with contextlib.suppress(Exception):
+            async with self.lock:
+                with contextlib.suppress(Exception):
+                    await db.execute("PRAGMA optimize;")
+                await db.close()
 
     # ------------------------------------------------------------ schema/migrate
     @staticmethod
@@ -792,25 +843,19 @@ class RiddleRepo:
             await self._add_col_if_missing("riddles", "rotation_count",
                                            "rotation_count INTEGER NOT NULL DEFAULT 0")
             await self._add_col_if_missing("riddles", "base_xp", "base_xp INTEGER")
-            # Throttles the "rotation blocked by open votes" reminder.
             await self._add_col_if_missing("riddles", "blocked_reminder_at",
                                            "blocked_reminder_at TEXT")
             await self._add_col_if_missing("guild_riddle_state", "hiatus_until",
                                            "hiatus_until TEXT")
             await self._add_col_if_missing("submissions", "answer_norm", "answer_norm TEXT")
 
-            await self.db.execute(
-                "UPDATE riddles SET base_xp = xp WHERE base_xp IS NULL")
+            await self.db.execute("UPDATE riddles SET base_xp = xp WHERE base_xp IS NULL")
 
             await self._backfill_answer_norm()
             await self.db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sub_riddle_norm "
                 "ON submissions(riddle_id, status, answer_norm)")
 
-            # riddle_no used to be recomputed as (solved_total + slot_no) on
-            # every tick, which produced duplicates whenever an excluded user
-            # solved something. It is an identity now: assigned once at
-            # creation, never rewritten. Repair rows that still have NULL.
             await self._backfill_riddle_no()
 
             # One pending submission per (riddle, user). Clean historical
@@ -883,6 +928,8 @@ class RiddleRepo:
         if self.db is None:
             return None
         async with self.lock:
+            if self.db is None:      # closed while we waited for the lock
+                return None
             cur = await self.db.execute(query, params)
             row = await cur.fetchone()
             await cur.close()
@@ -892,6 +939,8 @@ class RiddleRepo:
         if self.db is None:
             return []
         async with self.lock:
+            if self.db is None:
+                return []
             cur = await self.db.execute(query, params)
             rows = await cur.fetchall()
             await cur.close()
@@ -901,11 +950,47 @@ class RiddleRepo:
         if self.db is None:
             return 0, 0
         async with self.lock:
+            if self.db is None:
+                return 0, 0
             cur = await self.db.execute(query, params)
             rc = cur.rowcount
             lid = int(cur.lastrowid or 0)
             await cur.close()
         return rc, lid
+
+    @contextlib.asynccontextmanager
+    async def _tx(self):
+        """
+        BEGIN IMMEDIATE / COMMIT / ROLLBACK boilerplate in one place.
+
+        Every hand-written variant of this in the old code had to remember to
+        roll back on EVERY early return; one forgotten `rollback()` leaves the
+        single shared connection inside an open transaction and the next writer
+        blocks until busy_timeout kills it.
+        """
+        assert self.db is not None
+        await self.db.execute("BEGIN IMMEDIATE")
+        committed = False
+
+        class _Tx:
+            def __init__(self, db):
+                self.db = db
+
+            async def commit(self_inner):
+                nonlocal committed
+                await self.db.commit()
+                committed = True
+
+        try:
+            yield _Tx(self.db)
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self.db.rollback()
+            raise
+        else:
+            if not committed:
+                with contextlib.suppress(Exception):
+                    await self.db.rollback()
 
     # ------------------------------------------------------- guild state / cache
     async def ensure_guild_state(self, guild_id: int):
@@ -1000,9 +1085,10 @@ class RiddleRepo:
 
     async def first_free_slot(self, guild_id: int) -> Optional[int]:
         """
-        Lowest unoccupied slot number, or None when the queue is full. New
-        riddles always land at the end anyway, so the panel offers a single
-        "New Riddle" action instead of a dropdown of every empty slot.
+        Lowest unoccupied slot number, or None when the queue is full.
+        DISPLAY ONLY – the actual insert picks its slot inside a transaction
+        (see create_riddle_in_free_slot), otherwise two managers hitting
+        "New Riddle" simultaneously both target the same slot.
         """
         rows = await self._all(
             "SELECT slot_no FROM riddles WHERE guild_id=? AND status='open' "
@@ -1026,8 +1112,69 @@ class RiddleRepo:
                                "AND status='open' LIMIT 1", (guild_id, message_id))
 
     # -------------------------------------------------------- content mutations
+    async def create_riddle_in_free_slot(self, *, guild_id: int, user_id: int, text: str,
+                                         solution: str, xp: int
+                                         ) -> tuple[Optional[int], Optional[int]]:
+        """
+        Pick the lowest free slot AND insert, inside ONE transaction.
+
+        The old flow read first_free_slot() outside any transaction and passed
+        the result into the insert. Two managers pressing "New Riddle" within
+        the same second both got the same number, the second insert hit
+        idx_riddle_slot_open and surfaced as a generic "error" with no hint of
+        what actually happened.
+
+        Returns (riddle_id, slot_no) · (SLOT_QUEUE_FULL, None) · (None, None).
+        """
+        if self.db is None:
+            return None, None
+        text_c, solution_c = clean_value(text), clean_value(solution)
+        if not text_c or not solution_c:
+            return None, None
+        xp = max(0, to_int(xp, 0))
+        now = now_iso_utc()
+
+        async with self.lock:
+            if self.db is None:
+                return None, None
+            async with self._tx() as tx:
+                cur = await self.db.execute(
+                    "SELECT slot_no FROM riddles WHERE guild_id=? AND status='open' "
+                    "AND slot_no BETWEEN 1 AND ?", (guild_id, MAX_RIDDLE_SLOTS))
+                used = {to_int(r["slot_no"], 0) for r in await cur.fetchall()}
+                await cur.close()
+
+                slot_no = next((s for s in range(1, MAX_RIDDLE_SLOTS + 1) if s not in used),
+                               None)
+                if slot_no is None:
+                    return SLOT_QUEUE_FULL, None
+
+                cur = await self.db.execute(
+                    "SELECT COALESCE(MAX(riddle_no), 0) + 1 AS n FROM riddles WHERE guild_id=?",
+                    (guild_id,))
+                nrow = await cur.fetchone()
+                await cur.close()
+                riddle_no = to_int(nrow["n"] if nrow else 1, 1)
+
+                cur = await self.db.execute(
+                    """
+                    INSERT INTO riddles (
+                        guild_id, riddle_no, slot_no, is_active, text, solution, xp, base_xp,
+                        rotation_count, mention_role_ids, status, created_by,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 'open', ?, ?, ?)
+                    """,
+                    (guild_id, riddle_no, slot_no, 1 if slot_no == 1 else 0,
+                     text_c, solution_c, xp, xp, user_id, now, now))
+                rid = int(cur.lastrowid or 0)
+                await cur.close()
+
+                await tx.commit()
+                return (rid or None), slot_no
+
     async def upsert_slot_content(self, *, guild_id: int, user_id: int, slot_no: int,
                                   text: str, solution: str, xp: int) -> Optional[int]:
+        """Update the riddle occupying a slot, or create one there if empty."""
         if self.db is None or not (1 <= slot_no <= MAX_RIDDLE_SLOTS):
             return None
         text_c, solution_c = clean_value(text), clean_value(solution)
@@ -1037,8 +1184,9 @@ class RiddleRepo:
         now = now_iso_utc()
 
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return None
+            async with self._tx() as tx:
                 cur = await self.db.execute("SELECT id FROM riddles WHERE guild_id=? "
                                             "AND status='open' AND slot_no=? LIMIT 1",
                                             (guild_id, slot_no))
@@ -1074,12 +1222,8 @@ class RiddleRepo:
                     rid = int(cur.lastrowid or 0)
                     await cur.close()
 
-                await self.db.commit()
+                await tx.commit()
                 return rid if rid > 0 else None
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     async def update_open_riddle_content_by_id(self, guild_id: int, riddle_id: int, user_id: int,
                                                text: str, solution: str, xp: int) -> bool:
@@ -1122,10 +1266,7 @@ class RiddleRepo:
         Atomically raise a riddle's XP because it was auto-rotated unsolved, and
         increment its rotation counter. Only touches OPEN riddles.
 
-        The ceiling can only ever HOLD the value, never lower it: a riddle whose
-        XP already sits above max_xp keeps what it has. Clipping downwards used
-        to silently destroy reward while the embeds rendered it as "ceiling
-        reached", so nobody noticed.
+        The ceiling can only ever HOLD the value, never lower it.
         """
         if self.db is None:
             return None
@@ -1133,8 +1274,9 @@ class RiddleRepo:
         ceiling = max(0, to_int(max_xp, 0))
 
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return None
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     "SELECT xp, base_xp, rotation_count FROM riddles "
                     "WHERE guild_id=? AND id=? AND status='open' LIMIT 1",
@@ -1142,7 +1284,6 @@ class RiddleRepo:
                 row = await cur.fetchone()
                 await cur.close()
                 if not row:
-                    await self.db.rollback()
                     return None
 
                 old_xp = max(0, to_int(row["xp"], 0))
@@ -1155,13 +1296,9 @@ class RiddleRepo:
                     "UPDATE riddles SET xp=?, base_xp=COALESCE(base_xp, ?), rotation_count=?, "
                     "updated_at=? WHERE id=? AND status='open'",
                     (new_xp, base_xp, rot, now_iso_utc(), riddle_id))
-                await self.db.commit()
+                await tx.commit()
                 return {"old_xp": old_xp, "new_xp": new_xp, "gained": new_xp - old_xp,
                         "base_xp": base_xp, "rotation_count": rot, "capped": capped}
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     # --------------------------------------------------- blocked-rotation nag
     async def set_blocked_reminder_at(self, riddle_id: int, iso_ts: Optional[str]):
@@ -1183,8 +1320,9 @@ class RiddleRepo:
         if self.db is None:
             return
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return
+            async with self._tx() as tx:
                 now = now_iso_utc()
                 cur = await self.db.execute(
                     "SELECT id, slot_no, is_active FROM riddles WHERE guild_id=? AND status='open' "
@@ -1193,7 +1331,7 @@ class RiddleRepo:
                 rows = [dict(r) for r in await cur.fetchall()]
                 await cur.close()
                 if not rows:
-                    await self.db.commit()
+                    await tx.commit()
                     return
 
                 ids = [to_int(r["id"], 0) for r in rows if to_int(r["id"], 0) > 0]
@@ -1202,7 +1340,7 @@ class RiddleRepo:
                     and to_int(r.get("is_active"), 0) == (1 if i == 1 else 0)
                     for i, r in enumerate(rows, start=1))
                 if already_ok:
-                    await self.db.commit()
+                    await tx.commit()
                     return
 
                 await self.db.execute(
@@ -1228,19 +1366,16 @@ class RiddleRepo:
                             "UPDATE submissions SET status='cancelled', voted_by=0, voted_at=? "
                             "WHERE riddle_id=? AND status='pending'", (now, rid))
                         logger.info("compact_open_slots: closed overflow riddle id=%s", rid)
-                await self.db.commit()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
+                await tx.commit()
 
     async def move_open_riddle_to_end(self, guild_id: int, riddle_id: int) -> bool:
         if self.db is None:
             return False
         await self.compact_open_slots(guild_id)
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return False
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     "SELECT id FROM riddles WHERE guild_id=? AND status='open' "
                     "AND slot_no BETWEEN 1 AND ? ORDER BY slot_no ASC",
@@ -1249,7 +1384,6 @@ class RiddleRepo:
                 await cur.close()
                 ids = [to_int(r["id"], 0) for r in rows if to_int(r["id"], 0) > 0]
                 if riddle_id not in ids:
-                    await self.db.rollback()
                     return False
 
                 now = now_iso_utc()
@@ -1258,7 +1392,7 @@ class RiddleRepo:
                         "UPDATE riddles SET first_posted_at=NULL, blocked_reminder_at=NULL, "
                         "posted_channel_id=NULL, posted_message_id=NULL, updated_at=? "
                         "WHERE id=?", (now, riddle_id))
-                    await self.db.commit()
+                    await tx.commit()
                     return True
 
                 ids.remove(riddle_id)
@@ -1271,27 +1405,23 @@ class RiddleRepo:
                     await self.db.execute(
                         "UPDATE riddles SET slot_no=?, is_active=?, updated_at=? WHERE id=?",
                         (idx, 1 if idx == 1 else 0, now, rid))
-                await self.db.commit()
+                await tx.commit()
                 return True
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     async def close_open_riddle_by_id(self, guild_id: int, riddle_id: int,
                                       closed_by: int) -> Optional[dict]:
         if self.db is None:
             return None
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return None
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     "SELECT * FROM riddles WHERE guild_id=? AND id=? AND status='open' LIMIT 1",
                     (guild_id, riddle_id))
                 row = await cur.fetchone()
                 await cur.close()
                 if not row:
-                    await self.db.rollback()
                     return None
                 snapshot = dict(row)
                 now = now_iso_utc()
@@ -1304,12 +1434,8 @@ class RiddleRepo:
                 await self.db.execute(
                     "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? "
                     "WHERE riddle_id=? AND status='pending'", (closed_by, now, riddle_id))
-                await self.db.commit()
+                await tx.commit()
                 return snapshot
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     # --------------------------------------------------------------- post refs
     async def set_riddle_post_ref(self, riddle_id: int, channel_id: int, message_id: int,
@@ -1368,8 +1494,9 @@ class RiddleRepo:
         if self.db is None:
             return []
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return []
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     "SELECT id, posted_channel_id, posted_message_id FROM riddles "
                     "WHERE guild_id=? AND status='open' AND id<>? "
@@ -1383,12 +1510,8 @@ class RiddleRepo:
                         "WHERE guild_id=? AND status='open' AND id<>? "
                         "AND posted_message_id IS NOT NULL",
                         (now_iso_utc(), guild_id, keep_riddle_id))
-                await self.db.commit()
+                await tx.commit()
                 return rows
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     async def pop_non_slot1_post_refs(self, guild_id: int) -> list[dict]:
         """
@@ -1398,8 +1521,9 @@ class RiddleRepo:
         if self.db is None:
             return []
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return []
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     "SELECT id, posted_channel_id, posted_message_id FROM riddles "
                     "WHERE guild_id=? AND status='open' AND posted_message_id IS NOT NULL "
@@ -1412,12 +1536,8 @@ class RiddleRepo:
                         "updated_at=? WHERE guild_id=? AND status='open' "
                         "AND posted_message_id IS NOT NULL "
                         "AND (slot_no IS NULL OR slot_no<>1)", (now_iso_utc(), guild_id))
-                await self.db.commit()
+                await tx.commit()
                 return rows
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     async def list_open_post_refs(self, guild_id: int) -> list[dict]:
         return await self._all(
@@ -1451,11 +1571,6 @@ class RiddleRepo:
         Insert a pending submission, but ONLY while the riddle is open AND still
         in slot 1. Both conditions live inside the INSERT ... SELECT so the
         check and the write are one atomic step.
-
-        Why slot_no matters: a user can open the modal, type for a minute, and
-        submit after the riddle moved. It is still 'open', so a status-only
-        check passes – and approving that submission would mark a riddle solved
-        that was never on screen.
 
         Returns: new submission id
                  DUPLICATE_PENDING (-1)     – user already has one pending
@@ -1601,8 +1716,9 @@ class RiddleRepo:
             return "not_found", None
 
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return "not_found", None
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     """
                     SELECT s.id AS submission_id, s.guild_id AS guild_id,
@@ -1622,12 +1738,10 @@ class RiddleRepo:
                 row = await cur.fetchone()
                 await cur.close()
                 if not row:
-                    await self.db.rollback()
                     return "not_found", None
 
                 data = dict(row)
                 if str(data.get("submission_status") or "") != "pending":
-                    await self.db.rollback()
                     return "already_done", data
 
                 now = now_iso_utc()
@@ -1639,7 +1753,7 @@ class RiddleRepo:
                     await self.db.execute(
                         "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? "
                         "WHERE id=? AND status='pending'", (moderator_id, now, sid))
-                    await self.db.commit()
+                    await tx.commit()
                     return "riddle_closed", data
 
                 cur = await self.db.execute(
@@ -1648,7 +1762,6 @@ class RiddleRepo:
                 sub_rc = cur.rowcount
                 await cur.close()
                 if sub_rc <= 0:
-                    await self.db.rollback()
                     return "already_done", data
 
                 await self.db.execute(
@@ -1663,10 +1776,9 @@ class RiddleRepo:
                 rid_rc = cur.rowcount
                 await cur.close()
                 if rid_rc <= 0:
-                    await self.db.rollback()
                     return "riddle_closed", data
 
-                await self.db.commit()
+                await tx.commit()
 
                 xp = max(0, to_int(data.get("xp"), 0))
                 ctx = {
@@ -1695,10 +1807,6 @@ class RiddleRepo:
                     "solved_at": now,  # DB audit value, NOT for display
                 }
                 return "approved", ctx
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
 
     async def reject_submission(self, vote_message_id: int,
                                 moderator_id: int) -> tuple[str, Optional[dict]]:
@@ -1709,8 +1817,9 @@ class RiddleRepo:
             return "not_found", None
 
         async with self.lock:
-            await self.db.execute("BEGIN IMMEDIATE")
-            try:
+            if self.db is None:
+                return "not_found", None
+            async with self._tx() as tx:
                 cur = await self.db.execute(
                     """
                     SELECT s.id AS submission_id, s.guild_id AS guild_id,
@@ -1728,12 +1837,10 @@ class RiddleRepo:
                 row = await cur.fetchone()
                 await cur.close()
                 if not row:
-                    await self.db.rollback()
                     return "not_found", None
 
                 data = dict(row)
                 if str(data.get("submission_status") or "") != "pending":
-                    await self.db.rollback()
                     return "already_done", data
 
                 now = now_iso_utc()
@@ -1743,7 +1850,7 @@ class RiddleRepo:
                     await self.db.execute(
                         "UPDATE submissions SET status='cancelled', voted_by=?, voted_at=? "
                         "WHERE id=? AND status='pending'", (moderator_id, now, sid))
-                    await self.db.commit()
+                    await tx.commit()
                     return "riddle_closed", data
 
                 cur = await self.db.execute(
@@ -1752,10 +1859,9 @@ class RiddleRepo:
                 rc = cur.rowcount
                 await cur.close()
                 if rc <= 0:
-                    await self.db.rollback()
                     return "already_done", data
 
-                await self.db.commit()
+                await tx.commit()
                 ctx = {
                     "submission_id": sid,
                     "guild_id": to_int(data.get("guild_id"), 0),
@@ -1774,7 +1880,3 @@ class RiddleRepo:
                     "voted_at": now,
                 }
                 return "rejected", ctx
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await self.db.rollback()
-                raise
