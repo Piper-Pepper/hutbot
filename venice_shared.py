@@ -339,29 +339,40 @@ def seconds_human(sec: int) -> str:
     return f"{s}s"
 
 
-def closest_aspect_ratio(aspect: str, allowed: list[str]) -> str:
+def closest_aspect_ratio(aspect: str, allowed: Optional[list[str]]) -> str:
     """
     Pick the ratio in `allowed` that best matches `aspect` (W:H string).
-    Falls back to the first allowed value if parsing fails or `allowed` is empty.
-    Used by video models that require a strict aspect_ratio (e.g. LTX only
-    accepts 16:9 or 9:16).
+    Comparison is numeric (W/H), not string based.
+
+    Non-numeric tokens like 'adaptive' or 'auto' are ignored during matching
+    so they never win by accident. Falls back to the first allowed value if
+    parsing fails, or to `aspect` if `allowed` is empty.
     """
     if not allowed:
         return aspect
-    try:
-        w, h = aspect.split(":")
-        target = int(w) / int(h)
-    except Exception:
+
+    numeric = [a for a in allowed if ":" in str(a)]
+    if not numeric:
         return allowed[0]
 
-    def _val(s: str) -> float:
+    def _val(s: str) -> Optional[float]:
         try:
-            aw, ah = s.split(":")
-            return int(aw) / int(ah)
+            aw, ah = str(s).split(":")
+            aw_f, ah_f = float(aw), float(ah)
+            return aw_f / ah_f if ah_f else None
         except Exception:
-            return 1.0
+            return None
 
-    return min(allowed, key=lambda s: abs(_val(s) - target))
+    target = _val(aspect)
+    if target is None:
+        return numeric[0]
+
+    scored = [(a, _val(a)) for a in numeric]
+    scored = [(a, v) for a, v in scored if v is not None]
+    if not scored:
+        return numeric[0]
+
+    return min(scored, key=lambda p: abs(p[1] - target))[0]
 
 
 def format_reset_line(state: dict[str, int], prefix: str = "Resets") -> str:
@@ -388,6 +399,8 @@ def make_safe_filename(prompt: str, ext: str = "png", fallback: str = "image") -
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base)[:60] or fallback
     ext = (ext or "png").lower().strip(".")
     return f"{base}_{int(time.time_ns())}_{uuid.uuid4().hex[:8]}.{ext}"
+
+
 # =================================================
 # BINARY / IMAGE HELPERS
 # =================================================
@@ -423,6 +436,17 @@ def infer_image_mime(binary: bytes) -> str:
         "png": "image/png", "jpg": "image/jpeg",
         "webp": "image/webp", "gif": "image/gif",
     }.get(infer_image_ext(binary), "image/png")
+
+
+def image_dimensions(binary: bytes) -> Optional[tuple[int, int]]:
+    """Return (width, height) for an image blob, or None if unavailable."""
+    if Image is None or not binary:
+        return None
+    try:
+        with Image.open(io.BytesIO(binary)) as im:
+            return int(im.width), int(im.height)
+    except Exception:
+        return None
 
 
 def b64_to_bytes(s: str) -> Optional[bytes]:
@@ -762,7 +786,7 @@ async def send_ephemeral(
     except Exception:
         return None
 
-    
+
 # =================================================
 # POST DECORATION
 # =================================================
@@ -1070,79 +1094,119 @@ async def refresh_starter_message(
         except Exception as e:
             logger.warning("refresh_starter_message failed (%s): %s", channel.id, e)
 
+
 # =================================================
 # VIDEO MODEL CATALOG
 # =================================================
-MAX_VIDEO_RENDER_SECONDS = 15
-VIDEO_ALLOWED_ASPECTS = {"1:1", "16:9", "9:16", "21:9", "3:2", "2:3", "3:4", "4:5"}
+# Hard ceiling for a single render across all models.
+MAX_VIDEO_RENDER_SECONDS = 25
+
+# Aspect ratios accepted as SOURCE hints from the image cogs. This is not the
+# per-model whitelist - that lives in each profile below.
+VIDEO_ALLOWED_ASPECTS = {
+    "1:1", "16:9", "9:16", "21:9", "4:3", "3:4", "3:2", "2:3", "4:5",
+}
 
 # Model IDs (overridable via .env).
-VENICE_VIDEO_I2V_MODEL_ENHANCED = env_str(
-    "VENICE_VIDEO_I2V_MODEL_ENHANCED", "wan-2-7-enhanced-image-to-video"
+VENICE_VIDEO_I2V_MODEL_WAN3 = env_str(
+    "VENICE_VIDEO_I2V_MODEL_WAN3", "wan-3-0-image-to-video"
 )
-VENICE_VIDEO_I2V_MODEL_STANDARD = env_str(
-    "VENICE_VIDEO_I2V_MODEL_STANDARD", "wan-2-7-image-to-video"
+VENICE_VIDEO_I2V_MODEL_LTX25 = env_str(
+    "VENICE_VIDEO_I2V_MODEL_LTX25", "ltx-2-5-pro-image-to-video"
 )
-VENICE_VIDEO_I2V_MODEL_LTX = env_str(
-    "VENICE_VIDEO_I2V_MODEL_LTX", "ltx-2-v2-3-full-image-to-video"
+VENICE_VIDEO_I2V_MODEL_MINIMAX = env_str(
+    "VENICE_VIDEO_I2V_MODEL_MINIMAX", "minimax-h3-max-image-to-video"
 )
 
+# Backwards-compatible aliases so older imports in image_cog / face_cog
+# keep resolving. All three now point at live models.
+VENICE_VIDEO_I2V_MODEL_ENHANCED = VENICE_VIDEO_I2V_MODEL_WAN3
+VENICE_VIDEO_I2V_MODEL_STANDARD = VENICE_VIDEO_I2V_MODEL_WAN3
+VENICE_VIDEO_I2V_MODEL_LTX = VENICE_VIDEO_I2V_MODEL_LTX25
+
 # Single source of truth for the animate flow.
-# To add another animate button in the future: add ONE entry here.
-# No cog code needs to change.
+# To add another animate button: add ONE entry here. No cog code changes.
 #
 # button_label            -> label shown on the ephemeral animate button
 # button_style            -> discord.ButtonStyle
-# resolution              -> resolution string sent to the video queue endpoint
-# durations               -> list of allowed durations (seconds); duration picker
+# resolution              -> exact resolution string the API expects
+#                            (note: MiniMax uses uppercase "768P")
+# durations               -> allowed durations in seconds; the duration picker
 #                            surfaces only these values
-# require_aspect_ratio    -> when True, aspect_ratio MUST be sent in the payload
-# allowed_aspect_ratios   -> list of aspect ratios the model accepts; the value
-#                            closest to the source image's ratio is chosen at
-#                            request time via closest_aspect_ratio()
+# require_aspect_ratio    -> when True, aspect_ratio is sent in the payload
+# aspect_ratio_auto       -> the model's "match the source" token
+#                            (WAN 3.0 = "adaptive", LTX 2.5 = "auto")
+# allowed_aspect_ratios   -> explicit ratios the model accepts; used as a
+#                            fallback when the auto token is unavailable
+# prompt_limit            -> provider-side prompt character cap
+# min_short_side          -> minimum short edge of the source image in px
 VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
-    VENICE_VIDEO_I2V_MODEL_ENHANCED: {
-        "button_label": "🔞 Animate (WAN 2.7)",
+    VENICE_VIDEO_I2V_MODEL_WAN3: {
+        "button_label": "🔞 Animate (WAN 3.0)",
         "button_style": discord.ButtonStyle.danger,
         "resolution": "720p",
-        "durations": [5, 10, 15],
-        "require_aspect_ratio": False,
-        "allowed_aspect_ratios": None,
+        "durations": [5, 10, 15, 20, 25],
+        "require_aspect_ratio": True,
+        "aspect_ratio_auto": "adaptive",
+        "allowed_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4"],
+        "prompt_limit": 20000,
+        "min_short_side": 240,
     },
-    VENICE_VIDEO_I2V_MODEL_STANDARD: {
-        "button_label": "🎬 Animate (WAN 2.7)",
-        "button_style": discord.ButtonStyle.primary,
-        "resolution": "720p",
-        "durations": [5, 10, 15],
-        "require_aspect_ratio": False,
-        "allowed_aspect_ratios": None,
-    },
-    VENICE_VIDEO_I2V_MODEL_LTX: {
-        "button_label": "💎 Animate HQ (LTX 2.3)",
+    VENICE_VIDEO_I2V_MODEL_LTX25: {
+        "button_label": "💎 Animate HQ (LTX 2.5 Pro)",
         "button_style": discord.ButtonStyle.success,
-        "resolution": "1080p",
+        "resolution": "720p",
         "durations": [6, 8, 10],
         "require_aspect_ratio": True,
+        "aspect_ratio_auto": "auto",
         "allowed_aspect_ratios": ["16:9", "9:16"],
+        "prompt_limit": 10000,
+        "min_short_side": 0,
+    },
+    VENICE_VIDEO_I2V_MODEL_MINIMAX: {
+        "button_label": "🎥 Animate (MiniMax H3 Max)",
+        "button_style": discord.ButtonStyle.primary,
+        "resolution": "768P",
+        "durations": [5, 8, 10, 12, 15],
+        "require_aspect_ratio": False,
+        "aspect_ratio_auto": None,
+        "allowed_aspect_ratios": None,
+        "prompt_limit": 10000,
+        "min_short_side": 0,
     },
 }
+
+DEFAULT_VIDEO_MODEL = VENICE_VIDEO_I2V_MODEL_WAN3
 
 # Union of all durations across profiles (used by legacy validation paths).
 VIDEO_DURATION_CHOICES: list[int] = sorted(
     {d for prof in VIDEO_MODEL_PROFILES.values() for d in prof["durations"]}
 )
 
+_VIDEO_PROFILE_FALLBACK: dict[str, Any] = {
+    "button_label": "🎬 Animate",
+    "button_style": discord.ButtonStyle.primary,
+    "resolution": None,
+    "durations": [5, 10],
+    "require_aspect_ratio": False,
+    "aspect_ratio_auto": None,
+    "allowed_aspect_ratios": None,
+    "prompt_limit": 3000,
+    "min_short_side": 0,
+}
+
 
 def get_video_profile(model_id: str) -> dict[str, Any]:
     """Return the profile for a video model, with sane fallbacks if unknown."""
-    return VIDEO_MODEL_PROFILES.get(model_id) or {
-        "button_label": "🎬 Animate",
-        "button_style": discord.ButtonStyle.primary,
-        "resolution": None,
-        "durations": [5, 10, 15],
-        "require_aspect_ratio": False,
-        "allowed_aspect_ratios": None,
-    }
+    return VIDEO_MODEL_PROFILES.get((model_id or "").strip(), _VIDEO_PROFILE_FALLBACK)
+
+
+def is_known_video_model(model_id: str) -> bool:
+    return (model_id or "").strip() in VIDEO_MODEL_PROFILES
+
+
+def known_video_model_labels() -> list[str]:
+    return [p["button_label"] for p in VIDEO_MODEL_PROFILES.values()]
 
 
 def get_model_durations(model_id: str) -> list[int]:
@@ -1151,6 +1215,59 @@ def get_model_durations(model_id: str) -> list[int]:
 
 def get_model_resolution(model_id: str) -> Optional[str]:
     return get_video_profile(model_id).get("resolution")
+
+
+def get_model_prompt_limit(model_id: str) -> int:
+    return int(get_video_profile(model_id).get("prompt_limit") or 3000)
+
+
+def get_model_min_short_side(model_id: str) -> int:
+    return int(get_video_profile(model_id).get("min_short_side") or 0)
+
+
+def resolve_video_aspect_ratio(model_id: str, source_aspect: str) -> Optional[str]:
+    """
+    Decide the aspect_ratio value for the queue payload.
+
+    - Model without aspect_ratio support (MiniMax) -> None, field is omitted.
+    - Model with an auto token -> that token ('adaptive' for WAN 3.0,
+      'auto' for LTX 2.5 Pro). The provider then matches the source image.
+    - Otherwise -> closest numeric match from allowed_aspect_ratios.
+    """
+    profile = get_video_profile(model_id)
+    if not profile.get("require_aspect_ratio"):
+        return None
+
+    auto_token = profile.get("aspect_ratio_auto")
+    if auto_token:
+        return auto_token
+
+    allowed = profile.get("allowed_aspect_ratios") or []
+    if not allowed:
+        return None
+    return closest_aspect_ratio(source_aspect or "16:9", list(allowed))
+
+
+def check_source_image_for_model(
+    model_id: str, image_bytes: Optional[bytes]
+) -> Optional[str]:
+    """
+    Validate a source image against model constraints.
+    Returns an error string, or None when the image is acceptable
+    (or cannot be inspected, in which case the provider decides).
+    """
+    min_side = get_model_min_short_side(model_id)
+    if min_side <= 0 or not image_bytes:
+        return None
+    dims = image_dimensions(image_bytes)
+    if not dims:
+        return None
+    if min(dims) < min_side:
+        return (
+            f"Source image too small: short edge is {min(dims)}px, "
+            f"this model requires at least {min_side}px."
+        )
+    return None
 
 
 # =================================================
@@ -1174,12 +1291,15 @@ class AnimatePromptModal(discord.ui.Modal):
         self.model_id = model_id
         super().__init__(title="🎬 Animate Image • Video Prompt")
 
+        # Discord modal inputs cap at 4000 chars regardless of provider limits.
+        field_max = min(4000, get_model_prompt_limit(model_id))
+
         self.video_prompt = discord.ui.TextInput(
             label="Video prompt",
             style=discord.TextStyle.paragraph,
             required=False,
-            max_length=2000,
-            default=(self.base_prompt[:2000] if self.base_prompt else ""),
+            max_length=field_max,
+            default=(self.base_prompt[:field_max] if self.base_prompt else ""),
             placeholder="Describe motion, camera movement, atmosphere...",
         )
         self.add_item(self.video_prompt)
@@ -1190,6 +1310,14 @@ class AnimatePromptModal(discord.ui.Modal):
             return
         if not isinstance(interaction.user, discord.Member) or not interaction.guild:
             await send_ephemeral(interaction, "❌ This action is server-only.")
+            return
+
+        if not is_known_video_model(self.model_id):
+            await send_ephemeral(
+                interaction,
+                "❌ This animate button points at a retired model. "
+                "Generate a new image to get fresh buttons.",
+            )
             return
 
         final_prompt = (
@@ -1234,10 +1362,12 @@ class AnimatePromptModal(discord.ui.Modal):
             )
             return
 
+        profile = get_video_profile(self.model_id)
         await send_ephemeral(
             interaction,
             content=(
-                f"✅ Video prompt set.\n"
+                f"✅ Video prompt set • **{profile['button_label']}** "
+                f"({profile['resolution']}).\n"
                 f"⏱ Choose length (remaining today: **{remaining}s**, "
                 f"max per render: **{MAX_VIDEO_RENDER_SECONDS}s**):"
             ),
@@ -1282,8 +1412,8 @@ class AnimateDurationView(OwnerLockedView):
 
         for idx, sec in enumerate(self.allowed_durations):
             style = (
-                discord.ButtonStyle.success if sec <= 6
-                else discord.ButtonStyle.danger if sec >= 15
+                discord.ButtonStyle.success if sec <= 8
+                else discord.ButtonStyle.danger if sec >= 20
                 else discord.ButtonStyle.primary
             )
             b = discord.ui.Button(label=f"{sec} seconds", style=style, row=idx // 5)
@@ -1308,6 +1438,13 @@ class AnimateDurationView(OwnerLockedView):
         if seconds > MAX_VIDEO_RENDER_SECONDS:
             await send_ephemeral(
                 interaction, f"❌ Max duration per render is {MAX_VIDEO_RENDER_SECONDS} seconds."
+            )
+            return
+
+        if seconds not in get_model_durations(self.model_id):
+            allowed = ", ".join(f"{s}s" for s in get_model_durations(self.model_id))
+            await send_ephemeral(
+                interaction, f"❌ Allowed durations for this model are {allowed}."
             )
             return
 
@@ -1350,8 +1487,14 @@ class AnimateDurationView(OwnerLockedView):
             await send_ephemeral(interaction, "❌ No usable source image found.")
             return
 
+        size_error = check_source_image_for_model(self.model_id, image_bytes)
+        if size_error:
+            await send_ephemeral(interaction, f"❌ {size_error}")
+            return
+
         aspect = self.ratio if self.ratio in VIDEO_ALLOWED_ASPECTS else "16:9"
         prompt = (self.prompt_text or "").strip() or "Animate this image with natural motion."
+        prompt = trim(prompt, get_model_prompt_limit(self.model_id))
 
         await video_cog.animate_image_to_video(
             interaction=interaction,

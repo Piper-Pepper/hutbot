@@ -16,30 +16,34 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from venice_shared import (
+    DEFAULT_VIDEO_MODEL,
     MAX_VIDEO_RENDER_SECONDS,
     SERVER_ANIM_ICON,
-    VENICE_VIDEO_I2V_MODEL_ENHANCED,
-    VENICE_VIDEO_I2V_MODEL_LTX,
-    VENICE_VIDEO_I2V_MODEL_STANDARD,
+    VENICE_VIDEO_I2V_MODEL_LTX25,
+    VENICE_VIDEO_I2V_MODEL_MINIMAX,
+    VENICE_VIDEO_I2V_MODEL_WAN3,
     VIDEO_MODEL_PROFILES,
     add_rating_reactions,
     build_generation_success_text,
     build_progress_embed,
     bytes_to_data_url,
-    closest_aspect_ratio,
+    check_source_image_for_model,
     codeblock_safe,
     extract_urls_from_payload,
     format_reset_line,
     get_member_tier,
     get_model_durations,
+    get_model_prompt_limit,
     get_model_resolution,
     get_quota_store,
     get_video_budget_for_member,
     get_video_profile,
+    is_known_video_model,
     looks_like_image,
     looks_like_video,
     next_tier,
     repost_starter_for_channel,
+    resolve_video_aspect_ratio,
     safe_int,
     sanitize_error_text,
     send_ephemeral,
@@ -63,23 +67,32 @@ VENICE_VIDEO_RESOLUTION_FALLBACK = os.getenv("VENICE_VIDEO_RESOLUTION", "720p")
 
 # Legacy fallback when animate_image_to_video is called without model_id.
 VENICE_VIDEO_I2V_MODEL_DEFAULT = os.getenv(
-    "VENICE_VIDEO_I2V_MODEL", VENICE_VIDEO_I2V_MODEL_ENHANCED
+    "VENICE_VIDEO_I2V_MODEL", DEFAULT_VIDEO_MODEL
 )
 
 # =================================================
 # SETTINGS
 # =================================================
 VIDEO_POLL_SECONDS = 6
-VIDEO_HARD_TIMEOUT_SECONDS = 1800
-VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 720
+
+# Absolute ceiling for a single poll loop.
+VIDEO_HARD_TIMEOUT_SECONDS = 3000
+
+# Baseline adaptive budget. Scaled per requested clip length at runtime,
+# see _adaptive_budget_for(). A 25s WAN render needs far more wall time
+# than a 5s clip, so a flat value would abort long jobs prematurely.
+VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 900
+VIDEO_SECONDS_PER_OUTPUT_SECOND = 45
+VIDEO_ADAPTIVE_BASE_OVERHEAD = 180
+
 VIDEO_MAX_CONSECUTIVE_5XX = 8
 VIDEO_5XX_WINDOW_SECONDS = 180
 
 # Display renames for known model IDs.
 VIDEO_MODEL_RENAMES = {
-    VENICE_VIDEO_I2V_MODEL_ENHANCED: "WAN27-Enh 🔞",
-    VENICE_VIDEO_I2V_MODEL_STANDARD: "WAN27",
-    VENICE_VIDEO_I2V_MODEL_LTX: "LTX 2.3 HQ",
+    VENICE_VIDEO_I2V_MODEL_WAN3: "WAN 3.0 🔞",
+    VENICE_VIDEO_I2V_MODEL_LTX25: "LTX 2.5 Pro",
+    VENICE_VIDEO_I2V_MODEL_MINIMAX: "MiniMax H3 Max",
 }
 
 VIDEO_QUOTA_FILE = os.getenv("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
@@ -125,7 +138,12 @@ def _extract_queue_id(payload: Any) -> Optional[str]:
 
 def _video_model_label(model_name: str) -> str:
     key = (model_name or "").strip()
-    return VIDEO_MODEL_RENAMES.get(key, key)
+    if key in VIDEO_MODEL_RENAMES:
+        return VIDEO_MODEL_RENAMES[key]
+    profile = VIDEO_MODEL_PROFILES.get(key)
+    if profile:
+        return str(profile.get("button_label") or key)
+    return key
 
 
 def _resolution_for_model(model_id: str) -> str:
@@ -133,19 +151,13 @@ def _resolution_for_model(model_id: str) -> str:
     return get_model_resolution(model_id) or VENICE_VIDEO_RESOLUTION_FALLBACK
 
 
-def _resolve_aspect_ratio(model_id: str, source_aspect: str) -> Optional[str]:
-    """
-    For models that require aspect_ratio (e.g. LTX), pick the value from the
-    model's allowed list that best matches the source image's ratio. Returns
-    None for models that don't send an aspect_ratio field.
-    """
-    profile = get_video_profile(model_id)
-    if not profile.get("require_aspect_ratio"):
-        return None
-    allowed = profile.get("allowed_aspect_ratios") or []
-    if not allowed:
-        return None
-    return closest_aspect_ratio(source_aspect or "16:9", allowed)
+def _adaptive_budget_for(seconds: int) -> int:
+    """Wall-clock budget for a render of `seconds` output length."""
+    scaled = int(max(1, seconds) * VIDEO_SECONDS_PER_OUTPUT_SECOND)
+    return min(
+        VIDEO_HARD_TIMEOUT_SECONDS,
+        max(VIDEO_ADAPTIVE_TIMEOUT_SECONDS, scaled + VIDEO_ADAPTIVE_BASE_OVERHEAD),
+    )
 
 
 # =================================================
@@ -313,7 +325,7 @@ class VeniceVideoCog(commands.Cog):
         await self._ensure_session()
         assert self.session is not None
 
-        timeout = aiohttp.ClientTimeout(total=45, connect=12, sock_read=35)
+        timeout = aiohttp.ClientTimeout(total=90, connect=12, sock_read=75)
         for use_auth in (True, False):
             try:
                 req_headers = dict(headers) if use_auth else {}
@@ -361,7 +373,7 @@ class VeniceVideoCog(commands.Cog):
             return None, None, "VENICE_API_KEY is missing.", "noid"
 
         # Canonical field per Venice docs is 'image_url', which accepts both
-        # http URLs and data URLs. Strict validators (LTX) reject the legacy
+        # http URLs and data URLs. Strict validators reject the legacy
         # 'image' key, so we drop it entirely.
         image_variants: list[dict[str, Any]] = []
         if image_url and image_url.startswith("http"):
@@ -381,19 +393,22 @@ class VeniceVideoCog(commands.Cog):
         }
         request_id = uuid.uuid4().hex[:8]
         resolution = _resolution_for_model(model_id)
+        prompt_limit = get_model_prompt_limit(model_id)
+
         base_payload: dict[str, Any] = {
             "model": model_id,
-            "prompt": prompt,
+            "prompt": trim(prompt, prompt_limit),
             "resolution": resolution,
             "duration": f"{seconds}s",
         }
 
-        # Some models (LTX) require aspect_ratio and restrict its allowed values.
-        aspect_for_payload = _resolve_aspect_ratio(model_id, aspect)
+        # WAN 3.0 -> "adaptive", LTX 2.5 Pro -> "auto",
+        # MiniMax H3 Max -> field omitted entirely (aspect_ratios: []).
+        aspect_for_payload = resolve_video_aspect_ratio(model_id, aspect)
         if aspect_for_payload:
             base_payload["aspect_ratio"] = aspect_for_payload
 
-        timeout = aiohttp.ClientTimeout(total=45, connect=10, sock_read=40)
+        timeout = aiohttp.ClientTimeout(total=60, connect=10, sock_read=50)
         last_error = "Queue request failed."
 
         for attempt in range(2):
@@ -406,10 +421,10 @@ class VeniceVideoCog(commands.Cog):
                         text = await resp.text()
                         logger.info(
                             "[VID %s] queue status=%s attempt=%s variant=%s(%s) "
-                            "model=%s res=%s ar=%s",
+                            "model=%s res=%s dur=%ss ar=%s",
                             request_id, resp.status, attempt + 1,
                             variant_idx, next(iter(variant)),
-                            model_id, resolution,
+                            model_id, resolution, seconds,
                             base_payload.get("aspect_ratio", "-"),
                         )
 
@@ -462,7 +477,7 @@ class VeniceVideoCog(commands.Cog):
 
         return None, None, last_error, request_id
 
-# ---------- provider: poll ----------
+    # ---------- provider: poll ----------
     async def _wait_for_result(
         self,
         model_id: str,
@@ -473,6 +488,7 @@ class VeniceVideoCog(commands.Cog):
         quota: dict[str, int],
         queue_download_url: Optional[str] = None,
         request_id: str = "unknown",
+        requested_seconds: int = 5,
     ) -> tuple[Optional[bytes], Optional[str], Optional[str]]:
         if not VENICE_VIDEO_RETRIEVE_URL:
             return None, None, "VENICE_VIDEO_RETRIEVE_URL is missing."
@@ -488,7 +504,9 @@ class VeniceVideoCog(commands.Cog):
         }
         started = utc_now()
         hard_deadline = started + timedelta(seconds=VIDEO_HARD_TIMEOUT_SECONDS)
-        adaptive_deadline = started + timedelta(seconds=VIDEO_ADAPTIVE_TIMEOUT_SECONDS)
+        adaptive_deadline = started + timedelta(
+            seconds=_adaptive_budget_for(requested_seconds)
+        )
 
         consecutive_5xx = 0
         total_5xx = 0
@@ -683,10 +701,21 @@ class VeniceVideoCog(commands.Cog):
             )
             return False
 
-        # Resolve effective model + per-model duration validation.
+        # Resolve effective model. Unknown IDs are rejected outright so that
+        # stale buttons from retired models cannot queue dead requests.
         effective_model_id = (model_id or VENICE_VIDEO_I2V_MODEL_DEFAULT).strip()
         if not effective_model_id:
             await send_ephemeral(interaction, "❌ No video model configured.")
+            return False
+
+        if not is_known_video_model(effective_model_id):
+            available = ", ".join(
+                _video_model_label(m) for m in VIDEO_MODEL_PROFILES
+            )
+            await send_ephemeral(
+                interaction,
+                f"❌ Unknown video model `{effective_model_id}`.\nAvailable: {available}",
+            )
             return False
 
         model_durations = get_model_durations(effective_model_id)
@@ -704,6 +733,12 @@ class VeniceVideoCog(commands.Cog):
             await send_ephemeral(
                 interaction, "❌ No valid source image for video generation."
             )
+            return False
+
+        # Per-model source constraints (WAN 3.0 requires a 240px short edge).
+        size_error = check_source_image_for_model(effective_model_id, image_bytes)
+        if size_error:
+            await send_ephemeral(interaction, f"❌ {size_error}")
             return False
 
         if not await self._try_lock_user(interaction.user.id):
@@ -809,6 +844,7 @@ class VeniceVideoCog(commands.Cog):
                 quota=state_q,
                 queue_download_url=queue_download_url,
                 request_id=request_id,
+                requested_seconds=seconds,
             )
 
             if not media_data:
@@ -835,7 +871,8 @@ class VeniceVideoCog(commands.Cog):
                     interaction,
                     f"❌ Video too large for Discord upload limit "
                     f"({len(media_data) // (1024 * 1024)}MB > "
-                    f"{guild_limit // (1024 * 1024)}MB).",
+                    f"{guild_limit // (1024 * 1024)}MB).\n"
+                    f"Try a shorter duration.",
                 )
                 return False
 
@@ -895,8 +932,8 @@ class VeniceVideoCog(commands.Cog):
 
             # NOTE: cleanup_user_ephemerals wipes tracked ephemerals only.
             # AnimateEphemeralView is declared persistent_ephemeral=True in
-            # venice_shared, so its 🔞 / 🎬 / 💎 buttons stay clickable and
-            # the user can queue further animations of the same source image.
+            # venice_shared, so its animate buttons stay clickable and the
+            # user can queue further animations of the same source image.
             asyncio.create_task(self._cleanup_user_ephemerals_delayed(interaction))
 
     async def _cleanup_user_ephemerals_delayed(
@@ -919,15 +956,53 @@ class VeniceVideoCog(commands.Cog):
         lines = ["🎞️ **Animate button profiles**"]
         for model_id, profile in VIDEO_MODEL_PROFILES.items():
             durations = ", ".join(f"{d}s" for d in profile["durations"])
-            aspect_req = ""
             if profile.get("require_aspect_ratio"):
+                auto = profile.get("aspect_ratio_auto") or "-"
                 allowed = profile.get("allowed_aspect_ratios") or []
-                aspect_req = f" • AR: {'/'.join(allowed)}"
+                aspect_info = f" • AR: {auto} ({'/'.join(allowed)})"
+            else:
+                aspect_info = " • AR: none"
+            min_side = profile.get("min_short_side") or 0
+            min_info = f" • min short side: {min_side}px" if min_side else ""
             lines.append(
-                f"• `{model_id}` -> {profile['button_label']} "
-                f"({profile['resolution']}, {durations}{aspect_req})"
+                f"• `{model_id}` -> {profile['button_label']}\n"
+                f"  {profile['resolution']} • {durations}{aspect_info}{min_info}"
             )
+        lines.append(f"\nMax per render: **{MAX_VIDEO_RENDER_SECONDS}s**")
         await ctx.send("\n".join(lines))
+
+    @commands.command(name="video_test_model")
+    @commands.has_permissions(administrator=True)
+    async def video_test_model(self, ctx: commands.Context):
+        """Ping the models endpoint and list live video model IDs."""
+        base = (VENICE_VIDEO_QUEUE_URL or "").split("/api/")[0]
+        if not base or not VENICE_API_KEY:
+            await ctx.send("❌ Queue URL or API key missing.")
+            return
+
+        await self._ensure_session()
+        assert self.session is not None
+        url = f"{base}/api/v1/models?type=video"
+        headers = {"Authorization": f"Bearer {VENICE_API_KEY}"}
+
+        try:
+            async with self.session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    await ctx.send(f"❌ Models endpoint returned {resp.status}.")
+                    return
+                data = await resp.json()
+        except Exception as e:
+            await ctx.send(f"❌ Request failed: {sanitize_error_text(str(e))}")
+            return
+
+        live_ids = {
+            m.get("id") for m in data.get("data", []) if isinstance(m, dict)
+        }
+        lines = ["🔍 **Configured vs. live**"]
+        for model_id in VIDEO_MODEL_PROFILES:
+            mark = "✅" if model_id in live_ids else "❌ NOT FOUND"
+            lines.append(f"{mark} `{model_id}`")
+        await ctx.send("\n".join(lines)[:1900])
 
 
 async def setup(bot: commands.Bot):
