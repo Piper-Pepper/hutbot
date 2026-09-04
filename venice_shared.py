@@ -1153,7 +1153,7 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "min_short_side": 240,
     },
     VENICE_VIDEO_I2V_MODEL_LTX25: {
-        "button_label": "💎 Animate HQ (LTX 2.5 Pro)",
+        "button_label": "⭕ Animate HQ (LTX 2.5 Pro)",
         "button_style": discord.ButtonStyle.success,
         "resolution": "720p",
         "durations": [6, 8, 10],
@@ -1164,8 +1164,8 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "min_short_side": 0,
     },
     VENICE_VIDEO_I2V_MODEL_MINIMAX: {
-        "button_label": "🎥 Animate (MiniMax H3 Max)",
-        "button_style": discord.ButtonStyle.primary,
+        "button_label": "🔞 Animate (MiniMax H3 Max)",
+        "button_style": discord.ButtonStyle.danger,
         "resolution": "768P",
         "durations": [5, 8, 10, 12, 15],
         "require_aspect_ratio": False,
