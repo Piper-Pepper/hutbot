@@ -10,6 +10,9 @@ RULES:
 - Success messages use build_generation_success_text(state, kind=...).
 - Video model config lives in VIDEO_MODEL_PROFILES. Add a new animate button
   by adding one entry there. No cog change required.
+- Video files NEVER live fully in memory. Use the disk-based helpers in the
+  VIDEO COMPRESSION section - a 25s 720p clip is 100MB+ and reading that into
+  RAM twice (bytes + BytesIO) is what triggers OOM kills.
 - All future changes to reset/feedback/animate buttons go HERE.
 """
 from __future__ import annotations
@@ -21,8 +24,12 @@ import contextlib
 import io
 import json
 import logging
+import logging.handlers
 import os
 import re
+import shutil
+import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -61,7 +68,7 @@ def env_str(name: str, default: str) -> str:
 
 
 DISCORD_UPLOAD_LIMIT_FORCE_MB = env_int("DISCORD_UPLOAD_LIMIT_FORCE_MB", 0)
-DISCORD_UPLOAD_LIMIT_FALLBACK_MB = env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 50)
+DISCORD_UPLOAD_LIMIT_FALLBACK_MB = env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 10)
 DISCORD_UPLOAD_SAFETY_BYTES = env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
 
 DEFAULT_WINDOW_SECONDS = 24 * 60 * 60
@@ -69,6 +76,92 @@ DEFAULT_WINDOW_SECONDS = 24 * 60 * 60
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# =================================================
+# LOGGING SETUP
+# =================================================
+LOG_LEVEL = env_str("LOG_LEVEL", "INFO").upper()
+LOG_FILE = env_str("LOG_FILE", "goonhut_bot.log")
+LOG_MAX_BYTES = env_int("LOG_MAX_BYTES", 8 * 1024 * 1024)
+LOG_BACKUP_COUNT = env_int("LOG_BACKUP_COUNT", 4)
+
+_LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)-18s | %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+_logging_configured = False
+
+
+def setup_logging(force: bool = False) -> None:
+    """
+    Configure root logging once. Call this ONCE from your entrypoint
+    (main.py / bot.py) BEFORE loading any cogs.
+
+    Without this, logger.info() calls inside the cogs go nowhere and you get
+    a silent bot. Writes to both stdout (systemd/docker journal) and a
+    rotating file.
+    """
+    global _logging_configured
+    if _logging_configured and not force:
+        return
+
+    root = logging.getLogger()
+    if force:
+        for h in list(root.handlers):
+            root.removeHandler(h)
+
+    level = getattr(logging, LOG_LEVEL, logging.INFO)
+    root.setLevel(level)
+
+    fmt = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(fmt)
+    stream.setLevel(level)
+    root.addHandler(stream)
+
+    if LOG_FILE:
+        with contextlib.suppress(Exception):
+            fileh = logging.handlers.RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            fileh.setFormatter(fmt)
+            fileh.setLevel(level)
+            root.addHandler(fileh)
+
+    # discord.py is extremely chatty at DEBUG; keep it readable.
+    logging.getLogger("discord").setLevel(logging.WARNING)
+    logging.getLogger("discord.http").setLevel(logging.WARNING)
+    logging.getLogger("discord.gateway").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+
+    _logging_configured = True
+    root.info(
+        "Logging initialised | level=%s | file=%s", LOG_LEVEL, LOG_FILE or "-"
+    )
+
+
+def log_memory_usage(tag: str = "") -> Optional[int]:
+    """
+    Log current RSS in MB. Returns the value, or None if unavailable.
+    Useful for pinpointing which stage of a render blows up the process.
+    """
+    rss_mb: Optional[int] = None
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    rss_mb = int(line.split()[1]) // 1024
+                    break
+    except Exception:
+        return None
+
+    if rss_mb is not None:
+        logger.info("MEM %s rss=%sMB", f"[{tag}]" if tag else "", rss_mb)
+    return rss_mb
 
 
 # =================================================
@@ -179,6 +272,10 @@ class RollingQuotaStore:
                 "amount": amount,
                 "start": entry["start"],
             }
+            logger.debug(
+                "Quota reserved: g=%s u=%s amount=%s used=%s/%s",
+                guild_id, user_id, amount, entry["used"], limit,
+            )
             return True, self._state(entry, limit, now_ts), token
 
     async def rollback(self, token: Optional[dict[str, int]]) -> None:
@@ -203,6 +300,9 @@ class RollingQuotaStore:
                     entry["start"] = 0
                 db[key] = entry
                 await self._write(db)
+                logger.debug(
+                    "Quota rolled back: g=%s u=%s amount=%s", guild_id, user_id, amount
+                )
 
     async def prune(self) -> int:
         now_ts = int(time.time())
@@ -339,6 +439,15 @@ def seconds_human(sec: int) -> str:
     return f"{s}s"
 
 
+def human_bytes(num: int) -> str:
+    n = float(max(0, int(num)))
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}{unit}" if unit in ("B", "KB") else f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}GB"
+
+
 def closest_aspect_ratio(aspect: str, allowed: Optional[list[str]]) -> str:
     """
     Pick the ratio in `allowed` that best matches `aspect` (W:H string).
@@ -416,7 +525,10 @@ def looks_like_image(binary: bytes) -> bool:
 
 
 def looks_like_video(binary: bytes) -> bool:
-    return bool(binary and len(binary) >= 12 and binary[4:8] == b"ftyp")
+    if not binary or len(binary) < 12:
+        return False
+    # ISO-BMFF (mp4/mov) or Matroska/WebM.
+    return binary[4:8] == b"ftyp" or binary[:4] == b"\x1a\x45\xdf\xa3"
 
 
 def infer_image_ext(binary: bytes) -> str:
@@ -467,6 +579,59 @@ def bytes_to_b64(binary: bytes) -> str:
 
 def bytes_to_data_url(binary: bytes) -> str:
     return f"data:{infer_image_mime(binary)};base64,{bytes_to_b64(binary)}"
+
+
+# Source images are base64-inlined into the queue payload when no public URL
+# exists. Base64 inflates by ~33% and the JSON encoder copies it again, so an
+# oversized source image is a real memory hazard. Downscale before encoding.
+SOURCE_IMAGE_MAX_INLINE_BYTES = env_int("SOURCE_IMAGE_MAX_INLINE_KB", 1800) * 1024
+SOURCE_IMAGE_MAX_SIDE = env_int("SOURCE_IMAGE_MAX_SIDE", 1536)
+
+
+def prepare_source_image_for_upload(
+    binary: bytes,
+    max_bytes: int = SOURCE_IMAGE_MAX_INLINE_BYTES,
+    max_side: int = SOURCE_IMAGE_MAX_SIDE,
+) -> bytes:
+    """
+    Shrink a source image so it can safely be inlined as a data URL.
+    Returns the original bytes unchanged if Pillow is missing or it already
+    fits comfortably.
+    """
+    if not binary:
+        return binary
+    if Image is None:
+        return binary
+
+    dims = image_dimensions(binary)
+    if len(binary) <= max_bytes and (not dims or max(dims) <= max_side):
+        return binary
+
+    try:
+        img = Image.open(io.BytesIO(binary))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        img.thumbnail((max_side, max_side), resample)
+
+        for q in (92, 86, 80, 74, 68, 60, 52, 45):
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=q, optimize=True)
+            data = buf.getvalue()
+            if len(data) <= max_bytes:
+                logger.info(
+                    "Source image shrunk for inline upload: %s -> %s (q=%s)",
+                    human_bytes(len(binary)), human_bytes(len(data)), q,
+                )
+                return data
+
+        logger.warning(
+            "Source image still %s after compression attempts.", human_bytes(len(data))
+        )
+        return data
+    except Exception as e:
+        logger.debug("prepare_source_image_for_upload failed: %s", e)
+        return binary
 
 
 def extract_image_from_json_obj(obj: Any, depth: int = 0) -> Optional[bytes]:
@@ -536,6 +701,262 @@ def extract_urls_from_payload(payload: Any) -> list[str]:
 
 
 # =================================================
+# TEMP FILE HELPERS
+# =================================================
+VENICE_TMP_DIR = env_str("VENICE_TMP_DIR", tempfile.gettempdir())
+
+
+def temp_path(prefix: str = "venice", ext: str = "bin") -> Path:
+    base = Path(VENICE_TMP_DIR)
+    with contextlib.suppress(Exception):
+        base.mkdir(parents=True, exist_ok=True)
+    return base / f"{prefix}_{uuid.uuid4().hex[:10]}.{ext.lstrip('.')}"
+
+
+def cleanup_temp_files(*paths: Optional[str | Path]) -> None:
+    """Delete temp files, never raising. Safe to call in a finally block."""
+    for p in paths:
+        if not p:
+            continue
+        try:
+            Path(p).unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug("cleanup_temp_files failed for %s: %s", p, e)
+
+
+def file_size(path: Optional[str | Path]) -> int:
+    if not path:
+        return 0
+    try:
+        return Path(path).stat().st_size
+    except Exception:
+        return 0
+
+
+def purge_stale_temp_files(max_age_seconds: int = 3600) -> int:
+    """
+    Remove leftover venice temp files older than max_age_seconds.
+    Call periodically - a crashed render leaks its download file otherwise.
+    """
+    removed = 0
+    cutoff = time.time() - max_age_seconds
+    base = Path(VENICE_TMP_DIR)
+    if not base.exists():
+        return 0
+    for pattern in ("vdl_*", "vcomp_*", "venice_*"):
+        for p in base.glob(pattern):
+            with contextlib.suppress(Exception):
+                if p.is_file() and p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    removed += 1
+    if removed:
+        logger.info("Purged %s stale temp file(s).", removed)
+    return removed
+
+
+# =================================================
+# VIDEO COMPRESSION (ffmpeg, disk-based)
+# =================================================
+FFMPEG_BIN = env_str("FFMPEG_BIN", "ffmpeg")
+FFPROBE_BIN = env_str("FFPROBE_BIN", "ffprobe")
+
+# Reserve headroom for container overhead / muxing slack.
+VIDEO_COMPRESS_SAFETY = 0.90
+
+# Audio is cheap and worth keeping; dropped only as a last resort.
+VIDEO_AUDIO_BITRATE_K = env_int("VIDEO_AUDIO_BITRATE_K", 64)
+
+# Resolution ladder walked down when bitrate reduction alone is not enough.
+VIDEO_SCALE_LADDER: tuple[int, ...] = (720, 640, 540, 480, 400, 360, 288)
+
+VIDEO_COMPRESS_TIMEOUT = env_int("VIDEO_COMPRESS_TIMEOUT", 900)
+VIDEO_COMPRESS_PRESET = env_str("VIDEO_COMPRESS_PRESET", "veryfast")
+
+# Below this video bitrate the result is unwatchable; abort instead.
+VIDEO_MIN_VIDEO_KBIT = env_int("VIDEO_MIN_VIDEO_KBIT", 140)
+
+
+def ffmpeg_available() -> bool:
+    return shutil.which(FFMPEG_BIN) is not None
+
+
+def ffprobe_available() -> bool:
+    return shutil.which(FFPROBE_BIN) is not None
+
+
+async def _run_proc(args: list[str], timeout: int) -> tuple[int, bytes]:
+    """Run a subprocess, return (returncode, stderr). Never raises."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return 127, b"binary not found"
+    except Exception as e:
+        return 1, str(e).encode()
+
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return proc.returncode or 0, err or b""
+    except asyncio.TimeoutError:
+        logger.warning("Subprocess timed out after %ss: %s", timeout, args[0])
+        with contextlib.suppress(Exception):
+            proc.kill()
+            await proc.wait()
+        return 124, b"timeout"
+
+
+async def probe_video_duration(path: str | Path) -> Optional[float]:
+    """Return duration in seconds via ffprobe, or None."""
+    if not ffprobe_available():
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE_BIN,
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        value = float((out or b"").decode().strip())
+        return value if value > 0 else None
+    except Exception as e:
+        logger.debug("probe_video_duration failed: %s", e)
+        return None
+
+
+async def compress_video_file(
+    src_path: str | Path,
+    target_bytes: int,
+    duration_hint: float,
+    progress_cb: Optional[Callable[[str], Awaitable[None]]] = None,
+) -> tuple[Optional[Path], str]:
+    """
+    Shrink a video below `target_bytes` using ffmpeg (H.264 + AAC).
+
+    Runs entirely on disk - no full copy is ever held in memory, which is the
+    whole point: a 25s 720p clip is 100MB+ and buffering that in RAM twice is
+    what kills the process on small VPS boxes.
+
+    Strategy: compute the bitrate that mathematically fits the byte budget for
+    the clip's duration, then walk down a resolution ladder until the encoder
+    actually lands under target. Audio is preserved as long as possible.
+
+    Returns (output_path, note). output_path is None on failure; if the source
+    already fits, the source path itself is returned unchanged.
+    The caller owns cleanup of the returned file.
+    """
+    src = Path(src_path)
+    if not src.exists():
+        return None, "source file missing"
+
+    original = src.stat().st_size
+    if original <= target_bytes:
+        return src, "no compression needed"
+
+    if not ffmpeg_available():
+        logger.error("ffmpeg not found (FFMPEG_BIN=%s) - cannot compress.", FFMPEG_BIN)
+        return None, "ffmpeg not installed on host"
+
+    duration = await probe_video_duration(src) or float(max(1, duration_hint))
+    duration = max(1.0, duration)
+
+    budget = int(target_bytes * VIDEO_COMPRESS_SAFETY)
+    total_kbit = int((budget * 8) / duration / 1000)
+
+    logger.info(
+        "Compressing video: %s -> target %s | duration=%.1fs budget=%skbit/s",
+        human_bytes(original), human_bytes(target_bytes), duration, total_kbit,
+    )
+
+    if total_kbit <= VIDEO_MIN_VIDEO_KBIT:
+        return None, (
+            f"clip too long for a {human_bytes(target_bytes)} limit "
+            f"({total_kbit}kbit/s available)"
+        )
+
+    # (height, video_kbit, keep_audio)
+    attempts: list[tuple[int, int, bool]] = []
+    for height in VIDEO_SCALE_LADDER:
+        with_audio = total_kbit - VIDEO_AUDIO_BITRATE_K
+        if with_audio >= VIDEO_MIN_VIDEO_KBIT:
+            attempts.append((height, with_audio, True))
+        # Same rung muted buys back the audio budget.
+        if total_kbit - 8 >= VIDEO_MIN_VIDEO_KBIT:
+            attempts.append((height, total_kbit - 8, False))
+
+    if not attempts:
+        return None, "byte budget too small for any usable encode"
+
+    for idx, (height, video_kbit, keep_audio) in enumerate(attempts):
+        out_path = temp_path("vcomp", "mp4")
+
+        if progress_cb:
+            with contextlib.suppress(Exception):
+                await progress_cb(
+                    f"Compressing • {height}p @ {video_kbit}k "
+                    f"(pass {idx + 1}/{len(attempts)})..."
+                )
+
+        args = [
+            FFMPEG_BIN, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(src),
+            "-vf", f"scale=-2:{height}:flags=bicubic",
+            "-c:v", "libx264",
+            "-preset", VIDEO_COMPRESS_PRESET,
+            "-profile:v", "high",
+            "-pix_fmt", "yuv420p",
+            "-b:v", f"{video_kbit}k",
+            "-maxrate", f"{int(video_kbit * 1.25)}k",
+            "-bufsize", f"{int(video_kbit * 2)}k",
+        ]
+        if keep_audio:
+            args += ["-c:a", "aac", "-b:a", f"{VIDEO_AUDIO_BITRATE_K}k", "-ac", "2"]
+        else:
+            args += ["-an"]
+        args += ["-movflags", "+faststart", str(out_path)]
+
+        started = time.monotonic()
+        code, err = await _run_proc(args, VIDEO_COMPRESS_TIMEOUT)
+        took = time.monotonic() - started
+
+        if code != 0 or not out_path.exists():
+            msg = (err or b"")[:200].decode("utf-8", "ignore")
+            logger.warning(
+                "ffmpeg pass %s failed (code=%s, %.1fs): %s", idx + 1, code, took, msg
+            )
+            cleanup_temp_files(out_path)
+            if code == 124:
+                return None, "compression timed out"
+            if code == 127:
+                return None, "ffmpeg binary not found"
+            continue
+
+        size = out_path.stat().st_size
+        logger.info(
+            "ffmpeg pass %s done in %.1fs: %s at %sp%s",
+            idx + 1, took, human_bytes(size), height,
+            "" if keep_audio else " (muted)",
+        )
+
+        if size <= target_bytes:
+            note = (
+                f"{human_bytes(original)} → {human_bytes(size)} @ {height}p"
+                + ("" if keep_audio else " • audio dropped")
+            )
+            return out_path, note
+
+        cleanup_temp_files(out_path)
+
+    return None, "could not reach target size"
+
+
+# =================================================
 # DISCORD UPLOAD
 # =================================================
 def discord_upload_limit_bytes(interaction: discord.Interaction) -> int:
@@ -545,6 +966,16 @@ def discord_upload_limit_bytes(interaction: discord.Interaction) -> int:
     guild_limit = getattr(interaction.guild, "filesize_limit", None) if interaction.guild else None
     candidates = [v for v in (inter_limit, guild_limit) if isinstance(v, int) and v > 0]
     return max(candidates) if candidates else DISCORD_UPLOAD_LIMIT_FALLBACK_MB * 1024 * 1024
+
+
+def guild_upload_limit_bytes(guild: Optional[discord.Guild]) -> int:
+    """Upload cap for a guild without needing an Interaction (10MB unboosted)."""
+    if DISCORD_UPLOAD_LIMIT_FORCE_MB > 0:
+        return DISCORD_UPLOAD_LIMIT_FORCE_MB * 1024 * 1024
+    limit = getattr(guild, "filesize_limit", None) if guild else None
+    if isinstance(limit, int) and limit > 0:
+        return limit
+    return DISCORD_UPLOAD_LIMIT_FALLBACK_MB * 1024 * 1024
 
 
 def fit_image_for_discord(image_bytes: bytes, max_bytes: int) -> tuple[bytes, str]:
@@ -783,7 +1214,8 @@ async def send_ephemeral(
         if track:
             await track_ephemeral_message(interaction, msg)
         return msg
-    except Exception:
+    except Exception as e:
+        logger.debug("send_ephemeral failed: %s", e)
         return None
 
 
@@ -1140,9 +1572,11 @@ VENICE_VIDEO_I2V_MODEL_LTX = VENICE_VIDEO_I2V_MODEL_LTX25
 #                            fallback when the auto token is unavailable
 # prompt_limit            -> provider-side prompt character cap
 # min_short_side          -> minimum short edge of the source image in px
+# est_seconds_per_second  -> rough wall-clock cost per second of output,
+#                            used to size the poll timeout per render
 VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     VENICE_VIDEO_I2V_MODEL_WAN3: {
-        "button_label": "🔞 WAN 3.0👄",
+        "button_label": "🔞 Animate (WAN 3.0)",
         "button_style": discord.ButtonStyle.danger,
         "resolution": "720p",
         "durations": [5, 10, 15, 20, 25],
@@ -1151,9 +1585,10 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "allowed_aspect_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4"],
         "prompt_limit": 20000,
         "min_short_side": 240,
+        "est_seconds_per_second": 45,
     },
     VENICE_VIDEO_I2V_MODEL_LTX25: {
-        "button_label": "⭕ LTX 2.5 Pro🎥",
+        "button_label": "💎 Animate HQ (LTX 2.5 Pro)",
         "button_style": discord.ButtonStyle.success,
         "resolution": "720p",
         "durations": [6, 8, 10],
@@ -1162,10 +1597,11 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "allowed_aspect_ratios": ["16:9", "9:16"],
         "prompt_limit": 10000,
         "min_short_side": 0,
+        "est_seconds_per_second": 30,
     },
     VENICE_VIDEO_I2V_MODEL_MINIMAX: {
-        "button_label": "🔞 MiniMax H3 Max📼",
-        "button_style": discord.ButtonStyle.danger,
+        "button_label": "🎥 Animate (MiniMax H3 Max)",
+        "button_style": discord.ButtonStyle.primary,
         "resolution": "768P",
         "durations": [5, 8, 10, 12, 15],
         "require_aspect_ratio": False,
@@ -1173,6 +1609,7 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "allowed_aspect_ratios": None,
         "prompt_limit": 10000,
         "min_short_side": 0,
+        "est_seconds_per_second": 35,
     },
 }
 
@@ -1193,6 +1630,7 @@ _VIDEO_PROFILE_FALLBACK: dict[str, Any] = {
     "allowed_aspect_ratios": None,
     "prompt_limit": 3000,
     "min_short_side": 0,
+    "est_seconds_per_second": 40,
 }
 
 
@@ -1223,6 +1661,10 @@ def get_model_prompt_limit(model_id: str) -> int:
 
 def get_model_min_short_side(model_id: str) -> int:
     return int(get_video_profile(model_id).get("min_short_side") or 0)
+
+
+def get_model_speed_factor(model_id: str) -> int:
+    return int(get_video_profile(model_id).get("est_seconds_per_second") or 40)
 
 
 def resolve_video_aspect_ratio(model_id: str, source_aspect: str) -> Optional[str]:
@@ -1270,6 +1712,11 @@ def check_source_image_for_model(
     return None
 
 
+def estimate_render_seconds(model_id: str, output_seconds: int) -> int:
+    """Rough wall-clock estimate for a render, used to size timeouts."""
+    return int(max(1, output_seconds) * get_model_speed_factor(model_id)) + 120
+
+
 # =================================================
 # ANIMATE UI
 # =================================================
@@ -1313,6 +1760,7 @@ class AnimatePromptModal(discord.ui.Modal):
             return
 
         if not is_known_video_model(self.model_id):
+            logger.warning("Stale animate button used: %s", self.model_id)
             await send_ephemeral(
                 interaction,
                 "❌ This animate button points at a retired model. "
@@ -1333,7 +1781,8 @@ class AnimatePromptModal(discord.ui.Modal):
 
         try:
             info = await video_cog.get_remaining_info(interaction.guild.id, interaction.user)
-        except Exception:
+        except Exception as e:
+            logger.error("get_remaining_info failed: %s", e)
             await send_ephemeral(interaction, "❌ Could not load your video quota right now.")
             return
 
@@ -1495,6 +1944,12 @@ class AnimateDurationView(OwnerLockedView):
         aspect = self.ratio if self.ratio in VIDEO_ALLOWED_ASPECTS else "16:9"
         prompt = (self.prompt_text or "").strip() or "Animate this image with natural motion."
         prompt = trim(prompt, get_model_prompt_limit(self.model_id))
+
+        logger.info(
+            "Animate request | user=%s model=%s dur=%ss ar=%s src=%s",
+            interaction.user.id, self.model_id, seconds, aspect,
+            "url" if source_image_url else "bytes",
+        )
 
         await video_cog.animate_image_to_video(
             interaction=interaction,
