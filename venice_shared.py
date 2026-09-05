@@ -342,9 +342,9 @@ TIER_RULES: dict[int, dict[str, int]] = {
     1: {"role_id": 1377051179615522926, "level": 3,  "image_limit": 15,  "video_budget_sec": 18},
     2: {"role_id": 1375147276413964408, "level": 11, "image_limit": 20,  "video_budget_sec": 30},
     3: {"role_id": 1376592697606930593, "level": 21, "image_limit": 25,  "video_budget_sec": 42},
-    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 30,  "video_budget_sec": 56},
-    5: {"role_id": 1375666588404940830, "level": 42, "image_limit": 42,  "video_budget_sec": 70},
-    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 90},
+    4: {"role_id": 1381791848875430069, "level": 33, "image_limit": 30,  "video_budget_sec": 54},
+    5: {"role_id": 1375666588404940830, "level": 42, "image_limit": 42,  "video_budget_sec": 66},
+    6: {"role_id": 1375584380914896978, "level": 69, "image_limit": 69,  "video_budget_sec": 80},
     7: {"role_id": 1346414581643219029, "level": 99, "image_limit": 300, "video_budget_sec": 300},
 }
 
