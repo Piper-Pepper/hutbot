@@ -1576,7 +1576,7 @@ VENICE_VIDEO_I2V_MODEL_LTX = VENICE_VIDEO_I2V_MODEL_LTX25
 #                            used to size the poll timeout per render
 VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     VENICE_VIDEO_I2V_MODEL_WAN3: {
-        "button_label": "🔞 Animate (WAN 3.0)",
+        "button_label": "🔞 WAN 3.0",
         "button_style": discord.ButtonStyle.danger,
         "resolution": "720p",
         "durations": [5, 10, 15, 20, 25],
@@ -1588,7 +1588,7 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "est_seconds_per_second": 45,
     },
     VENICE_VIDEO_I2V_MODEL_LTX25: {
-        "button_label": "💎 Animate HQ (LTX 2.5 Pro)",
+        "button_label": "🎥 LTX 2.5 Pro",
         "button_style": discord.ButtonStyle.success,
         "resolution": "720p",
         "durations": [6, 8, 10],
@@ -1600,7 +1600,7 @@ VIDEO_MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "est_seconds_per_second": 30,
     },
     VENICE_VIDEO_I2V_MODEL_MINIMAX: {
-        "button_label": "🎥 Animate (MiniMax H3 Max)",
+        "button_label": "🔞 MiniMax H3 Max",
         "button_style": discord.ButtonStyle.primary,
         "resolution": "768P",
         "durations": [5, 8, 10, 12, 15],
