@@ -34,6 +34,7 @@ from venice_shared import (
     cleanup_temp_files,
     codeblock_safe,
     compress_video_file,
+    estimate_render_seconds,
     extract_urls_from_payload,
     file_looks_like_image,
     file_looks_like_video,
@@ -44,7 +45,6 @@ from venice_shared import (
     get_model_min_short_side,
     get_model_prompt_limit,
     get_model_resolution,
-    get_model_speed_factor,
     get_quota_store,
     get_t2v_profile,
     get_video_budget_for_member,
@@ -52,6 +52,7 @@ from venice_shared import (
     human_bytes,
     is_known_t2v_model,
     is_known_video_model,
+    is_t2v_starter_message,
     log_memory_usage,
     looks_like_image,
     prepare_source_image_for_upload,
@@ -68,7 +69,6 @@ from venice_shared import (
     temp_path,
     trim,
     utc_now,
-    is_t2v_starter_message,
 )
 
 load_dotenv()
@@ -85,7 +85,12 @@ VENICE_VIDEO_I2V_MODEL_DEFAULT = os.getenv("VENICE_VIDEO_I2V_MODEL", DEFAULT_VID
 VIDEO_QUOTA_FILE = os.getenv("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
 
 # ============ SETTINGS ============
-VIDEO_POLL_SECONDS = 6
+# Poll interval is derived per render. A flat 6s gives a fast model only a
+# handful of bar updates before it is already finished.
+VIDEO_POLL_MIN_SECONDS = 2.0
+VIDEO_POLL_MAX_SECONDS = 6.0
+VIDEO_POLL_TARGET_UPDATES = 25
+
 VIDEO_HARD_TIMEOUT_SECONDS = 3000
 VIDEO_ADAPTIVE_TIMEOUT_SECONDS = 900
 VIDEO_ADAPTIVE_BASE_OVERHEAD = 180
@@ -137,12 +142,19 @@ def _resolution_for_model(model_id: str) -> str:
 
 
 def _adaptive_budget_for(model_id: str, seconds: int) -> int:
-    """Wall-clock budget, scaled by the model's own speed factor."""
-    scaled = int(max(1, seconds) * get_model_speed_factor(model_id))
+    """Wall-clock budget for the poll loop, based on the model's own speed."""
+    scaled = estimate_render_seconds(model_id, seconds)
     return min(
         VIDEO_HARD_TIMEOUT_SECONDS,
         max(VIDEO_ADAPTIVE_TIMEOUT_SECONDS, scaled + VIDEO_ADAPTIVE_BASE_OVERHEAD),
     )
+
+
+def _poll_interval_for(model_id: str, seconds: int) -> float:
+    """Aim for ~25 bar updates across the expected runtime."""
+    expected = estimate_render_seconds(model_id, seconds)
+    return max(VIDEO_POLL_MIN_SECONDS,
+               min(VIDEO_POLL_MAX_SECONDS, expected / VIDEO_POLL_TARGET_UPDATES))
 
 
 # ============ COG ============
@@ -172,8 +184,11 @@ class VeniceVideoCog(commands.Cog):
 
     async def cog_load(self):
         await self._ensure_session()
-        self.bot.add_view(T2VStarterView(TEXT_VIDEO_CHANNEL_ID))
-        register_starter_reposter(TEXT_VIDEO_CHANNEL_ID, self._repost_t2v_starter)
+        if TEXT_VIDEO_CHANNEL_ID > 0:
+            self.bot.add_view(T2VStarterView(TEXT_VIDEO_CHANNEL_ID))
+            register_starter_reposter(TEXT_VIDEO_CHANNEL_ID, self._repost_t2v_starter)
+        else:
+            logger.warning("TEXT_VIDEO_CHANNEL_ID is not set - text-to-video disabled.")
         self.temp_janitor.start()
 
     def cog_unload(self):
@@ -193,7 +208,7 @@ class VeniceVideoCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if self._starter_ready:
+        if self._starter_ready or TEXT_VIDEO_CHANNEL_ID <= 0:
             return
         self._starter_ready = True
         channel = self.bot.get_channel(TEXT_VIDEO_CHANNEL_ID)
@@ -326,8 +341,8 @@ class VeniceVideoCog(commands.Cog):
         self, url: str, headers: dict[str, str], visited: Optional[set[str]] = None
     ) -> tuple[Optional[Path], Optional[str]]:
         """
-        Stream a URL to a temp file. Returns (path, kind) where kind is
-        'video' or 'image'. Nothing beyond one chunk is ever held in RAM.
+        Stream a URL to a temp file. Returns (path, kind) with kind in
+        {'video','image'}. Never holds more than one chunk in RAM.
         """
         if not isinstance(url, str) or not url.startswith("http"):
             return None, None
@@ -529,6 +544,14 @@ class VeniceVideoCog(commands.Cog):
         adaptive_deadline = started + timedelta(
             seconds=_adaptive_budget_for(model_id, requested_seconds))
 
+        # Our own estimate is the baseline for the progress bar. The provider
+        # average is only blended in when it looks plausible.
+        own_estimate_ms = estimate_render_seconds(model_id, requested_seconds) * 1000
+        poll_interval = _poll_interval_for(model_id, requested_seconds)
+
+        logger.info("[VID %s] polling every %.1fs, estimate %.0fs",
+                    request_id, poll_interval, own_estimate_ms / 1000)
+
         consecutive_5xx = 0
         total_5xx = 0
         first_5xx_at = None
@@ -541,7 +564,7 @@ class VeniceVideoCog(commands.Cog):
             if utc_now() >= hard_deadline or utc_now() >= adaptive_deadline:
                 break
 
-            await asyncio.sleep(VIDEO_POLL_SECONDS)
+            await asyncio.sleep(poll_interval)
             elapsed_sec = int((utc_now() - started).total_seconds())
 
             try:
@@ -596,7 +619,7 @@ class VeniceVideoCog(commands.Cog):
 
                     consecutive_5xx, first_5xx_at = 0, None
 
-                    # Direct binary body -> stream to disk.
+                    # Direct binary body -> stream straight to disk.
                     if "video" in ctype or "image" in ctype:
                         out_path = temp_path("vdl", "bin")
                         total = 0
@@ -628,15 +651,10 @@ class VeniceVideoCog(commands.Cog):
                         continue
 
                     status = str(data.get("status", "")).lower()
-                    avg_ms = safe_int(data.get("average_execution_time", 180000), 180000)
+                    avg_ms = safe_int(data.get("average_execution_time", 0), 0)
                     exec_ms = safe_int(data.get("execution_duration", 0), 0)
                     if exec_ms <= 0:
                         exec_ms = elapsed_sec * 1000
-
-                    expected_total_sec = int((max(avg_ms, 60000) / 1000) * 2.5) + 120
-                    candidate = started + timedelta(seconds=expected_total_sec)
-                    if candidate > adaptive_deadline:
-                        adaptive_deadline = min(candidate, hard_deadline)
 
                     if status in {"failed", "error", "cancelled", "canceled"}:
                         err = data.get("error")
@@ -675,8 +693,28 @@ class VeniceVideoCog(commands.Cog):
                                 "Rendering finished, but no file was returned.")
                         continue
 
-                    target_ms = max(avg_ms, 120000)
-                    percent = min(97, max(8, int((exec_ms / max(target_ms, 1)) * 100)))
+                    # Progress. The old code used max(avg_ms, 120000) as the
+                    # denominator, which pinned fast models near 20%: a 25s
+                    # MiniMax render divided by 120s can never climb higher.
+                    if 5000 < avg_ms < own_estimate_ms * 3:
+                        target_ms = (avg_ms + own_estimate_ms) // 2
+                    else:
+                        target_ms = own_estimate_ms
+                    target_ms = max(target_ms, 15000)
+
+                    # Stretch the estimate if the render outlives it, so the
+                    # bar keeps creeping instead of sticking at the cap.
+                    if exec_ms > target_ms:
+                        own_estimate_ms = int(exec_ms * 1.25)
+                        target_ms = own_estimate_ms
+
+                        # A slower-than-expected render also needs more budget.
+                        stretched = started + timedelta(
+                            seconds=int(own_estimate_ms / 1000) + 120)
+                        if stretched > adaptive_deadline:
+                            adaptive_deadline = min(stretched, hard_deadline)
+
+                    percent = min(97, max(8, int((exec_ms / target_ms) * 100)))
                     percent = max(percent, last_percent)
 
                     if percent != last_percent:
@@ -1056,6 +1094,9 @@ class VeniceVideoCog(commands.Cog):
     @commands.command(name="video_starter")
     @commands.has_permissions(administrator=True)
     async def video_starter(self, ctx: commands.Context):
+        if TEXT_VIDEO_CHANNEL_ID <= 0:
+            await ctx.send("❌ TEXT_VIDEO_CHANNEL_ID is not set in .env.")
+            return
         channel = self.bot.get_channel(TEXT_VIDEO_CHANNEL_ID)
         if not isinstance(channel, discord.TextChannel):
             await ctx.send("❌ Text-to-video channel not found.")
@@ -1077,19 +1118,44 @@ class VeniceVideoCog(commands.Cog):
                 aspect_info = " • AR: none"
             min_side = profile.get("min_short_side") or 0
             min_info = f" • min short side: {min_side}px" if min_side else ""
+            speed = profile.get("est_seconds_per_second")
             lines.append(f"• `{model_id}` → {profile['button_label']}\n"
                          f"  {profile['resolution']} • {durations}"
-                         f"{aspect_info}{min_info}")
+                         f"{aspect_info}{min_info} • ~{speed}x realtime")
 
         lines.append("\n🎬 **Text → Video**")
         for model_id, profile in TEXT_VIDEO_MODEL_PROFILES.items():
             durations = ", ".join(f"{d}s" for d in profile["durations"])
             ratios = "/".join(profile["aspect_ratios"])
+            speed = profile.get("est_seconds_per_second")
             lines.append(f"• `{model_id}` → {profile['button_label']}\n"
-                         f"  {profile['resolution']} • {durations} • AR: {ratios}")
+                         f"  {profile['resolution']} • {durations} • AR: {ratios}"
+                         f" • ~{speed}x realtime")
 
+        channel_info = (f"<#{TEXT_VIDEO_CHANNEL_ID}>" if TEXT_VIDEO_CHANNEL_ID > 0
+                        else "`not configured`")
         lines.append(f"\nMax per render: **{MAX_VIDEO_RENDER_SECONDS}s** "
-                     f"• Channel: <#{TEXT_VIDEO_CHANNEL_ID}>")
+                     f"• T2V channel: {channel_info}")
+        await ctx.send("\n".join(lines)[:1950])
+
+    @commands.command(name="video_timing")
+    @commands.has_permissions(administrator=True)
+    async def video_timing(self, ctx: commands.Context):
+        """Show the estimates that drive the progress bar and poll interval."""
+        lines = ["⏱️ **Render estimates**"]
+        seen: set[str] = set()
+        for table in (VIDEO_MODEL_PROFILES, TEXT_VIDEO_MODEL_PROFILES):
+            for model_id, profile in table.items():
+                if model_id in seen:
+                    continue
+                seen.add(model_id)
+                parts = []
+                for d in profile["durations"][:3]:
+                    est = estimate_render_seconds(model_id, d)
+                    parts.append(f"{d}s→~{est}s")
+                poll = _poll_interval_for(model_id, profile["durations"][0])
+                lines.append(f"`{model_id}`\n  {' • '.join(parts)} "
+                             f"• poll {poll:.1f}s")
         await ctx.send("\n".join(lines)[:1950])
 
     @commands.command(name="video_test_model")
