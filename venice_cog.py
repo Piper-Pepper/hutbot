@@ -27,6 +27,7 @@ except Exception:
 
 from venice_shared import (
     SERVER_ANIM_ICON,
+    VIDEO_MIN_ROLE_ID,
     AnimateEphemeralView,
     OwnerLockedView,
     add_rating_reactions,
@@ -39,6 +40,7 @@ from venice_shared import (
     get_image_limit_for_member,
     get_member_tier,
     get_quota_store,
+    has_video_access,
     looks_like_image,
     refresh_starter_message,
     register_starter_reposter,
@@ -270,7 +272,13 @@ def get_easy_mode_candidates() -> list[str]:
     return [m for m in MODEL_ORDER if m in active and is_open_model(m)]
 
 
-def get_model_label(model_id: str) -> str:
+def model_label(model_id: str) -> str:
+    """
+    Display label for an IMAGE model.
+    Named `model_label` (not get_model_label) because venice_shared exports a
+    same-named helper for VIDEO models - keeping them distinct avoids a silent
+    shadowing bug if this file ever imports it.
+    """
     base = (MODEL_CONFIG.get(model_id) or {}).get("label", model_id)
     return f"{base} {EASY_MODE_ICON}" if is_open_model(model_id) else base
 
@@ -289,9 +297,12 @@ def snap_to_divisor(value: int, divisor: int) -> int:
     return max(divisor, int(round(value / divisor) * divisor))
 
 
-def dimensions_for_ratio(ratio: str, divisor: int, base_long_side: int = 1024) -> tuple[int, int]:
-    # Regex fix: was r"^(\d+):(\d+)\$" - that matched a literal '$' instead of
-    # end-of-string, so no ratio ever matched and every image ended up 1024x1024.
+def dimensions_for_ratio(
+    ratio: str, divisor: int, base_long_side: int = 1024
+) -> tuple[int, int]:
+    # Regex fix: the old pattern ended with an escaped dollar sign, which
+    # matched a literal '$' instead of end-of-string. No ratio ever matched
+    # and every image silently came out 1024x1024.
     m = re.match(r"^(\d+):(\d+)$", ratio) if ratio != "auto" else None
     if not m:
         side = snap_to_divisor(base_long_side, divisor)
@@ -314,7 +325,9 @@ def channel_suffix(channel_id: Optional[int]) -> str:
     return PROMPT_SUFFIX
 
 
-def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str], Optional[int]]:
+def generation_plan(
+    model_id: str, wanted_resolution: str
+) -> tuple[Optional[str], Optional[int]]:
     native = set(MODEL_CONFIG[model_id]["resolutions"])
     if wanted_resolution in native:
         return wanted_resolution, None
@@ -329,6 +342,8 @@ def generation_plan(model_id: str, wanted_resolution: str) -> tuple[Optional[str
             return "1K", 4
         return None, 4
     return None, None
+
+
 def build_generate_payload(
     model_id: str,
     ratio: str,
@@ -375,7 +390,8 @@ def build_resolution_hint(model_id: str) -> str:
 
 
 def estimate_generation_seconds(
-    model_id: str, steps: int, cfg_scale: float, prompt_len: int, generation_resolution: str
+    model_id: str, steps: int, cfg_scale: float,
+    prompt_len: int, generation_resolution: str,
 ) -> float:
     cfg = MODEL_CONFIG[model_id]
     base = 8.5
@@ -403,17 +419,21 @@ def model_api_timeout(model_id: str, generation_resolution: Optional[str]) -> fl
     return max(60.0, min(base * mult, MAX_API_TIMEOUT))
 
 
-def build_model_options(channel_id: int, include_easy: bool = True) -> list[discord.SelectOption]:
+def build_model_options(
+    channel_id: int, include_easy: bool = True
+) -> list[discord.SelectOption]:
     if channel_id not in ALLOWED_CHANNEL_IDS:
-        return [discord.SelectOption(label="No models in this channel", value=NO_MODEL_VALUE)]
+        return [discord.SelectOption(
+            label="No models in this channel", value=NO_MODEL_VALUE)]
 
     options: list[discord.SelectOption] = []
     if include_easy and get_easy_mode_candidates():
         options.append(discord.SelectOption(label=EASY_MODE_LABEL, value=EASY_MODE_VALUE))
     for model_id in get_active_model_ids():
-        options.append(discord.SelectOption(label=get_model_label(model_id), value=model_id))
+        options.append(discord.SelectOption(label=model_label(model_id), value=model_id))
     if not options:
-        options.append(discord.SelectOption(label="No models available", value=NO_MODEL_VALUE))
+        options.append(discord.SelectOption(
+            label="No models available", value=NO_MODEL_VALUE))
     return options[:25]
 
 
@@ -421,7 +441,7 @@ def build_easy_embed(model_id: str, ratio: str) -> discord.Embed:
     return discord.Embed(
         title=f"⚡ Easy Mode {EASY_MODE_ICON}",
         description=(
-            f"**Model:** {get_model_label(model_id)}\n"
+            f"**Model:** {model_label(model_id)}\n"
             f"**Aspect Ratio:** {ASPECT_LABELS.get(ratio, ratio)}"
         ),
         color=discord.Color.gold(),
@@ -431,7 +451,7 @@ def build_easy_embed(model_id: str, ratio: str) -> discord.Embed:
 def _image_progress_embed(
     user: discord.abc.User,
     prompt: str,
-    model_label: str,
+    label: str,
     ratio: str,
     resolution: str,
     percent: int,
@@ -448,7 +468,7 @@ def _image_progress_embed(
         status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
         quota_name="Quota (24h, shared)",
         quota_state=quota,
-        footer=f"{model_label} • {ASPECT_LABELS.get(ratio, ratio)} • {resolution}",
+        footer=f"{label} • {ASPECT_LABELS.get(ratio, ratio)} • {resolution}",
     )
 
 
@@ -525,8 +545,7 @@ async def venice_generate(
 
                 if resp.status in (429, 500, 502, 503, 504) and attempt < retries:
                     logger.warning(
-                        "[IMG %s] retryable %s: %s", req_id, resp.status, body[:200]
-                    )
+                        "[IMG %s] retryable %s: %s", req_id, resp.status, body[:200])
                     await asyncio.sleep(1.5 * (attempt + 1))
                     continue
 
@@ -591,8 +610,8 @@ async def _upscale_once(
                     else:
                         with contextlib.suppress(Exception):
                             logger.warning(
-                                "upscale status=%s: %s", resp.status, (await resp.text())[:200]
-                            )
+                                "upscale status=%s: %s",
+                                resp.status, (await resp.text())[:200])
             except asyncio.TimeoutError:
                 logger.warning("upscale timeout after %.0fs", UPSCALE_API_TIMEOUT)
                 continue
@@ -649,8 +668,9 @@ async def handle_model_selection(
 
     await send_ephemeral(
         interaction,
-        content=f"{get_model_label(selected)} selected. Now choose an aspect ratio:",
-        view=AspectRatioSelectView(session, selected, hidden_suffix, owner_id, previous_inputs),
+        content=f"{model_label(selected)} selected. Now choose an aspect ratio:",
+        view=AspectRatioSelectView(
+            session, selected, hidden_suffix, owner_id, previous_inputs),
     )
 
 
@@ -764,7 +784,7 @@ class EasyModeModal(discord.ui.Modal):
 
         super().__init__(
             title=(
-                f"Easy Mode {EASY_MODE_ICON} • {get_model_label(model_id)} "
+                f"Easy Mode {EASY_MODE_ICON} • {model_label(model_id)} "
                 f"• {ASPECT_LABELS.get(ratio, ratio)}"
             )[:45]
         )
@@ -808,12 +828,14 @@ class EasyModeModal(discord.ui.Modal):
         await send_ephemeral(
             interaction,
             content=(
-                f"✅ Easy Mode: {get_model_label(self.model_id)} "
+                f"✅ Easy Mode: {model_label(self.model_id)} "
                 f"• {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
                 f"{build_resolution_hint(self.model_id)}\nChoose resolution:"
             ),
             view=ResolutionSelectView(self.session, generation_data),
         )
+
+
 class GenerationModal(discord.ui.Modal):
     def __init__(
         self,
@@ -834,7 +856,7 @@ class GenerationModal(discord.ui.Modal):
         cfg = MODEL_CONFIG[model_id]
         fixed_steps = cfg["default_steps"] == cfg["max_steps"]
         super().__init__(
-            title=f"{get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}"[:45]
+            title=f"{model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)}"[:45]
         )
 
         self.prompt = discord.ui.TextInput(
@@ -934,7 +956,7 @@ class GenerationModal(discord.ui.Modal):
         await send_ephemeral(
             interaction,
             content=(
-                f"✅ {get_model_label(self.model_id)} "
+                f"✅ {model_label(self.model_id)} "
                 f"• {ASPECT_LABELS.get(self.ratio, self.ratio)}\n"
                 f"{build_resolution_hint(self.model_id)}\nChoose resolution:"
             ),
@@ -967,21 +989,22 @@ class ResolutionSelectView(OwnerLockedView):
     def _make_resolution_callback(self, resolution: str):
         async def callback(interaction: discord.Interaction):
             if not isinstance(interaction.user, discord.Member):
-                await send_ephemeral(interaction, "❌ This action can only be used in a server.")
+                await send_ephemeral(
+                    interaction, "❌ This action can only be used in a server.")
                 return
 
             current_tier = get_member_tier(interaction.user)
             needed_tier = required_tier_for_resolution(resolution)
             if current_tier < needed_tier:
                 await send_resolution_lock_message(
-                    interaction, resolution, needed_tier, current_tier
-                )
+                    interaction, resolution, needed_tier, current_tier)
                 return
 
             await interaction.response.defer(ephemeral=True)
             if interaction.message:
                 with contextlib.suppress(Exception):
-                    await interaction.message.edit(view=None, content="✅ Resolution selected.")
+                    await interaction.message.edit(
+                        view=None, content="✅ Resolution selected.")
             await self.generate_image(interaction, resolution)
 
         return callback
@@ -1040,12 +1063,13 @@ class ResolutionSelectView(OwnerLockedView):
             )
             api_timeout = model_api_timeout(model_id, effective_gen_res)
             gen_cap = 82 if upscale_factor in (2, 4) else 97
+            label = model_label(model_id)
 
             # Ephemeral progress message: visible only to the triggering user.
             progress_msg = await send_ephemeral(
                 interaction,
                 embed=_image_progress_embed(
-                    interaction.user, prompt_text, get_model_label(model_id),
+                    interaction.user, prompt_text, label,
                     ratio, resolution, 0, est_gen, "Initializing request...", state,
                 ),
             )
@@ -1056,7 +1080,7 @@ class ResolutionSelectView(OwnerLockedView):
 
             def gen_embed(percent: int, eta: float) -> discord.Embed:
                 return _image_progress_embed(
-                    interaction.user, prompt_text, get_model_label(model_id),
+                    interaction.user, prompt_text, label,
                     ratio, resolution, percent, eta, "Generating image...", state,
                 )
 
@@ -1080,12 +1104,13 @@ class ResolutionSelectView(OwnerLockedView):
 
                 def up_embed(percent: int, eta: float) -> discord.Embed:
                     return _image_progress_embed(
-                        interaction.user, prompt_text, get_model_label(model_id),
+                        interaction.user, prompt_text, label,
                         ratio, resolution, percent, eta,
                         f"Upscaling {upscale_factor}x...", state,
                     )
 
-                await run_with_progress(up_task, progress_msg, est_up, gen_cap, 99, up_embed, 4.0)
+                await run_with_progress(
+                    up_task, progress_msg, est_up, gen_cap, 99, up_embed, 4.0)
                 upscaled = await up_task
                 if upscaled:
                     image_bytes = upscaled
@@ -1145,7 +1170,7 @@ class ResolutionSelectView(OwnerLockedView):
             upflag = "📈" if upscaled_success else ""
             embed.set_footer(
                 text=(
-                    f"{get_model_label(model_id)} • {ASPECT_LABELS.get(ratio, ratio)} "
+                    f"{label} • {ASPECT_LABELS.get(ratio, ratio)} "
                     f"• 🧱 {resolution}{upflag} • 🤖 {cfg_val} • 🪜 {steps}"
                 ),
                 icon_url=guild_icon,
@@ -1161,7 +1186,8 @@ class ResolutionSelectView(OwnerLockedView):
                 filename_fallback="image",
             )
             if posted is None:
-                await send_ephemeral(interaction, "❌ Upload failed after compression retries.")
+                await send_ephemeral(
+                    interaction, "❌ Upload failed after compression retries.")
                 return
 
             quota_success = True
@@ -1170,21 +1196,36 @@ class ResolutionSelectView(OwnerLockedView):
             quota_now = await image_quota.peek(
                 interaction.guild.id, interaction.user.id, image_limit
             )
-            await send_ephemeral(
-                interaction,
-                content=build_generation_success_text(
-                    quota_now,
-                    kind="image",
-                    extra="Use the buttons below if you want to animate this image.",
-                ),
-                view=AnimateEphemeralView(
-                    owner_id=interaction.user.id,
-                    source_channel_id=interaction.channel.id,
-                    source_message_id=posted.id,
-                    prompt_text=prompt_text,
-                    ratio=ratio,
-                ),
-            )
+
+            # Animate buttons only make sense with video access. Without the
+            # Tier-1 role every click would just return a lock message, so we
+            # show a one-line hint instead of dead buttons.
+            can_animate = has_video_access(member)
+            if can_animate:
+                await send_ephemeral(
+                    interaction,
+                    content=build_generation_success_text(
+                        quota_now,
+                        kind="image",
+                        extra="🎬 Animate this image with the buttons below.",
+                    ),
+                    view=AnimateEphemeralView(
+                        owner_id=interaction.user.id,
+                        source_channel_id=interaction.channel.id,
+                        source_message_id=posted.id,
+                        prompt_text=prompt_text,
+                        ratio=ratio,
+                    ),
+                )
+            else:
+                await send_ephemeral(
+                    interaction,
+                    content=build_generation_success_text(
+                        quota_now,
+                        kind="image",
+                        extra=f"🎬 Animation needs <@&{VIDEO_MIN_ROLE_ID}>.",
+                    ),
+                )
 
         finally:
             # Safety net if any code path skipped the explicit delete above.

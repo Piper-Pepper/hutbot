@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 from venice_shared import (
     SERVER_ANIM_ICON,
+    VIDEO_MIN_ROLE_ID,
     AnimateEphemeralView,
     add_rating_reactions,
     build_generation_success_text,
@@ -31,6 +32,7 @@ from venice_shared import (
     eta_text,
     extract_image_from_response,
     get_quota_store,
+    has_video_access,
     looks_like_image,
     refresh_starter_message,
     register_starter_reposter,
@@ -129,7 +131,12 @@ MODELS: dict[str, dict[str, Any]] = {
 MODEL_ORDER = list(MODELS.keys())
 
 
-def get_model_label(model_id: str) -> str:
+def face_model_label(model_id: str) -> str:
+    """
+    Long label for an EDIT model.
+    Renamed from get_model_label() to avoid shadowing the same-named helper
+    that venice_shared now exports for video models.
+    """
     return (MODELS.get(model_id) or {}).get("label", model_id)
 
 
@@ -355,7 +362,8 @@ def _mentions_image_field(body_text: str) -> bool:
 
 
 def _encode_image(image_bytes: bytes, style: str) -> str:
-    return bytes_to_data_url(image_bytes) if style == IMAGE_STYLE_DATAURL else bytes_to_b64(image_bytes)
+    return (bytes_to_data_url(image_bytes) if style == IMAGE_STYLE_DATAURL
+            else bytes_to_b64(image_bytes))
 
 
 def _apply_optional(payload: dict[str, Any], blocked: set[str]) -> None:
@@ -370,7 +378,9 @@ def _apply_optional(payload: dict[str, Any], blocked: set[str]) -> None:
             payload[k] = v
 
 
-def _build_single_edit_payload(model_id: str, prompt: str, face_bytes: bytes) -> dict[str, Any]:
+def _build_single_edit_payload(
+    model_id: str, prompt: str, face_bytes: bytes
+) -> dict[str, Any]:
     blocked = model_caps.blocked(model_id)
     style = model_caps.image_style(model_id)
     payload: dict[str, Any] = {
@@ -434,7 +444,9 @@ class FaceReferenceCache:
             if not self.url or session is None or session.closed:
                 return None
             try:
-                async with session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                async with session.get(
+                    self.url, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
                     if resp.status != 200:
                         return None
                     raw = await resp.read()
@@ -495,7 +507,8 @@ class FacePoolStore:
         try:
             self.config_file.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.config_file.with_suffix(f".tmp.{os.getpid()}")
-            tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(
+                json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, self.config_file)
         except Exception as e:
             logger.warning("Face pool save failed: %s", e)
@@ -547,7 +560,8 @@ class FacePoolStore:
         return list(self._data["face_slots"])
 
     async def read_random_face(self) -> tuple[Optional[bytes], Optional[int]]:
-        slots = [(i, p) for i, p in enumerate(self.get_face_slots()) if p and Path(p).exists()]
+        slots = [(i, p) for i, p in enumerate(self.get_face_slots())
+                 if p and Path(p).exists()]
         if not slots:
             return None, None
         i, chosen = random.choice(slots)
@@ -593,7 +607,9 @@ async def venice_edit(
             model_caps.describe(model_id),
         )
         try:
-            async with session.post(endpoint, headers=headers, json=payload, timeout=timeout) as resp:
+            async with session.post(
+                endpoint, headers=headers, json=payload, timeout=timeout
+            ) as resp:
                 if resp.status == 200:
                     img = await extract_image_from_response(resp)
                     if img and looks_like_image(img):
@@ -621,7 +637,8 @@ async def venice_edit(
                         current = model_caps.image_style(model_id)
                         healed = False
                         for style in IMAGE_STYLE_ORDER:
-                            if style != current and model_caps.set_image_style(model_id, style):
+                            if style != current and model_caps.set_image_style(
+                                    model_id, style):
                                 heals += 1
                                 healed = True
                                 break
@@ -683,7 +700,9 @@ def is_starter_message(msg: discord.Message) -> bool:
     return (msg.content or "").strip() in LEGACY_STARTER_TEXTS
 
 
-def _face_progress_embed(user, prompt, mode_id, model_id, percent, eta_sec, stage, quota) -> discord.Embed:
+def _face_progress_embed(
+    user, prompt, mode_id, model_id, percent, eta_sec, stage, quota
+) -> discord.Embed:
     return build_progress_embed(
         title="🎭 FACE IMAGE RENDER",
         color=discord.Color.purple(),
@@ -691,7 +710,9 @@ def _face_progress_embed(user, prompt, mode_id, model_id, percent, eta_sec, stag
         status_lines=[stage, f"ETA: `{eta_text(eta_sec)}`"],
         quota_name="Quota (24h, shared)",
         quota_state=quota,
-        footer=f"{get_mode_short_label(mode_id)} • {get_model_short_label(model_id)} • {_model_param_footer(model_id)}",
+        footer=(f"{get_mode_short_label(mode_id)} • "
+                f"{get_model_short_label(model_id)} • "
+                f"{_model_param_footer(model_id)}"),
     )
 # venice_face_cog.py — Part 2/2
 
@@ -912,9 +933,14 @@ async def run_face_generation(
         )
         embed.add_field(name="Mode", value=get_mode_short_label(mode_id), inline=True)
         embed.add_field(name="Model", value=get_model_short_label(model_id), inline=True)
-        guild_icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
+        guild_icon = (
+            interaction.guild.icon.url
+            if interaction.guild and interaction.guild.icon else None
+        )
         embed.set_footer(
-            text=f"{get_mode_short_label(mode_id)} • {get_model_short_label(model_id)} • {_model_param_footer(model_id)}",
+            text=(f"{get_mode_short_label(mode_id)} • "
+                  f"{get_model_short_label(model_id)} • "
+                  f"{_model_param_footer(model_id)}"),
             icon_url=guild_icon,
         )
 
@@ -937,21 +963,35 @@ async def run_face_generation(
         quota_now = await image_quota.peek(
             interaction.guild.id, interaction.user.id, image_limit
         )
-        await send_ephemeral(
-            interaction,
-            content=build_generation_success_text(
-                quota_now,
-                kind="face_image",
-                extra="Use the buttons below if you want to animate this image.",
-            ),
-            view=AnimateEphemeralView(
-                owner_id=interaction.user.id,
-                source_channel_id=interaction.channel.id,
-                source_message_id=posted.id,
-                prompt_text=user_prompt,
-                ratio="16:9",
-            ),
-        )
+
+        # Animate buttons only make sense with video access. Without a tier
+        # role every click would return a lock message, so we show a one-line
+        # hint instead of dead buttons.
+        if has_video_access(member):
+            await send_ephemeral(
+                interaction,
+                content=build_generation_success_text(
+                    quota_now,
+                    kind="face_image",
+                    extra="🎬 Animate this image with the buttons below.",
+                ),
+                view=AnimateEphemeralView(
+                    owner_id=interaction.user.id,
+                    source_channel_id=interaction.channel.id,
+                    source_message_id=posted.id,
+                    prompt_text=user_prompt,
+                    ratio="16:9",
+                ),
+            )
+        else:
+            await send_ephemeral(
+                interaction,
+                content=build_generation_success_text(
+                    quota_now,
+                    kind="face_image",
+                    extra=f"🎬 Animation needs <@&{VIDEO_MIN_ROLE_ID}>.",
+                ),
+            )
 
     finally:
         if progress_msg:
@@ -981,7 +1021,8 @@ async def _build_config_panel() -> tuple[list[discord.Embed], list[discord.File]
     main = discord.Embed(
         title="🎭 Face Pool Configuration",
         description=(
-            f"**Face Slots ({FACE_SLOT_COUNT})** — one picked randomly per generation for ALL modes.\n\n"
+            f"**Face Slots ({FACE_SLOT_COUNT})** — one picked randomly per generation "
+            f"for ALL modes.\n\n"
             "**Buttons on the starter message:**\n"
             "• 🔞 `Nude V1` — qwen-edit-uncensored\n"
             "• 🔞 `Nude V2` — seedream-v5-pro-edit\n"
@@ -1046,10 +1087,12 @@ class FaceConfigView(discord.ui.View):
     async def _refresh(self, interaction: discord.Interaction, *, response: bool = True):
         embeds, files = await _build_config_panel()
         if response:
-            await interaction.response.edit_message(embeds=embeds, attachments=files, view=self)
+            await interaction.response.edit_message(
+                embeds=embeds, attachments=files, view=self)
         else:
             with contextlib.suppress(Exception):
-                await interaction.edit_original_response(embeds=embeds, attachments=files, view=self)
+                await interaction.edit_original_response(
+                    embeds=embeds, attachments=files, view=self)
 
     async def _await_upload(self, interaction, index: int, label: str):
         await interaction.response.send_message(
@@ -1072,7 +1115,8 @@ class FaceConfigView(discord.ui.View):
             )
 
         try:
-            msg: discord.Message = await self.bot.wait_for("message", check=check, timeout=90.0)
+            msg: discord.Message = await self.bot.wait_for(
+                "message", check=check, timeout=90.0)
         except asyncio.TimeoutError:
             await interaction.followup.send("⏱️ Upload timeout.", ephemeral=True)
             return
