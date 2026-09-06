@@ -62,6 +62,11 @@ DISCORD_UPLOAD_LIMIT_FALLBACK_MB = env_int("DISCORD_UPLOAD_LIMIT_FALLBACK_MB", 1
 DISCORD_UPLOAD_SAFETY_BYTES = env_int("DISCORD_UPLOAD_SAFETY_BYTES", 512 * 1024)
 DEFAULT_WINDOW_SECONDS = 24 * 60 * 60
 
+# Quota files. Declared here so the shared status helper can read both stores
+# without importing the cogs (which would create a circular import).
+IMAGE_QUOTA_FILE = env_str("IMAGE_QUOTA_FILE", "goonhut_image_quota.json")
+VIDEO_QUOTA_FILE = env_str("VIDEO_QUOTA_FILE", "goonhut_video_quota.json")
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -1138,6 +1143,38 @@ async def add_rating_reactions(
     return ok
 
 
+# ============ PERSONAL STATUS ============
+async def build_personal_status_line(
+    member: Optional[discord.Member], guild_id: int
+) -> str:
+    """
+    Compact personal status: highest tier role, both allowances and what is
+    left in the current 24h window. Used in ephemeral replies where the
+    public starter message cannot show per-user numbers.
+    """
+    tier = get_member_tier(member)
+    if tier <= 0 or member is None:
+        return (f"🔓 **No Tier role** — video locked, "
+                f"images capped at **{DEFAULT_IMAGE_LIMIT_24H}/24h**.")
+
+    img_limit = get_image_limit_for_member(member)
+    vid_limit = get_video_budget_for_member(member)
+
+    img_state = await get_quota_store(IMAGE_QUOTA_FILE).peek(
+        guild_id, member.id, img_limit)
+    vid_state = await get_quota_store(VIDEO_QUOTA_FILE).peek(
+        guild_id, member.id, vid_limit)
+
+    role_id = TIER_RULES[tier]["role_id"]
+    reset_state = vid_state if vid_state.get("reset_at") else img_state
+    return (
+        f"👑 <@&{role_id}> • Tier {tier}\n"
+        f"🖼️ Images **{img_state['remaining']}/{img_limit}** left  •  "
+        f"🎬 Video **{vid_state['remaining']}/{vid_limit}s** left\n"
+        f"⏳ {format_reset_line(reset_state)}"
+    )
+
+
 # ============ QUOTA / LOCK MESSAGES ============
 def build_image_quota_text(member: Optional[discord.Member], state: dict[str, int]) -> str:
     tier = get_member_tier(member)
@@ -1190,7 +1227,8 @@ async def send_image_quota_message(
 async def send_video_role_locked(interaction: discord.Interaction) -> None:
     await send_ephemeral(
         interaction,
-        f"🔒 Video generation requires <@&{VIDEO_MIN_ROLE_ID}> (Tier 1 • Level 3).",
+        f"🔒 Video generation requires a Tier role — starting at "
+        f"<@&{VIDEO_MIN_ROLE_ID}> (Level 3).",
     )
 
 
@@ -1750,12 +1788,12 @@ class AnimatePromptModal(discord.ui.Modal):
             return
 
         profile = get_video_profile(self.model_id)
+        status = await build_personal_status_line(interaction.user, interaction.guild.id)
         await send_ephemeral(
             interaction,
-            content=(f"✅ Prompt set • **{profile['button_label']}** "
-                     f"({profile['resolution']})\n"
-                     f"⏱ Choose length (remaining: **{remaining}s**, "
-                     f"max **{MAX_VIDEO_RENDER_SECONDS}s**):"),
+            content=(f"✅ **{profile['button_label']}** • {profile['resolution']}\n"
+                     f"{status}\n\n"
+                     f"⏱ Choose length:"),
             view=AnimateDurationView(
                 owner_id=self.owner_id,
                 source_channel_id=self.source_channel_id,
@@ -1946,22 +1984,15 @@ T2V_STARTER_MARKER = "🎬 **TEXT → VIDEO**"
 
 
 def build_t2v_starter_text() -> str:
-    lines = [
-        T2V_STARTER_MARKER,
-        "Pick a model, type your prompt, choose ratio and length.",
-        "",
-    ]
-    for profile in TEXT_VIDEO_MODEL_PROFILES.values():
-        durations = "/".join(f"{d}s" for d in profile["durations"])
-        lines.append(f"• **{profile['button_label']}** — "
-                     f"{profile['resolution']} • {durations}")
-    lines += [
-        "",
-        "🔞 = uncensored model.",
-        f"Requires <@&{VIDEO_MIN_ROLE_ID}>. "
-        f"Seconds share your daily video budget: `{video_tier_line()}`",
-    ]
-    return "\n".join(lines)
+    """
+    Public starter message. Deliberately generic - per-user numbers cannot
+    live here, they are shown in the ephemeral reply after a button press.
+    """
+    return (
+        f"{T2V_STARTER_MARKER}\n"
+        "No image needed. Type a prompt, pick ratio and length, done.\n\n"
+        "🔞 = uncensored model\n"        
+    )
 
 
 def is_t2v_starter_message(msg: discord.Message) -> bool:
@@ -2016,8 +2047,7 @@ class T2VPromptModal(discord.ui.Modal):
             return
 
         profile = get_t2v_profile(self.model_id)
-        remaining = int(info["remaining"])
-        cap = min(MAX_VIDEO_RENDER_SECONDS, remaining)
+        cap = min(MAX_VIDEO_RENDER_SECONDS, int(info["remaining"]))
         allowed = [s for s in profile["durations"] if s <= cap]
 
         if not allowed:
@@ -2028,11 +2058,12 @@ class T2VPromptModal(discord.ui.Modal):
             )
             return
 
+        status = await build_personal_status_line(interaction.user, interaction.guild.id)
         await send_ephemeral(
             interaction,
-            content=(f"✅ Prompt set • **{profile['button_label']}** "
-                     f"({profile['resolution']})\n"
-                     f"Pick ratio and length (remaining: **{remaining}s**):"),
+            content=(f"✅ **{profile['button_label']}** • {profile['resolution']}\n"
+                     f"{status}\n\n"
+                     f"Pick ratio and length:"),
             view=T2VOptionsView(
                 owner_id=self.owner_id,
                 channel_id=self.channel_id,
