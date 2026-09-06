@@ -1990,7 +1990,7 @@ def build_t2v_starter_text() -> str:
     """
     return (
         f"{T2V_STARTER_MARKER}\n"
-        "No image needed. Type a prompt, pick ratio and length, done.\n\n"
+        "No image needed. Type a prompt, pick ratio and length, done.\n"
         "🔞 = uncensored model\n"        
     )
 
