@@ -33,6 +33,10 @@ if TYPE_CHECKING:
 _DISCORD_SELECT_MAX = 25
 _ROLE_SELECT_MAX = max(1, min(_DISCORD_SELECT_MAX, MAX_EXTRA_PING_ROLES))
 
+# Size (px) of the winner avatar in the solved ping post. 256 is clearly
+# visible without eating half the screen height on a phone; 1024 does.
+SOLVER_AVATAR_SIZE = 256
+
 # Completeness icons. Used IDENTICALLY in the slot list, the select menu and
 # the summary line – that consistency is what makes a legend unnecessary.
 ICON_NO_ROLES = "🎯"
@@ -70,7 +74,8 @@ ICON_NO_SOLUTION_IMAGE = "🧩"
 #     line as the name, which costs zero layout width
 #   * set_thumbnail() is not used at all
 #   * set_image() is only used where a full-width picture actually carries
-#     information (the riddle image, the solution image)
+#     information (the riddle image, the solution image, and – in the ping
+#     post – the winner's avatar, which IS the content there)
 #   * at most TWO inline fields per row; three would drop each to a third of
 #     the width and wrap mid-value on mobile
 #
@@ -109,6 +114,44 @@ def _first_line(text: Optional[str], max_len: int = 200) -> str:
         # to the whole text rather than showing an empty preview.
         flat = strip_markdown(raw)
     return truncate_words(flat, max_len) if flat else "*no solution set*"
+
+
+def _format_solve_minutes(hours: Optional[float]) -> Optional[str]:
+    """
+    Solve duration as MINUTES – the number shown in the ping post.
+
+    Anything from an hour upwards is handed to format_duration_hours(),
+    otherwise the post would eventually read "in 2874 min", which nobody parses.
+    Returns None when there is no usable duration, so callers can simply drop
+    the whole phrase instead of printing "in 0 min".
+    """
+    if hours is None or hours < 0:
+        return None
+    total_min = int(round(hours * 60))
+    if total_min < 1:
+        return "under a minute"
+    if total_min < 60:
+        return f"{total_min} min"
+    return format_duration_hours(hours)
+
+
+def _avatar_big(url: Optional[str], size: int = SOLVER_AVATAR_SIZE) -> Optional[str]:
+    """
+    Force a Discord CDN avatar URL to a fixed edge length.
+
+    Discord never upscales an embed image beyond its real pixel size, and
+    display_avatar.url often carries ?size=32 or ?size=128 – dropped into
+    set_image() that renders as a postage stamp. Rewriting the query fixes it.
+
+    Non-CDN URLs are returned unchanged when they are valid http(s); a caller
+    that stored a custom avatar host still gets a picture, just not resized.
+    """
+    if not is_http_url(url):
+        return None
+    base, sep, _query = url.partition("?")
+    if "cdn.discordapp.com" in base or "media.discordapp.net" in base:
+        return f"{base}?size={size}"
+    return url
 
 
 def _riddle_display_no(riddle: dict) -> int:
@@ -435,35 +478,60 @@ def build_fresh_solved_post_embed(
 def build_solved_ping_post_embed(
     guild: Optional[discord.Guild], riddle: dict, solver_mention: str,
     solver_avatar_url: Optional[str], submitted_answer: str = "",
+    solver_display_name: str = "",
 ) -> discord.Embed:
     """
     The notification twin of the winner post.
 
     This is the message that actually pings, so it may well be opened straight
     from a notification with zero context – hence the SHORT riddle anchor.
-    Answer, solution and images stay out; the big post sits directly above.
+    Answer, solution and the riddle/solution images stay out; the big post sits
+    directly above and carries all of that.
 
-    Reward, level and duration share ONE line: two half-width fields holding a
-    single word each look like a broken table on a phone.
+    Two things ARE here on purpose:
+      * the solve time in MINUTES, inside the headline sentence rather than in
+        a field further down – it is the one number people react to
+      * the winner's avatar as a full-width image. This post has almost no text,
+        so there is no column for a thumbnail to squeeze; the avatar IS the
+        content, and it makes the notification instantly recognisable.
+
+    solver_display_name is optional and only drives the small author line; every
+    existing positional call site keeps working without it.
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
+
+    took = _solve_duration(riddle)
+    took_str = _format_solve_minutes(took)
+    if took_str:
+        headline = f"{solver_mention} cracked it first — in **{took_str}**! 🎉"
+    else:
+        # No usable duration (post was re-anchored, clock skew, missing stamp):
+        # drop the phrase entirely instead of printing "in 0 min".
+        headline = f"{solver_mention} cracked it first! 🎉"
 
     e = discord.Embed(
         title=f"🧩 Riddle {_tag(riddle)} — solved",
         # Deliberately NOT another "Congratulations" – the post above already
         # says it, two centimetres higher.
-        description=f"{solver_mention} cracked it! 🎉",
+        description=headline,
         color=discord.Color.green(),
     )
+    if solver_display_name:
+        _set_author_user(e, solver_display_name, solver_avatar_url)
+
     _add_riddle_anchor(e, riddle)
 
-    bits = [f"🏆 **{xp} XP**", level_badge(xp)]
-    took = _solve_duration(riddle)
-    if took is not None:
-        bits.append(f"⌛ **{format_duration_hours(took)}**")
+    # The duration already sits in the headline, so this row is reward + level
+    # only – repeating it here would print the same value twice, 1 cm apart.
     # Zero-width space: Discord rejects an empty field name but renders this as
     # a blank line, which keeps the row from growing a redundant header.
-    e.add_field(name="\u200b", value=" · ".join(bits), inline=False)
+    e.add_field(name="\u200b",
+                value=" · ".join([f"🏆 **{xp} XP**", level_badge(xp)]),
+                inline=False)
+
+    big_avatar = _avatar_big(solver_avatar_url)
+    if big_avatar:
+        e.set_image(url=big_avatar)
 
     e.set_footer(text="Answer & solution in the post above")
     return e
@@ -996,9 +1064,12 @@ class PingRolesPickerView(View):
         self.stop()
 
     async def on_role_select(self, interaction: Interaction):
-        self._picked_ids = self._filter_ids([r.id for r in self.role_select.values])
+        # Defer FIRST: reading the values is instant, but the message edit that
+        # follows is a network round trip. Doing it the other way round burns
+        # part of the 3-second response window for no reason.
         if not await safe_defer(interaction, ephemeral=True):
             return
+        self._picked_ids = self._filter_ids([r.id for r in self.role_select.values])
         preview = ", ".join(f"<@&{r}>" for r in self._picked_ids) or "*none*"
         with contextlib.suppress(discord.HTTPException, discord.NotFound):
             if self.picker_message:
@@ -1459,6 +1530,9 @@ class RiddleAdminPanelView(View):
         rid_s1 = to_int(slot1_row.get("id"), 0)
         pending = await self.cog.repo.count_pending_submissions_for_riddle(rid_s1)
         remaining_h = UNSOLVED_ROTATION_HOURS - age_h
+        # Once the deadline has passed, remaining_h is NEGATIVE. Feeding that
+        # straight into format_duration_hours() printed "overdue by -3h 12m".
+        overdue_h = abs(min(0.0, remaining_h))
         bonus_note = (f" · would add **+{UNSOLVED_ROTATION_XP_BONUS} XP**"
                       if UNSOLVED_ROTATION_XP_BONUS > 0 else "")
 
@@ -1472,13 +1546,13 @@ class RiddleAdminPanelView(View):
                         f"⏸ **{pending} open vote(s)** — the move is blocked until "
                         f"they are decided.")
             return (f"⛔ **BLOCKED** — {pending} open vote(s). The riddle stays in "
-                    f"**#1** (overdue by `{format_duration_hours(remaining_h)}`).\n"
+                    f"**#1** (overdue by `{format_duration_hours(overdue_h)}`).\n"
                     f"Vote 👍/👎 in the vote channel to release the queue.")
 
         if remaining_h > 0:
             return f"🕒 auto-move in `{format_duration_hours(remaining_h)}`{bonus_note}"
         return (f"🚨 auto-move on next tick "
-                f"(overdue by `{format_duration_hours(remaining_h)}`){bonus_note}")
+                f"(overdue by `{format_duration_hours(overdue_h)}`){bonus_note}")
 
     # ----------------------------------------------------------------- embeds
     def _slot_lines(self) -> list[str]:
