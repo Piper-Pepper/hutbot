@@ -17,7 +17,13 @@ from discord import app_commands, Interaction
 from dotenv import load_dotenv
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+
+# Only configure logging when nobody else has. If the host application already
+# installed handlers, basicConfig() would be a silent no-op anyway – and on the
+# rare occasion it is NOT, it would override the host's setup. Either way the
+# module has no business deciding this for a bot it is only a plugin of.
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("riddle_system")
 
 
@@ -479,6 +485,12 @@ def truncate_text(text: Optional[str], max_len: int = 180) -> str:
 _MD_INLINE_RE = re.compile(r"[*_~`|]")
 _MD_LINE_PREFIX_RE = re.compile(
     r"^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)", re.MULTILINE)
+
+# [label](url) -> label
+# NOTE: every bracket and parenthesis in here is load-bearing. A previous
+# revision had them all replaced by '$', which still COMPILES (as an end-of-line
+# anchor) but matches nothing, so markdown links survived into previews and got
+# chopped mid-URL.
 _MD_LINK_RE = re.compile(r"$$([^$$]*)$$$$[^)]*$$")
 
 
@@ -705,6 +717,51 @@ SLOT_QUEUE_FULL = -1
 # =============================================================================
 # DB REPO
 # =============================================================================
+# ---------------------------------------------------------------------------
+# UNIQUE INDEXES – CREATED SEPARATELY, ON PURPOSE
+# ---------------------------------------------------------------------------
+# These are NOT part of the executescript() schema block any more.
+#
+# CREATE UNIQUE INDEX fails when the EXISTING rows violate the constraint, and
+# "IF NOT EXISTS" does not help – it only checks whether the index NAME is
+# taken. One leftover duplicate (from a crash mid-rotation, or from a build
+# that predates the index) therefore aborted _init_db(), which aborted
+# repo.start(), which aborted setup() – and the whole extension silently never
+# loaded, with the rest of the bot running as if nothing happened.
+#
+# Now each index is attempted on its own. A failure is logged loudly and the
+# system keeps running; the corresponding invariant is still enforced in
+# application code, it just loses its DB-level safety net until the offending
+# rows are cleaned up.
+# ---------------------------------------------------------------------------
+_UNIQUE_INDEXES: tuple[tuple[str, str, str], ...] = (
+    (
+        "idx_riddle_slot_open",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_slot_open "
+        "ON riddles(guild_id, slot_no) WHERE status='open' AND slot_no IS NOT NULL",
+        "two open riddles share a slot_no",
+    ),
+    (
+        "idx_riddle_active_one",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_active_one "
+        "ON riddles(guild_id) WHERE status='open' AND is_active=1",
+        "more than one open riddle is flagged is_active=1",
+    ),
+    (
+        "idx_riddle_posted_msg",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_posted_msg "
+        "ON riddles(posted_message_id) WHERE posted_message_id IS NOT NULL",
+        "the same posted_message_id is referenced twice",
+    ),
+    (
+        "idx_sub_vote_msg",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_vote_msg "
+        "ON submissions(vote_message_id) WHERE vote_message_id IS NOT NULL",
+        "the same vote_message_id is referenced twice",
+    ),
+)
+
+
 class RiddleRepo:
     """
     Transaction contract
@@ -725,6 +782,10 @@ class RiddleRepo:
     def __init__(self):
         self.db: Optional[aiosqlite.Connection] = None
         self.lock = asyncio.Lock()
+        # Indexes that could not be created because of conflicting data.
+        # Exposed so a health command can surface them instead of hiding the
+        # degraded state in a log line nobody reads.
+        self.degraded_indexes: list[str] = []
 
     # ---------------------------------------------------------------- lifecycle
     async def start(self):
@@ -745,7 +806,13 @@ class RiddleRepo:
             with contextlib.suppress(Exception):
                 await db.close()
             raise
-        logger.info("RiddleRepo ready (db=%s)", DB_PATH)
+        if self.degraded_indexes:
+            logger.error(
+                "RiddleRepo ready BUT running DEGRADED – missing unique index(es): %s. "
+                "Clean the conflicting rows and restart to restore DB-level safety.",
+                ", ".join(self.degraded_indexes))
+        else:
+            logger.info("RiddleRepo ready (db=%s)", DB_PATH)
 
     async def close(self):
         db, self.db = self.db, None
@@ -787,6 +854,25 @@ class RiddleRepo:
             await self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
             logger.info("Migration: added %s.%s", table, col_name)
 
+    async def _create_unique_indexes(self):
+        """
+        Create the partial UNIQUE indexes one by one, tolerating failure.
+
+        See the _UNIQUE_INDEXES comment block above for the full reasoning: a
+        single conflicting row must degrade one invariant, not kill the bot.
+        """
+        assert self.db is not None
+        self.degraded_indexes = []
+        for name, sql, hint in _UNIQUE_INDEXES:
+            try:
+                await self.db.execute(sql)
+            except Exception:
+                self.degraded_indexes.append(name)
+                logger.error(
+                    "Could not create unique index %s – most likely %s. The riddle "
+                    "system keeps running, but this invariant is now only enforced "
+                    "in application code.", name, hint, exc_info=True)
+
     async def _init_db(self):
         assert self.db is not None
         schema = """
@@ -819,12 +905,6 @@ class RiddleRepo:
             closed_by INTEGER,
             closed_at TEXT
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_slot_open
-            ON riddles(guild_id, slot_no) WHERE status='open' AND slot_no IS NOT NULL;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_active_one
-            ON riddles(guild_id) WHERE status='open' AND is_active=1;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_riddle_posted_msg
-            ON riddles(posted_message_id) WHERE posted_message_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_riddles_guild_status_slot
             ON riddles(guild_id, status, slot_no);
         CREATE INDEX IF NOT EXISTS idx_riddles_guild_status
@@ -845,8 +925,6 @@ class RiddleRepo:
             voted_at TEXT,
             FOREIGN KEY(riddle_id) REFERENCES riddles(id) ON DELETE CASCADE
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_vote_msg
-            ON submissions(vote_message_id) WHERE vote_message_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_sub_riddle_status ON submissions(riddle_id, status);
         CREATE INDEX IF NOT EXISTS idx_sub_guild_status ON submissions(guild_id, status);
 
@@ -926,8 +1004,12 @@ class RiddleRepo:
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_one_pending_per_user "
                     "ON submissions(riddle_id, user_id) WHERE status='pending'")
             except Exception:
+                self.degraded_indexes.append("idx_sub_one_pending_per_user")
                 logger.exception("Could not create idx_sub_one_pending_per_user – "
                                  "duplicates will only be blocked at app level.")
+
+            # LAST: everything above may have cleaned up rows these depend on.
+            await self._create_unique_indexes()
 
     async def _backfill_answer_norm(self, batch: int = 500):
         assert self.db is not None
