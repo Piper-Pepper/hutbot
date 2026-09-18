@@ -256,7 +256,7 @@ def _add_rotation_field(embed: discord.Embed, riddle: dict, *,
         return
     line = _rotation_line(riddle)
     if line:
-        embed.add_field(name="🔥 Unsolved Bonus", value=clamp_embed_value(line),
+        embed.add_field(name="🔥 Bonus", value=clamp_embed_value(line),
                         inline=False)
 
 
