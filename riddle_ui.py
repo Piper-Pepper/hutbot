@@ -222,7 +222,7 @@ def _add_xp_level(embed: discord.Embed, xp: int, *, award_name: str = "🏆 Awar
     """
     x = max(0, to_int(xp, 0))
     embed.add_field(name=award_name, value=f"{x}{suffix}", inline=True)
-    embed.add_field(name="🎚️ Level", value=level_badge(x), inline=True)
+    embed.add_field(name="📈 Level", value=level_badge(x), inline=True)
 
 
 def _rotation_line(riddle: dict) -> Optional[str]:
@@ -240,7 +240,7 @@ def _rotation_line(riddle: dict) -> Optional[str]:
 
     line = f"🔁 Unsolved — rotated **{times}**"
     if base_xp is not None and xp_now > base_xp:
-        line += f" · reward {base_xp} → **{xp_now} XP** (+{xp_now - base_xp})"
+        line += f" · {base_xp} → **{xp_now} XP** (+{xp_now - base_xp})"
         if xp_now >= MAX_RIDDLE_XP:
             line += f" · 🧱 ceiling {MAX_RIDDLE_XP}"
     return line
