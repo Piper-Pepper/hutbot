@@ -18,11 +18,12 @@ from riddle_core import (
     UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP,
     SOLVED_HIATUS_HOURS, ROTATION_TICK_SECONDS, STATS_REBUILD_DEBOUNCE_SECONDS,
     CHUNK_TIMEOUT_SECONDS,
+    WRONG_LOG_ENTRIES, WRONG_LOG_REPOST, KEEP_WRONG_LOG_AFTER_SOLVE,
     SUBMIT_BUTTON_ID, VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID, XP_DONE_BUTTON_ID,
     UNKNOWN_MESSAGE, MessageLookup, SLOT_QUEUE_FULL,
     logger, to_int, safe_int, is_http_url, unique_role_mentions, parse_csv_role_ids,
     now_iso_utc, iso_in_future, iso_utc_in_hours, hours_since, seconds_until,
-    submit_unlock_iso, submit_is_locked,
+    submit_unlock_iso, submit_is_locked, member_has_role,
     riddle_manager_required, riddle_guild_only, guild_is_served,
     send_access_denied, send_wrong_guild, MissingRiddleManagerRole, WrongGuild,
     validate_config, RiddleRepo,
@@ -33,6 +34,7 @@ from riddle_ui import (
     build_fresh_solved_post_embed,
     build_solved_ping_post_embed,
     build_wrong_post_embed,
+    build_wrong_log_embed,
     build_xp_reminder_embed,
     build_vote_embed,
     build_rotation_blocked_embed,
@@ -58,9 +60,10 @@ class RiddleCog(commands.Cog):
     asyncio.Lock is NOT reentrant, so every locked public method delegates to
     an `_*_unlocked` counterpart which internal callers use.
 
-    NOTHING SLOW UNDER THE LOCK: member chunking and full stats rebuilds can
-    take seconds. They are never awaited while a guild lock is held – the
-    solved flow schedules a debounced rebuild instead.
+    NO MEMBER CHUNKING AND NO FULL STATS REBUILD UNDER THE LOCK: both can take
+    seconds. (Discord message calls do happen under the lock – a rotation has
+    to delete and re-post atomically – but they are bounded and the solved flow
+    schedules its stats rebuild instead of awaiting it.)
 
     Rotation vs. pending votes
     --------------------------
@@ -69,6 +72,14 @@ class RiddleCog(commands.Cog):
     lose the reward because a manager was slow. The queue waits; the managers
     get reminded in the vote channel every
     RIDDLE_ROTATION_BLOCKED_REMINDER_HOURS.
+
+    Wrong answers
+    -------------
+    ONE rolling log message per riddle, never one post per attempt. It is kept
+    (recoloured) after the solve, because the failed attempts are the history
+    of the riddle and deleting them destroyed the record at the exact moment it
+    became interesting. The COUNTER is derived from the submissions table, so
+    it survives rotation, restart and any message deletion.
 
     Role pings
     ----------
@@ -515,9 +526,19 @@ class RiddleCog(commands.Cog):
                 await self.delete_message_ref(VOTE_CHANNEL_ID, mid)
 
     async def cleanup_wrong_posts_for_riddle(self, riddle_id: int):
+        """
+        Remove every wrong-answer artifact of a riddle: the legacy one-post-per-
+        attempt messages AND the rolling log.
+
+        Used on ROTATION and on manual close – a new round starts with a clean
+        channel. The COUNTER is untouched: it lives in the submissions table and
+        must survive, otherwise a riddle that rotates twice would claim it was
+        never attempted.
+        """
         for row in await self.repo.list_wrong_posts_for_riddle(riddle_id):
             await self.delete_message_ref(row.get("channel_id"), row.get("message_id"))
         await self.repo.clear_wrong_posts_for_riddle(riddle_id)
+        await self._drop_wrong_log(riddle_id)
 
     async def remove_active_riddle_posts(self, guild_id: int):
         for row in await self.repo.list_open_post_refs(guild_id):
@@ -551,14 +572,15 @@ class RiddleCog(commands.Cog):
             logger.exception("Failed to post XP reminder to vote channel")
 
     async def post_rotation_bonus(self, guild: Optional[discord.Guild],
-                                  riddle: dict, bump: dict):
+                                  riddle: dict, bump: dict, wrong_count: int = 0):
         if VOTE_CHANNEL_ID <= 0 or not bump:
             return
         ch = await self.resolve_sendable(VOTE_CHANNEL_ID)
         if ch is None:
             return
         try:
-            await ch.send(embed=build_rotation_bonus_embed(guild, riddle, bump),
+            await ch.send(embed=build_rotation_bonus_embed(guild, riddle, bump,
+                                                           wrong_count),
                           allowed_mentions=discord.AllowedMentions.none())
         except asyncio.CancelledError:
             raise
@@ -601,14 +623,143 @@ class RiddleCog(commands.Cog):
             logger.exception("Failed to post rotation-blocked reminder")
 
     # ==========================================================================
+    # WRONG-ANSWER LOG
+    # ==========================================================================
+    async def _resolve_names_for(self, guild: Optional[discord.Guild],
+                                 user_ids: list[int]) -> dict[int, str]:
+        """Display names for the log, each distinct user resolved at most once."""
+        out: dict[int, str] = {}
+        for uid in dict.fromkeys(uid for uid in user_ids if uid > 0):
+            _, name, _ = await self.resolve_user_label(guild, uid)
+            out[uid] = name
+        return out
+
+    async def _render_wrong_log(self, guild: Optional[discord.Guild], riddle: dict, *,
+                                ping_user_id: int = 0, solved: bool = False,
+                                winner_name: Optional[str] = None,
+                                force_edit: bool = False) -> None:
+        """
+        Publish or refresh the single rolling wrong-answer message.
+
+        REPOST vs EDIT
+        --------------
+        WRONG_LOG_REPOST=1 deletes the old message and sends a new one. That is
+        two API calls, but it buys two things an edit cannot: the log stays at
+        the BOTTOM of the channel where people are actually reading, and the
+        submitter really gets pinged – Discord only notifies on the message
+        that introduces a mention, never on an edit.
+
+        force_edit=True overrides that for refreshes that are NOT news (e.g. a
+        jump link that went stale after a repost of the riddle): nothing
+        happened for the players, so nothing should move.
+
+        Either way the channel never holds more than ONE wrong-answer message
+        per riddle, which was the entire point of replacing the old
+        one-post-per-attempt behaviour.
+        """
+        rid = to_int(riddle.get("id"), 0)
+        if rid <= 0:
+            return
+
+        total = await self.repo.count_wrong_submissions_for_riddle(rid)
+        old_cid, old_mid = await self.repo.get_wrong_log_ref(rid)
+
+        if total <= 0:
+            # Nothing to document. On solve, clean up any stale log so a riddle
+            # solved on the first try does not keep an empty red box.
+            if solved and old_mid:
+                await self.delete_message_ref(old_cid, old_mid)
+                await self.repo.set_wrong_log_ref(rid, None, None)
+            return
+
+        entries = await self.repo.list_recent_wrong_submissions(rid, WRONG_LOG_ENTRIES)
+        names = await self._resolve_names_for(
+            guild, [to_int(r.get("user_id"), 0) for r in entries])
+        embed = build_wrong_log_embed(guild, riddle, entries, total, names,
+                                      solved=solved, winner_name=winner_name)
+
+        ch = await self.resolve_sendable(RIDDLE_CHANNEL_ID)
+        if ch is None:
+            return
+
+        # ---- EDIT IN PLACE ----
+        # Always on solve (the log must stay where it is, above the winner post)
+        # and whenever the caller asks for a silent refresh.
+        if solved or force_edit or not WRONG_LOG_REPOST:
+            if old_mid:
+                existing = await self.fetch_message_safe(old_cid, old_mid)
+                if isinstance(existing, discord.Message):
+                    with contextlib.suppress(discord.HTTPException, discord.NotFound):
+                        await existing.edit(
+                            embed=embed,
+                            allowed_mentions=discord.AllowedMentions.none())
+                    return
+                if existing is UNKNOWN_MESSAGE:
+                    return  # never risk a duplicate over an API hiccup
+            if not solved:
+                return  # nothing to edit and nothing worth creating silently
+            # Solved, but no log existed (riddle predates this feature) – post
+            # the record once so the history is not lost entirely.
+
+        # ---- REPOST ----
+        if old_mid:
+            await self.delete_message_ref(old_cid, old_mid)
+            await self.repo.set_wrong_log_ref(rid, None, None)
+
+        mention = ""
+        if ping_user_id > 0 and not solved:
+            mention, _, _ = await self.resolve_user_label(guild, ping_user_id)
+
+        try:
+            msg = await ch.send(
+                content=mention or None,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(
+                    users=bool(mention), roles=False, everyone=False))
+            await self.repo.set_wrong_log_ref(rid, msg.channel.id, msg.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to publish wrong-answer log for riddle %s", rid)
+
+    async def _drop_wrong_log(self, riddle_id: int):
+        """
+        Remove the log MESSAGE (a rotation starts a fresh round in the channel).
+        The COUNTER is untouched – it lives in submissions and must survive.
+        """
+        cid, mid = await self.repo.get_wrong_log_ref(riddle_id)
+        if mid:
+            await self.delete_message_ref(cid, mid)
+        await self.repo.set_wrong_log_ref(riddle_id, None, None)
+
+    async def _sweep_legacy_wrong_posts(self, riddle_id: int) -> int:
+        """
+        Fold riddles created before the rolling log into the new world: delete
+        their individual red posts so the channel is not a mix of both styles.
+        """
+        legacy = await self.repo.list_wrong_posts_for_riddle(riddle_id)
+        if not legacy:
+            return 0
+        for row in legacy:
+            await self.delete_message_ref(row.get("channel_id"), row.get("message_id"))
+        await self.repo.clear_wrong_posts_for_riddle(riddle_id)
+        logger.info("Folded %s legacy wrong post(s) of riddle %s into the rolling log",
+                    len(legacy), riddle_id)
+        return len(legacy)
+
+    # ==========================================================================
     # POSTING  (locked public / unlocked internal)
     # ==========================================================================
     @staticmethod
-    def _render_signature(riddle: dict, locked: bool, content: Optional[str]) -> tuple:
+    def _render_signature(riddle: dict, locked: bool, content: Optional[str],
+                          wrong_count: int = 0) -> tuple:
         """
         Everything that can change the rendered message. Relative timestamps
         inside the embed update client-side, so they are deliberately absent –
         that is what makes skipping the edit safe.
+
+        wrong_count IS part of it: the active post advertises the number of
+        failed attempts, so a rejected answer must force a re-render.
         """
         return (
             to_int(riddle.get("id"), 0),
@@ -616,6 +767,7 @@ class RiddleCog(commands.Cog):
             str(riddle.get("first_posted_at") or ""),
             to_int(riddle.get("xp"), 0),
             to_int(riddle.get("rotation_count"), 0),
+            max(0, to_int(wrong_count, 0)),
             bool(locked),
             content or "",
         )
@@ -658,6 +810,7 @@ class RiddleCog(commands.Cog):
             return "deferred_unknown_state"
 
         content = self.build_ping_content(guild, slot1.get("mention_role_ids"))
+        wrong_count = await self.repo.count_wrong_submissions_for_riddle(rid)
 
         try:
             if force_repost and (isinstance(existing, discord.Message)
@@ -671,7 +824,7 @@ class RiddleCog(commands.Cog):
                 locked = submit_is_locked(slot1)
                 unlock = submit_unlock_iso(slot1)
 
-                sig = self._render_signature(slot1, locked, content)
+                sig = self._render_signature(slot1, locked, content, wrong_count)
                 if self._render_sig.get(guild_id) == sig:
                     # Nothing affecting the rendering changed; relative
                     # timestamps refresh client-side. Re-editing every tick is
@@ -682,7 +835,8 @@ class RiddleCog(commands.Cog):
 
                 await existing.edit(
                     content=content,
-                    embed=build_active_riddle_embed(guild, slot1),
+                    embed=build_active_riddle_embed(guild, slot1,
+                                                    wrong_count=wrong_count),
                     view=SubmitButtonView(self, locked=locked, unlock_at=unlock),
                     # An edit never re-pings: Discord only notifies on the
                     # message that introduces a mention.
@@ -705,20 +859,31 @@ class RiddleCog(commands.Cog):
             msg = await ch.send(
                 content=content,
                 embed=build_active_riddle_embed(guild, slot1,
-                                                posted_at_override=post_ts),
+                                                posted_at_override=post_ts,
+                                                wrong_count=wrong_count),
                 view=SubmitButtonView(self, locked=locked, unlock_at=unlock),
                 allowed_mentions=discord.AllowedMentions(
                     roles=do_ping, users=False, everyone=False))
             await self.repo.set_riddle_post_ref(rid, msg.channel.id, msg.id,
                                                 first_posted_at=post_ts)
             fresh = await self.repo.get_open_slot1(guild_id) or slot1
-            self._render_sig[guild_id] = self._render_signature(fresh, locked, content)
+            self._render_sig[guild_id] = self._render_signature(
+                fresh, locked, content, wrong_count)
             orphans = await self.repo.clear_other_open_post_refs(guild_id, rid)
             await self._delete_post_refs(orphans)
             if locked:
                 self.schedule_submit_unlock(guild_id, unlock)
-            logger.info("Riddle %s posted (ping=%s, first_post=%s, locked_until=%s)",
-                        rid, do_ping, is_first_post, unlock if locked else "-")
+
+            # The riddle just got a NEW message id, so every jump link inside a
+            # surviving attempt log points at a message that no longer exists.
+            # Silent edit – nothing happened for the players, so nothing moves.
+            if wrong_count > 0:
+                with contextlib.suppress(Exception):
+                    await self._render_wrong_log(guild, fresh, force_edit=True)
+
+            logger.info("Riddle %s posted (ping=%s, first_post=%s, locked_until=%s, "
+                        "wrong=%s)", rid, do_ping, is_first_post,
+                        unlock if locked else "-", wrong_count)
             return "posted"
         except discord.Forbidden:
             logger.error("Missing permissions to post in riddle channel %s",
@@ -842,6 +1007,11 @@ class RiddleCog(commands.Cog):
         bump_riddle_xp_on_rotation only touches open rows and is atomic, so a
         crash mid-rotation cannot double-count.
 
+        The attempt LOG is deleted (the riddle gets a fresh run when it comes
+        back around), but the attempt COUNTER survives in the submissions
+        table – a riddle that already defeated 12 people should still say so
+        on its second outing.
+
         NOTE: automatic callers only reach this with zero pending submissions.
         The cancel_pending_for_riddle below therefore only ever fires for a
         MANUAL move, where a manager explicitly chose to discard them.
@@ -851,6 +1021,7 @@ class RiddleCog(commands.Cog):
             return False
 
         guild = self.bot.get_guild(guild_id)
+        wrong_count = await self.repo.count_wrong_submissions_for_riddle(riddle_id)
 
         bump: Optional[dict] = None
         if xp_bonus > 0:
@@ -867,9 +1038,10 @@ class RiddleCog(commands.Cog):
             if bump:
                 logger.info(
                     "Unsolved rotation bonus: riddle %s  xp %s -> %s (+%s)  "
-                    "rotation_count=%s%s",
+                    "rotation_count=%s  wrong=%s%s",
                     riddle_id, bump["old_xp"], bump["new_xp"], bump["gained"],
-                    bump["rotation_count"], "  [CAPPED]" if bump.get("capped") else "")
+                    bump["rotation_count"], wrong_count,
+                    "  [CAPPED]" if bump.get("capped") else "")
                 r = await self.repo.get_riddle_by_id(guild_id, riddle_id) or r
 
         self.cancel_submit_unlock(guild_id)
@@ -882,7 +1054,7 @@ class RiddleCog(commands.Cog):
         ok = await self.repo.move_open_riddle_to_end(guild_id, riddle_id)
 
         if bump and to_int(bump.get("rotation_count"), 0) >= 1:
-            await self.post_rotation_bonus(guild, r, bump)
+            await self.post_rotation_bonus(guild, r, bump, wrong_count)
 
         await self.normalize_after_structure_change(guild_id)
         if await self.repo.is_enabled(guild_id):
@@ -1114,8 +1286,11 @@ class RiddleCog(commands.Cog):
 
             guild = self.bot.get_guild(gid)
             uid = to_int(row.get("user_id"), 0)
+            rid = to_int(row.get("riddle_id"), 0)
             _, uname, uavatar = await self.resolve_user_label(guild, uid)
+            wrong_count = await self.repo.count_wrong_submissions_for_riddle(rid)
             riddle_view = {
+                "id": rid,
                 "text": row.get("riddle_text"),
                 "solution": row.get("solution"),
                 "xp": row.get("xp"),
@@ -1123,9 +1298,11 @@ class RiddleCog(commands.Cog):
                 "riddle_no": row.get("riddle_no"),
                 "first_posted_at": row.get("first_posted_at"),
                 "rotation_count": row.get("rotation_count"),
+                "posted_channel_id": row.get("posted_channel_id"),
+                "posted_message_id": row.get("posted_message_id"),
             }
             embed = build_vote_embed(guild, riddle_view, uid, uname, uavatar,
-                                     row.get("answer") or "")
+                                     row.get("answer") or "", wrong_count)
             try:
                 vm = await vote_channel.send(embed=embed, view=VoteButtons(self))
                 await self.repo.set_submission_vote_message(
@@ -1152,15 +1329,23 @@ class RiddleCog(commands.Cog):
         """
         1) DB state first: XP, solved counter, slot geometry, solved hiatus
         2) Delete the original riddle post
-        3) Delete all wrong-answer posts for this riddle
-        4) Post the FRESH BIG solved post (no pings) incl. timing + rotations
-        5) Post the SMALL ping post (Base + Extras + Winner)
-        6) Clean up the remaining vote messages
-        7) XP reminder into the VOTE channel
+        3) Fold away any LEGACY per-attempt posts (the rolling log stays)
+        4) Post the FRESH BIG solved post (no pings) – this becomes the
+           permanent record and the jump-link target of everything below
+        5) Close the attempt log in place: recoloured, kept, now linking to the
+           winner post
+        6) Post the SMALL ping post (Base + Extras + Winner)
+        7) Clean up the remaining vote messages
+        8) XP reminder into the VOTE channel
 
         Step 1 comes first on purpose: if a Discord call later fails we lose a
         cosmetic post, not the reward – and the worker will not immediately
         re-post the next riddle, because the hiatus is already committed.
+
+        Step 4 BEFORE step 5/6 is equally deliberate: both of those embed a
+        jump link to the winner post, and a link needs an id that exists. The
+        log is edited, not re-sent, so it keeps its place above the winner post
+        and the reading order stays intact.
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -1175,6 +1360,7 @@ class RiddleCog(commands.Cog):
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "solution", "xp", "base_xp", "rotation_count", "image_url",
                   "solution_url", "riddle_no", "posted_channel_id", "posted_message_id",
+                  "wrong_log_channel_id", "wrong_log_message_id",
                   "mention_role_ids", "first_posted_at"):
             if riddle_row.get(k) in (None, "", 0) and ctx.get(k) is not None:
                 riddle_row[k] = ctx.get(k)
@@ -1196,12 +1382,13 @@ class RiddleCog(commands.Cog):
         is_excluded = (solver_id <= 0) or await self.user_is_excluded(
             guild, solver_id, allow_fetch=False)
 
+        wrong_count = await self.repo.count_wrong_submissions_for_riddle(rid)
         rot = max(0, to_int(riddle_row.get("rotation_count"), 0))
         logger.info(
-            "Riddle %s (No.%s) solved by %s (%s) – %s XP – rotations=%s – approved by "
-            "%s (%s) – excluded=%s – posted=%s submitted=%s voted=%s",
+            "Riddle %s (No.%s) solved by %s (%s) – %s XP – rotations=%s – wrong=%s – "
+            "approved by %s (%s) – excluded=%s – posted=%s submitted=%s voted=%s",
             rid, riddle_row.get("riddle_no"), solver_id, solver_name, xp_gain, rot,
-            moderator.id, moderator, is_excluded,
+            wrong_count, moderator.id, moderator, is_excluded,
             riddle_row.get("first_posted_at"), ctx.get("submitted_at"), ctx.get("voted_at"))
 
         # ---- 1) DB STATE FIRST ----
@@ -1230,8 +1417,11 @@ class RiddleCog(commands.Cog):
                                       riddle_row.get("posted_message_id"))
         await self.repo.clear_stale_posted_refs(rid)
 
-        # ---- 3) delete all wrong-answer posts ----
-        await self.cleanup_wrong_posts_for_riddle(rid)
+        # ---- 3) legacy per-attempt posts away; the rolling log STAYS ----
+        # The wrong answers are the history of this riddle. Deleting them on
+        # solve destroyed exactly the record that makes a solved riddle worth
+        # scrolling back to.
+        await self._sweep_legacy_wrong_posts(rid)
 
         ch = await self.resolve_sendable(RIDDLE_CHANNEL_ID)
         if ch is not None:
@@ -1240,15 +1430,32 @@ class RiddleCog(commands.Cog):
                 fresh_msg = await ch.send(
                     embed=build_fresh_solved_post_embed(
                         guild, riddle_row, solver_mention, solver_name,
-                        solver_avatar, submitted_answer),
+                        solver_avatar, submitted_answer, wrong_count),
                     allowed_mentions=discord.AllowedMentions.none())
                 await self.repo.set_solved_post_ref(rid, fresh_msg.channel.id, fresh_msg.id)
+                # Local copy as well – everything below builds its jump links
+                # from this dict, not from a second DB read.
+                riddle_row["solved_post_channel_id"] = fresh_msg.channel.id
+                riddle_row["solved_post_message_id"] = fresh_msg.id
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Failed to post fresh solved message")
 
-            # ---- 5) small ping post ----
+        # ---- 5) close the attempt log (edit in place, links to the winner) ----
+        if KEEP_WRONG_LOG_AFTER_SOLVE:
+            try:
+                await self._render_wrong_log(guild, riddle_row, solved=True,
+                                             winner_name=solver_name)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to close the attempt log for riddle %s", rid)
+        else:
+            await self._drop_wrong_log(rid)
+
+        if ch is not None:
+            # ---- 6) small ping post ----
             try:
                 role_ping = self.build_ping_content(guild,
                                                     riddle_row.get("mention_role_ids"))
@@ -1257,7 +1464,9 @@ class RiddleCog(commands.Cog):
                     content=ping_content,
                     embed=build_solved_ping_post_embed(
                         guild, riddle_row, solver_mention, solver_avatar,
-                        submitted_answer=submitted_answer),
+                        submitted_answer=submitted_answer,
+                        solver_display_name=solver_name,
+                        wrong_count=wrong_count),
                     allowed_mentions=discord.AllowedMentions(
                         users=True, roles=True, everyone=False))
             except asyncio.CancelledError:
@@ -1265,12 +1474,12 @@ class RiddleCog(commands.Cog):
             except Exception:
                 logger.exception("Failed to post solved ping message")
 
-        # ---- 6) clean up remaining vote messages ----
+        # ---- 7) clean up remaining vote messages ----
         # The winning submission's vote post is kept and annotated by the
         # button handler.
         await self.cleanup_vote_messages_for_riddle(rid, exclude_submission_id=sid)
 
-        # ---- 7) XP reminder ----
+        # ---- 8) XP reminder ----
         if not is_excluded and xp_gain > 0:
             await self.post_xp_reminder_to_vote_channel(
                 guild, solver_id, xp_gain,
@@ -1287,9 +1496,15 @@ class RiddleCog(commands.Cog):
     async def _finalize_wrong_unlocked(self, guild: discord.Guild, ctx: dict,
                                        moderator: discord.Member):
         """
-        Riddle stays OPEN. Public wrong-answer post in the riddle channel, only
-        the submitter is pinged. The message id is stored so it can be removed
-        at solve time or on rotation.
+        Riddle stays OPEN.
+
+        Instead of adding yet another red post, the single rolling attempt log
+        is refreshed – see _render_wrong_log(). By default that means delete +
+        repost, so the log stays at the bottom of the channel and the submitter
+        gets a ping; an edit would notify nobody.
+
+        Afterwards the active riddle post is re-rendered so its "❌ failed so
+        far" counter is correct immediately instead of up to 15 minutes later.
         """
         gid = guild.id
         rid = to_int(ctx.get("riddle_id"), 0)
@@ -1297,30 +1512,37 @@ class RiddleCog(commands.Cog):
 
         riddle_row = await self.repo.get_riddle_by_id(gid, rid) or {}
         for k in ("text", "xp", "image_url", "riddle_no", "mention_role_ids",
-                  "first_posted_at", "rotation_count"):
+                  "first_posted_at", "rotation_count", "posted_channel_id",
+                  "posted_message_id", "wrong_log_channel_id", "wrong_log_message_id"):
             if riddle_row.get(k) in (None, "", 0) and ctx.get(k) is not None:
                 riddle_row[k] = ctx.get(k)
 
-        logger.info("Riddle %s: answer by %s rejected by %s (%s)",
-                    rid, submitter_id, moderator.id, moderator)
+        total = await self.repo.count_wrong_submissions_for_riddle(rid)
+        logger.info("Riddle %s: answer by %s rejected by %s (%s) – %s wrong total",
+                    rid, submitter_id, moderator.id, moderator, total)
 
-        mention, name, avatar = await self.resolve_user_label(guild, submitter_id)
-        ch = await self.resolve_sendable(RIDDLE_CHANNEL_ID)
-        if ch is None:
-            return
+        # Riddles created before the rolling log may still carry individual
+        # wrong posts. Fold them in instead of leaving a mixed channel.
+        await self._sweep_legacy_wrong_posts(rid)
 
         try:
-            sent = await ch.send(
-                content=mention or None,
-                embed=build_wrong_post_embed(guild, riddle_row, mention, name, avatar,
-                                             str(ctx.get("answer") or "")),
-                allowed_mentions=discord.AllowedMentions(
-                    users=True, roles=False, everyone=False))
-            await self.repo.add_wrong_post(gid, rid, sent.channel.id, sent.id)
+            await self._render_wrong_log(guild, riddle_row, ping_user_id=submitter_id)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Failed to post wrong-answer message")
+            logger.exception("Failed to update the attempt log for riddle %s", rid)
+
+        # The counter changed, so the active post must be re-rendered. Dropping
+        # the signature is not strictly needed (wrong_count is part of it) but
+        # makes the intent explicit.
+        self._render_sig.pop(gid, None)
+        try:
+            await self._publish_slot1_post_unlocked(
+                gid, force_repost=False, ping_on_first_post=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Could not refresh active post after a wrong answer")
 
     # ==========================================================================
     # STARTUP
@@ -1346,6 +1568,11 @@ class RiddleCog(commands.Cog):
         # swept here – only the vote buttons, which get reposted below.
         await self.delete_button_messages_in_channel(
             VOTE_CHANNEL_ID, {VOTE_UP_BUTTON_ID, VOTE_DOWN_BUTTON_ID}, limit=200)
+
+        # The attempt logs carry NO buttons, so the sweep above never touches
+        # them – they survive a restart untouched, which is exactly right: they
+        # are a record, not interactive state. Their jump links are refreshed
+        # by _publish_slot1_post_unlocked once the riddle is re-posted below.
 
         # reset_timer=False is the important bit. The messages are gone and get
         # re-posted below, but first_posted_at must SURVIVE: it anchors the
@@ -1497,7 +1724,13 @@ class RiddleCog(commands.Cog):
                                                   name="riddle_auto_worker")
 
     async def cog_unload(self):
-        """Await cancellation so no task touches the repo after it was closed."""
+        """
+        Await cancellation so no task touches the repo after it was closed.
+
+        NOTE: the repo itself is closed by teardown(), not here. Removing the
+        cog without unloading the extension therefore leaves the SQLite
+        connection open – say so instead of hiding it.
+        """
         self._closing = True
         tasks: list[asyncio.Task] = []
         if self._auto_task and not self._auto_task.done():
@@ -1514,7 +1747,8 @@ class RiddleCog(commands.Cog):
         self._stats_rebuild_tasks.clear()
         self._unlock_tasks.clear()
         self._render_sig.clear()
-        logger.info("RiddleCog unloaded, background tasks stopped.")
+        logger.info("RiddleCog unloaded, background tasks stopped. "
+                    "(The DB connection is closed by the extension teardown.)")
 
     # ==========================================================================
     # SLASH COMMANDS
@@ -1553,7 +1787,7 @@ class RiddleCog(commands.Cog):
         if interaction.guild is None:
             return
 
-        is_manager = member_has_role_safe(interaction.user, RIDDLE_MANAGER_ROLE_ID)
+        is_manager = member_has_role(interaction.user, RIDDLE_MANAGER_ROLE_ID)
         if not is_manager:
             visible = False
             mention = None
@@ -1613,11 +1847,6 @@ class RiddleCog(commands.Cog):
                 await interaction.response.send_message(msg, ephemeral=True)
 
 
-def member_has_role_safe(user: discord.abc.User, role_id: int) -> bool:
-    return (role_id > 0 and isinstance(user, discord.Member)
-            and any(r.id == role_id for r in user.roles))
-
-
 # =============================================================================
 # EXTENSION ENTRY POINTS
 # =============================================================================
@@ -1656,11 +1885,13 @@ async def setup(bot: commands.Bot):
     logger.info(
         "Riddle extension loaded (guild=%s, slots=%s, submit delay=%smin, "
         "rotation=%sh, blocked reminder=%sh, rotation bonus=+%s XP up to %s, "
-        "hiatus=%sh, tick=%ss)",
+        "hiatus=%sh, tick=%ss, attempt log=%s entries/%s/%s)",
         RIDDLE_GUILD_ID or "ANY", MAX_RIDDLE_SLOTS, SUBMIT_DELAY_MINUTES,
         UNSOLVED_ROTATION_HOURS, ROTATION_BLOCKED_REMINDER_HOURS,
         UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP, SOLVED_HIATUS_HOURS,
-        ROTATION_TICK_SECONDS)
+        ROTATION_TICK_SECONDS, WRONG_LOG_ENTRIES,
+        "repost" if WRONG_LOG_REPOST else "edit",
+        "kept after solve" if KEEP_WRONG_LOG_AFTER_SOLVE else "deleted after solve")
 
 
 async def teardown(bot: commands.Bot):

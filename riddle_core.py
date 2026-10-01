@@ -125,6 +125,38 @@ POST_EXCERPT_CHARS = _env_int("RIDDLE_POST_EXCERPT_CHARS", 50)
 # Characters for the solution preview inside the admin slot list.
 PANEL_PREVIEW_CHARS = _env_int("RIDDLE_PANEL_PREVIEW_CHARS", 20)
 
+# ---------------------------------------------------------------------------
+# WRONG-ANSWER LOG
+# ---------------------------------------------------------------------------
+# Wrong answers are the HISTORY of a riddle: how hard was it really, what has
+# already been ruled out, who was close. The old behaviour posted one red
+# message per attempt and deleted all of them on solve – which buried the
+# riddle under its own failures while it ran, and destroyed the record at the
+# exact moment it became interesting.
+#
+# Now: ONE rolling message per riddle.
+#   * the channel never holds more than a single wrong-answer message
+#   * always readable, above all while the riddle is still UNSOLVED
+#   * survives the solve as a permanent record beside the winner post
+#   * the COUNTER lives in the submissions table, so it survives rotations,
+#     restarts and message deletions
+# ---------------------------------------------------------------------------
+
+# How many attempts the log lists. Older ones are counted, not shown.
+WRONG_LOG_ENTRIES = _env_int("RIDDLE_WRONG_LOG_ENTRIES", 10)
+
+# 1 = delete + repost the log on every new wrong answer, so it stays at the
+#     BOTTOM of the channel AND pings the submitter (an edit never notifies).
+# 0 = edit in place: zero channel movement, but no ping for the submitter.
+WRONG_LOG_REPOST = _env_int("RIDDLE_WRONG_LOG_REPOST", 1)
+
+# 1 = keep the log after the riddle is solved (recoloured, marked closed).
+# 0 = delete it on solve (old behaviour).
+KEEP_WRONG_LOG_AFTER_SOLVE = _env_int("RIDDLE_KEEP_WRONG_LOG_AFTER_SOLVE", 1)
+
+# Per-entry answer preview length inside the log.
+WRONG_ANSWER_PREVIEW_CHARS = _env_int("RIDDLE_WRONG_ANSWER_PREVIEW_CHARS", 90)
+
 # (upper_bound_exclusive, label, emoji). Last entry catches all.
 LEVEL_TIERS: tuple[tuple[Optional[int], str, str], ...] = (
     (1900, "EASY", "🟢"),
@@ -189,6 +221,11 @@ def validate_config() -> list[str]:
         problems.append("RIDDLE_POST_EXCERPT_CHARS must be 10..500.")
     if not (5 <= PANEL_PREVIEW_CHARS <= 90):
         problems.append("RIDDLE_PANEL_PREVIEW_CHARS must be 5..90.")
+    if not (1 <= WRONG_LOG_ENTRIES <= 20):
+        problems.append("RIDDLE_WRONG_LOG_ENTRIES must be 1..20 – more would blow "
+                        "the 1024-character embed field limit.")
+    if not (20 <= WRONG_ANSWER_PREVIEW_CHARS <= 300):
+        problems.append("RIDDLE_WRONG_ANSWER_PREVIEW_CHARS must be 20..300.")
     if RIDDLE_CHANNEL_ID > 0 and RIDDLE_CHANNEL_ID == VOTE_CHANNEL_ID:
         problems.append("RIDDLE_CHANNEL_ID equals RIDDLE_VOTE_CHANNEL_ID – "
                         "solutions would leak publicly.")
@@ -472,6 +509,51 @@ def truncate_text(text: Optional[str], max_len: int = 180) -> str:
 
 
 # ---------------------------------------------------------------------------
+# MESSAGE LINKS
+# ---------------------------------------------------------------------------
+def message_jump_url(guild_id: Optional[int], channel_id: Optional[int],
+                     message_id: Optional[int]) -> Optional[str]:
+    """
+    Clickable jump link to a message.
+
+    Discord renders these as a "jump" on desktop and scrolls straight to the
+    post on mobile – far better than telling people to "scroll up", which on a
+    phone can mean a hundred swipes.
+
+    Returns None unless all three ids are present, so callers can simply drop
+    the field instead of emitting a broken link.
+    """
+    gid = safe_int(guild_id, None)
+    cid = safe_int(channel_id, None)
+    mid = safe_int(message_id, None)
+    if not gid or not cid or not mid:
+        return None
+    return f"https://discord.com/channels/{gid}/{cid}/{mid}"
+
+
+def riddle_jump_url(guild_id: Optional[int],
+                    riddle: dict) -> tuple[Optional[str], bool]:
+    """
+    Best available permanent link for a riddle, plus whether it points at the
+    SOLVED post.
+
+    Order matters. Once a riddle is solved its active post is DELETED, so that
+    message id is dead and any link to it renders as "message could not be
+    loaded". The big solved post takes over as the permanent record – which is
+    why it is checked FIRST.
+
+    Returns (url, is_solved_post).
+    """
+    r = riddle or {}
+    url = message_jump_url(guild_id, r.get("solved_post_channel_id"),
+                           r.get("solved_post_message_id"))
+    if url:
+        return url, True
+    return message_jump_url(guild_id, r.get("posted_channel_id"),
+                            r.get("posted_message_id")), False
+
+
+# ---------------------------------------------------------------------------
 # MARKDOWN-SAFE PREVIEWS
 # ---------------------------------------------------------------------------
 # Truncating raw user text is unsafe the moment it contains markdown: cutting
@@ -488,9 +570,9 @@ _MD_LINE_PREFIX_RE = re.compile(
 
 # [label](url) -> label
 # NOTE: every bracket and parenthesis in here is load-bearing. A previous
-# revision had them all replaced by '$', which still COMPILES (as an end-of-line
-# anchor) but matches nothing, so markdown links survived into previews and got
-# chopped mid-URL.
+# revision had them all replaced by '$', which still COMPILES (as an
+# end-of-line anchor) but matches nothing, so markdown links survived into the
+# previews and got chopped mid-URL.
 _MD_LINK_RE = re.compile(r"$$([^$$]*)$$$$[^)]*$$")
 
 
@@ -898,6 +980,8 @@ class RiddleRepo:
             posted_message_id INTEGER,
             first_posted_at TEXT,
             blocked_reminder_at TEXT,
+            wrong_log_channel_id INTEGER,
+            wrong_log_message_id INTEGER,
             solved_by INTEGER,
             solved_at TEXT,
             solved_post_channel_id INTEGER,
@@ -974,6 +1058,12 @@ class RiddleRepo:
             await self._add_col_if_missing("riddles", "base_xp", "base_xp INTEGER")
             await self._add_col_if_missing("riddles", "blocked_reminder_at",
                                            "blocked_reminder_at TEXT")
+            # Rolling wrong-answer log: ONE message per riddle instead of one
+            # post per failed attempt.
+            await self._add_col_if_missing("riddles", "wrong_log_channel_id",
+                                           "wrong_log_channel_id INTEGER")
+            await self._add_col_if_missing("riddles", "wrong_log_message_id",
+                                           "wrong_log_message_id INTEGER")
             await self._add_col_if_missing("guild_riddle_state", "hiatus_until",
                                            "hiatus_until TEXT")
             await self._add_col_if_missing("submissions", "answer_norm", "answer_norm TEXT")
@@ -1683,6 +1773,8 @@ class RiddleRepo:
                          "updated_at=? WHERE id=?", (now_iso_utc(), riddle_id))
 
     # ------------------------------------------------------------- wrong posts
+    # Legacy one-post-per-attempt table. Still read + cleaned so riddles created
+    # before the rolling log do not leave orphans behind.
     async def add_wrong_post(self, guild_id: int, riddle_id: int,
                              channel_id: int, message_id: int):
         await self._exec(
@@ -1696,6 +1788,60 @@ class RiddleRepo:
 
     async def clear_wrong_posts_for_riddle(self, riddle_id: int):
         await self._exec("DELETE FROM riddle_wrong_posts WHERE riddle_id=?", (riddle_id,))
+
+    # ---------------------------------------------------------- wrong answers
+    async def count_wrong_submissions_for_riddle(self, riddle_id: int) -> int:
+        """
+        How many answers were rejected for this riddle – EVER.
+
+        Deliberately derived from the submissions table instead of being stored
+        on the riddle row: it survives rotations, restarts and message
+        deletions, and it cannot drift out of sync with the votes that produced
+        it. Indexed by idx_sub_riddle_status, so it is a cheap count.
+        """
+        row = await self._one("SELECT COUNT(*) AS c FROM submissions "
+                              "WHERE riddle_id=? AND status='wrong'", (riddle_id,))
+        return to_int(row.get("c"), 0) if row else 0
+
+    async def count_wrong_submissions_since(self, riddle_id: int,
+                                            since_iso: Optional[str]) -> int:
+        """Attempts in the CURRENT round only (since the riddle was last posted)."""
+        if not since_iso:
+            return await self.count_wrong_submissions_for_riddle(riddle_id)
+        row = await self._one(
+            "SELECT COUNT(*) AS c FROM submissions WHERE riddle_id=? "
+            "AND status='wrong' AND created_at >= ?", (riddle_id, since_iso))
+        return to_int(row.get("c"), 0) if row else 0
+
+    async def list_recent_wrong_submissions(self, riddle_id: int,
+                                            limit: int = WRONG_LOG_ENTRIES) -> list[dict]:
+        """Newest rejected answers first – the body of the rolling log."""
+        lim = max(1, min(25, to_int(limit, 10)))
+        return await self._all(
+            "SELECT id, user_id, answer, created_at, voted_at FROM submissions "
+            "WHERE riddle_id=? AND status='wrong' ORDER BY id DESC LIMIT ?",
+            (riddle_id, lim))
+
+    async def set_wrong_log_ref(self, riddle_id: int, channel_id: Optional[int],
+                                message_id: Optional[int]):
+        await self._exec(
+            "UPDATE riddles SET wrong_log_channel_id=?, wrong_log_message_id=?, "
+            "updated_at=? WHERE id=?",
+            (channel_id, message_id, now_iso_utc(), riddle_id))
+
+    async def get_wrong_log_ref(self, riddle_id: int) -> tuple[Optional[int], Optional[int]]:
+        row = await self._one("SELECT wrong_log_channel_id AS c, wrong_log_message_id AS m "
+                              "FROM riddles WHERE id=? LIMIT 1", (riddle_id,))
+        if not row:
+            return None, None
+        return safe_int(row.get("c"), None), safe_int(row.get("m"), None)
+
+    async def list_open_wrong_log_refs(self, guild_id: int) -> list[dict]:
+        return await self._all(
+            "SELECT id, wrong_log_channel_id AS channel_id, "
+            "wrong_log_message_id AS message_id FROM riddles "
+            "WHERE guild_id=? AND status='open' AND wrong_log_message_id IS NOT NULL",
+            (guild_id,))
 
     # ------------------------------------------------------------- submissions
     async def create_submission_pending(self, guild_id: int, riddle_id: int,
@@ -1750,8 +1896,21 @@ class RiddleRepo:
 
     async def set_submission_vote_message(self, submission_id: int,
                                           vote_message_id: int) -> bool:
-        rc, _ = await self._exec("UPDATE submissions SET vote_message_id=? WHERE id=?",
-                                 (vote_message_id, submission_id))
+        """
+        Attach the vote message id – but ONLY while the submission is still
+        pending.
+
+        The submit modal runs completely outside the guild lock, so a rotation
+        can cancel the submission between the INSERT and this UPDATE. Without
+        the status guard the vote post survived in the channel with two live
+        buttons pointing at a cancelled row: the player was told "submitted for
+        review", and the manager who voted got "already voted on" – which was
+        simply untrue. The guard turns that into rowcount 0, which the caller
+        uses to delete the orphan again.
+        """
+        rc, _ = await self._exec(
+            "UPDATE submissions SET vote_message_id=? WHERE id=? AND status='pending'",
+            (vote_message_id, submission_id))
         return rc > 0
 
     async def delete_submission(self, submission_id: int):
@@ -1806,7 +1965,9 @@ class RiddleRepo:
                    r.id AS riddle_id, r.text AS riddle_text, r.solution AS solution,
                    r.xp AS xp, r.mention_role_ids AS mention_role_ids,
                    r.image_url AS image_url, r.riddle_no AS riddle_no,
-                   r.first_posted_at AS first_posted_at, r.rotation_count AS rotation_count
+                   r.first_posted_at AS first_posted_at, r.rotation_count AS rotation_count,
+                   r.posted_channel_id AS posted_channel_id,
+                   r.posted_message_id AS posted_message_id
             FROM submissions s JOIN riddles r ON r.id = s.riddle_id
             WHERE s.status='pending' AND r.status='open'
             ORDER BY s.id ASC
@@ -1864,7 +2025,9 @@ class RiddleRepo:
                            r.image_url AS image_url, r.solution_url AS solution_url,
                            r.riddle_no AS riddle_no, r.first_posted_at AS first_posted_at,
                            r.posted_channel_id AS posted_channel_id,
-                           r.posted_message_id AS posted_message_id
+                           r.posted_message_id AS posted_message_id,
+                           r.wrong_log_channel_id AS wrong_log_channel_id,
+                           r.wrong_log_message_id AS wrong_log_message_id
                     FROM submissions s JOIN riddles r ON r.id = s.riddle_id
                     WHERE s.vote_message_id=? LIMIT 1
                     """, (vmid,))
@@ -1932,6 +2095,8 @@ class RiddleRepo:
                     "riddle_no": to_int(data.get("riddle_no"), 0),
                     "posted_channel_id": safe_int(data.get("posted_channel_id"), None),
                     "posted_message_id": safe_int(data.get("posted_message_id"), None),
+                    "wrong_log_channel_id": safe_int(data.get("wrong_log_channel_id"), None),
+                    "wrong_log_message_id": safe_int(data.get("wrong_log_message_id"), None),
                     # timing: submitted_at is the real solve moment,
                     # voted_at is only moderator latency
                     "first_posted_at": data.get("first_posted_at"),
@@ -1963,7 +2128,11 @@ class RiddleRepo:
                            r.image_url AS image_url, r.status AS riddle_status,
                            r.mention_role_ids AS mention_role_ids,
                            r.first_posted_at AS first_posted_at,
-                           r.rotation_count AS rotation_count
+                           r.rotation_count AS rotation_count,
+                           r.posted_channel_id AS posted_channel_id,
+                           r.posted_message_id AS posted_message_id,
+                           r.wrong_log_channel_id AS wrong_log_channel_id,
+                           r.wrong_log_message_id AS wrong_log_message_id
                     FROM submissions s JOIN riddles r ON r.id = s.riddle_id
                     WHERE s.vote_message_id=? LIMIT 1
                     """, (vmid,))
@@ -2009,6 +2178,10 @@ class RiddleRepo:
                     "image_url": data.get("image_url"),
                     "mention_role_ids": data.get("mention_role_ids"),
                     "first_posted_at": data.get("first_posted_at"),
+                    "posted_channel_id": safe_int(data.get("posted_channel_id"), None),
+                    "posted_message_id": safe_int(data.get("posted_message_id"), None),
+                    "wrong_log_channel_id": safe_int(data.get("wrong_log_channel_id"), None),
+                    "wrong_log_message_id": safe_int(data.get("wrong_log_message_id"), None),
                     "submitted_at": data.get("submitted_at"),
                     "voted_at": now,
                 }

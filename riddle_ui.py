@@ -16,6 +16,7 @@ from riddle_core import (
     UNSOLVED_ROTATION_XP_BONUS, MAX_RIDDLE_XP,
     SUBMIT_DELAY_MINUTES, PANEL_TIMEOUT_SECONDS, LEVEL_TIERS, MAX_XP_INPUT,
     POST_EXCERPT_CHARS, PANEL_PREVIEW_CHARS,
+    WRONG_LOG_ENTRIES, WRONG_ANSWER_PREVIEW_CHARS,
     DUPLICATE_PENDING, SUBMISSION_NOT_ACTIVE,
     logger, to_int, clean_value, is_http_url, truncate_text, parse_xp_input,
     clamp_embed_value, clamp_embed_description, extract_first_url, excerpt,
@@ -24,6 +25,7 @@ from riddle_core import (
     quiet_followup, quiet_respond,
     iso_in_future, hours_until, hours_since, discord_ts, duration_between_iso,
     format_duration_hours, format_clock_time, submit_unlock_iso, submit_is_locked,
+    message_jump_url, riddle_jump_url,
 )
 
 if TYPE_CHECKING:
@@ -54,11 +56,16 @@ ICON_NO_SOLUTION_IMAGE = "🧩"
 #                              on solve, so this message is the only place the
 #                              riddle survives. Never truncate it.
 #
-#   50-CHARACTER ANCHOR
+#   NUMBER + JUMP LINK + 50-CHARACTER ANCHOR
+#     * attempt log          – rolls for the whole life of the riddle
 #     * solved ping post     – the message that pings; may be opened straight
 #                              from a notification, so it needs a hint of what
 #                              this was about, not the whole text
-#     * wrong-answer post    – several of these pile up per riddle
+#     * wrong-answer post    – legacy path
+#
+# The jump link target switches automatically (riddle_jump_url): while the
+# riddle is open it points at the active post, afterwards at the big solved
+# post – the active one is DELETED on solve and a link to it would be dead.
 #
 # =============================================================================
 # MOBILE LAYOUT RULES  (public channel posts)
@@ -169,6 +176,10 @@ def _tag(riddle: dict) -> str:
     return f"#{_riddle_display_no(riddle)}"
 
 
+def _guild_id_of(guild: Optional[discord.Guild]) -> Optional[int]:
+    return guild.id if guild else None
+
+
 def _set_author_user(embed: discord.Embed, name: str, avatar_url: Optional[str]):
     """
     Avatar as a small author icon instead of a thumbnail.
@@ -184,14 +195,32 @@ def _set_author_user(embed: discord.Embed, name: str, avatar_url: Optional[str])
 
 
 def _add_riddle_anchor(embed: discord.Embed, riddle: dict,
-                       name: str = "🧩 Riddle") -> None:
+                       guild: Optional[discord.Guild] = None,
+                       name: Optional[str] = None) -> None:
     """
-    Short "which riddle was this?" reminder for the SECONDARY posts only.
-    Never used where the text has to survive – see the table at the top.
+    "Which riddle was this again?" – for the SECONDARY posts only.
+
+    Three things, in this order of importance:
+      1. the NUMBER, in the field name, because that is what people quote at
+         each other ("did you get #47?")
+      2. a jump link to wherever the full text currently lives
+      3. a 50-character excerpt, for anyone who will not tap the link
+
+    The link target switches by itself – see riddle_jump_url(). The riddle text
+    is deliberately NOT repeated in full here: it is one tap away, and these
+    posts would otherwise be a wall of duplicated text.
     """
-    embed.add_field(name=name,
-                    value=clamp_embed_value(excerpt(riddle.get("text"),
-                                                    POST_EXCERPT_CHARS)),
+    no = _riddle_display_no(riddle)
+    label = name or f"🧩 Riddle #{no}"
+
+    parts: list[str] = [clamp_embed_value(excerpt(riddle.get("text"),
+                                                  POST_EXCERPT_CHARS))]
+    url, is_solved_post = riddle_jump_url(_guild_id_of(guild), riddle)
+    if url:
+        parts.append(f"[📖 **Full riddle & solution →**]({url})" if is_solved_post
+                     else f"[📖 **Read riddle #{no} in full →**]({url})")
+
+    embed.add_field(name=label, value=clamp_embed_value("\n".join(parts)),
                     inline=False)
 
 
@@ -223,6 +252,22 @@ def _add_xp_level(embed: discord.Embed, xp: int, *, award_name: str = "🏆 Awar
     x = max(0, to_int(xp, 0))
     embed.add_field(name=award_name, value=f"{x}{suffix}", inline=True)
     embed.add_field(name="🎚️ Level", value=level_badge(x), inline=True)
+
+
+def _add_wrong_count_field(embed: discord.Embed, wrong_count: int, *,
+                           inline: bool = True,
+                           name: str = "❌ Failed attempts") -> None:
+    """
+    The difficulty signal nobody had before: how many people already got it
+    wrong. Omitted entirely at zero – "0 failed attempts" on a riddle nobody
+    has touched yet reads like a bug, not like information.
+    """
+    n = max(0, to_int(wrong_count, 0))
+    if n <= 0:
+        return
+    embed.add_field(name=name,
+                    value=f"**{n}** {'attempt' if n == 1 else 'attempts'}",
+                    inline=inline)
 
 
 def _rotation_line(riddle: dict) -> Optional[str]:
@@ -374,7 +419,8 @@ def incomplete_detail(riddle: dict) -> Optional[str]:
 # EMBED BUILDERS  (public channel posts – phone-first)
 # =============================================================================
 def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
-                              posted_at_override: Optional[str] = None) -> discord.Embed:
+                              posted_at_override: Optional[str] = None,
+                              wrong_count: int = 0) -> discord.Embed:
     """
     The post players actually read. FULL riddle text, always.
 
@@ -383,6 +429,9 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
 
     posted_at_override is used for the very first post, where first_posted_at is
     not in the DB yet – so the "opens at" hint matches the stored anchor exactly.
+
+    wrong_count advertises the difficulty live: a riddle with 14 failed attempts
+    sells itself far better than any static "HARD" badge.
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
     rot = max(0, to_int(riddle.get("rotation_count"), 0))
@@ -423,6 +472,14 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
 
     _add_rotation_field(e, riddle)
 
+    n = max(0, to_int(wrong_count, 0))
+    if n > 0:
+        e.add_field(
+            name="❌ Failed so far",
+            value=f"**{n}** {'attempt' if n == 1 else 'attempts'} — "
+                  f"the attempt log below lists what is already ruled out 👇",
+            inline=False)
+
     img = riddle.get("image_url")
     if not is_http_url(img):
         img = DEFAULT_IMAGE_URL
@@ -435,14 +492,15 @@ def build_active_riddle_embed(guild: Optional[discord.Guild], riddle: dict, *,
 def build_fresh_solved_post_embed(
     guild: Optional[discord.Guild], riddle: dict, solver_mention: str,
     solver_display_name: str, solver_avatar_url: Optional[str],
-    submitted_answer: str,
+    submitted_answer: str, wrong_count: int = 0,
 ) -> discord.Embed:
     """
     The big winner post – successor of the active riddle post.
 
     FULL riddle text, never truncated. On solve the original post is DELETED,
     so this message becomes the permanent record: anyone scrolling back weeks
-    later must still be able to read what was actually asked.
+    later must still be able to read what was actually asked. It is also the
+    jump-link target of every other post about this riddle from here on.
 
     Layout: winner avatar as author icon (never a thumbnail – that squeezes the
     text against the left edge on mobile), solution image full width at the
@@ -450,11 +508,18 @@ def build_fresh_solved_post_embed(
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
     riddle_text = (riddle.get("text") or "*No riddle text*").strip()
+    n = max(0, to_int(wrong_count, 0))
+
+    if n > 0:
+        lead = (f"Congratulations {solver_mention}! 🏆\n"
+                f"*Cracked after **{n}** failed "
+                f"{'attempt' if n == 1 else 'attempts'}.*")
+    else:
+        lead = f"Congratulations {solver_mention}! 🏆\n*Solved on the first try.* 🎯"
 
     e = discord.Embed(
         title=f"🎉 Riddle {_tag(riddle)} solved!",
-        description=clamp_embed_description(
-            f"Congratulations {solver_mention}! 🏆\n\n{riddle_text}"),
+        description=clamp_embed_description(f"{lead}\n\n{riddle_text}"),
         color=discord.Color.gold(),
     )
     _set_author_user(e, solver_display_name, solver_avatar_url)
@@ -462,6 +527,7 @@ def build_fresh_solved_post_embed(
     _add_answer_field(e, submitted_answer)
     _add_solution_field(e, riddle)
     _add_xp_level(e, xp)
+    _add_wrong_count_field(e, n, name="❌ Beaten attempts")
     _add_timing_field(e, riddle)
     _add_rotation_field(e, riddle)
 
@@ -478,35 +544,43 @@ def build_fresh_solved_post_embed(
 def build_solved_ping_post_embed(
     guild: Optional[discord.Guild], riddle: dict, solver_mention: str,
     solver_avatar_url: Optional[str], submitted_answer: str = "",
-    solver_display_name: str = "",
+    solver_display_name: str = "", wrong_count: int = 0,
 ) -> discord.Embed:
     """
     The notification twin of the winner post.
 
     This is the message that actually pings, so it may well be opened straight
-    from a notification with zero context – hence the SHORT riddle anchor.
-    Answer, solution and the riddle/solution images stay out; the big post sits
-    directly above and carries all of that.
+    from a notification with zero context – hence the SHORT riddle anchor plus
+    a jump link. Answer, solution and the riddle/solution images stay out; the
+    big post sits directly above and carries all of that.
 
-    Two things ARE here on purpose:
-      * the solve time in MINUTES, inside the headline sentence rather than in
-        a field further down – it is the one number people react to
+    Three things ARE here on purpose:
+      * the solve time in MINUTES and the number of beaten attempts, inside the
+        headline sentence rather than in a field further down – those are the
+        numbers people react to
+      * the riddle NUMBER, because that is how players refer to each other's
+        solves
       * the winner's avatar as a full-width image. This post has almost no text,
         so there is no column for a thumbnail to squeeze; the avatar IS the
         content, and it makes the notification instantly recognisable.
-
-    solver_display_name is optional and only drives the small author line; every
-    existing positional call site keeps working without it.
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
+    n = max(0, to_int(wrong_count, 0))
 
     took = _solve_duration(riddle)
     took_str = _format_solve_minutes(took)
+
+    bits: list[str] = []
     if took_str:
-        headline = f"{solver_mention} cracked it first — in **{took_str}**! 🎉"
+        bits.append(f"in **{took_str}**")
+    if n > 0:
+        bits.append(f"after **{n}** failed {'attempt' if n == 1 else 'attempts'}")
+
+    if bits:
+        headline = f"{solver_mention} cracked it first — {' · '.join(bits)}! 🎉"
     else:
-        # No usable duration (post was re-anchored, clock skew, missing stamp):
-        # drop the phrase entirely instead of printing "in 0 min".
+        # No usable duration (post was re-anchored, clock skew, missing stamp)
+        # and no failures: drop the phrase instead of printing "in 0 min".
         headline = f"{solver_mention} cracked it first! 🎉"
 
     e = discord.Embed(
@@ -519,7 +593,7 @@ def build_solved_ping_post_embed(
     if solver_display_name:
         _set_author_user(e, solver_display_name, solver_avatar_url)
 
-    _add_riddle_anchor(e, riddle)
+    _add_riddle_anchor(e, riddle, guild)
 
     # The duration already sits in the headline, so this row is reward + level
     # only – repeating it here would print the same value twice, 1 cm apart.
@@ -533,7 +607,11 @@ def build_solved_ping_post_embed(
     if big_avatar:
         e.set_image(url=big_avatar)
 
-    e.set_footer(text="Answer & solution in the post above")
+    url, _ = riddle_jump_url(_guild_id_of(guild), riddle)
+    if url:
+        e.set_footer(text=footer_text(guild))
+    else:
+        e.set_footer(text="Answer & solution in the post above")
     return e
 
 
@@ -542,11 +620,11 @@ def build_wrong_post_embed(
     submitter_name: str, submitter_avatar_url: Optional[str], submitted_answer: str,
 ) -> discord.Embed:
     """
-    Wrong answer, riddle stays open.
+    LEGACY: one post per wrong answer.
 
-    These pile up – several per riddle – so this is the most important post to
-    keep small. No images at all, no full riddle text, submitter avatar as a
-    tiny author icon.
+    Superseded by build_wrong_log_embed(), which keeps a single rolling message
+    per riddle. Kept for the fallback path and for anyone who prefers the old
+    behaviour – nothing in the normal flow calls this any more.
     """
     xp = max(0, to_int(riddle.get("xp"), 0))
     e = discord.Embed(
@@ -556,7 +634,7 @@ def build_wrong_post_embed(
     )
     _set_author_user(e, submitter_name, submitter_avatar_url)
 
-    _add_riddle_anchor(e, riddle)
+    _add_riddle_anchor(e, riddle, guild)
     _add_answer_field(e, submitted_answer, name="🧠 Submitted Answer")
     _add_xp_level(e, xp, award_name="🏆 Still up for grabs")
 
@@ -568,11 +646,108 @@ def build_wrong_post_embed(
 
 
 # =============================================================================
+# WRONG-ANSWER LOG  (one rolling message per riddle)
+# =============================================================================
+def build_wrong_log_embed(
+    guild: Optional[discord.Guild], riddle: dict,
+    entries: list[dict], total_wrong: int,
+    names: dict[int, str], *, solved: bool = False,
+    winner_name: Optional[str] = None,
+) -> discord.Embed:
+    """
+    Every rejected answer for this riddle, in ONE message.
+
+    Why a single rolling message instead of one post per attempt:
+      * a popular riddle used to bury its own text under a wall of red posts
+      * all of them were deleted on solve, destroying exactly the record that
+        makes a riddle interesting in hindsight
+      * while the riddle is UNSOLVED this log is the most useful thing in the
+        channel: it tells you what has already been ruled out
+
+    The answers are shown in PLAIN TEXT, not spoilered. These are the WRONG
+    ones – hiding them only makes people re-submit something the bot would
+    reject anyway (answer_already_rejected). Seeing them is the service.
+
+    The riddle text is NOT repeated in full: the anchor carries the number, a
+    50-character teaser and a jump link, which is all this message needs.
+
+    solved=True recolours the log into a closing record instead of deleting it,
+    and its link flips to the winner post.
+    """
+    n = max(0, to_int(total_wrong, 0))
+    word = "attempt" if n == 1 else "attempts"
+    no = _riddle_display_no(riddle)
+
+    if solved:
+        title = f"📕 Riddle #{no} — attempt log (closed)"
+        if winner_name:
+            desc = (f"**{n}** wrong {word} before **{winner_name}** got it. "
+                    f"Here is everything that did *not* work.")
+        else:
+            desc = f"**{n}** wrong {word} before this riddle was solved."
+        color = discord.Color.dark_grey()
+    elif n <= 0:
+        title = f"❌ Riddle #{no} — no wrong answers yet"
+        desc = "Nothing has been ruled out so far. 🫣"
+        color = discord.Color.red()
+    else:
+        title = f"❌ Riddle #{no} — {n} wrong {word}"
+        desc = ("Still **open**. These answers were already reviewed and "
+                "rejected — don't waste a submission on them. 🔁")
+        color = discord.Color.red()
+
+    e = discord.Embed(title=title, description=desc, color=color)
+    _add_riddle_anchor(e, riddle, guild)
+
+    if entries:
+        lines: list[str] = []
+        for row in entries:
+            uid = to_int(row.get("user_id"), 0)
+            who = names.get(uid) or f"User {uid}"
+            ans = strip_markdown(str(row.get("answer") or ""))
+            ans = truncate_words(ans, WRONG_ANSWER_PREVIEW_CHARS) or "empty"
+            when = discord_ts(row.get("created_at"), "R") or ""
+            # Backticks around the answer: it is user input and must not be
+            # able to inject formatting into the list. strip_markdown() already
+            # removed the markers, the code span stops whatever survived.
+            lines.append(f"❌ **{who}** · `{ans}` {when}".rstrip())
+
+        shown = len(lines)
+        header = ("🗒️ Rejected answers" if shown >= n
+                  else f"🗒️ Latest {shown} of {n}")
+        e.add_field(name=header, value=clamp_embed_value("\n".join(lines)),
+                    inline=False)
+        if shown < n:
+            rest = n - shown
+            e.add_field(
+                name="\u200b",
+                value=f"*…and {rest} earlier "
+                      f"{'attempt' if rest == 1 else 'attempts'} not listed here.*",
+                inline=False)
+
+    if not solved:
+        xp = max(0, to_int(riddle.get("xp"), 0))
+        _add_xp_level(e, xp, award_name="🏆 Still up for grabs")
+        posted_rel = discord_ts(riddle.get("first_posted_at"), "R")
+        if posted_rel:
+            e.add_field(name="📌 Open since", value=posted_rel, inline=False)
+
+    url, is_solved_post = riddle_jump_url(_guild_id_of(guild), riddle)
+    if url and is_solved_post:
+        e.add_field(name="🏁 Winner & solution",
+                    value=f"[Jump to the solved post →]({url})", inline=False)
+
+    e.set_footer(text=footer_text(guild))
+    return e
+
+
+# =============================================================================
 # EMBED BUILDERS  (vote channel – manager facing)
 # =============================================================================
 def build_vote_embed(
     guild: Optional[discord.Guild], riddle: dict, submitter_id: int,
     submitter_name: str, submitter_avatar_url: Optional[str], submitted_answer: str,
+    wrong_count: int = 0,
 ) -> discord.Embed:
     """
     Manager-facing, so the FULL riddle text stays: a manager has to judge the
@@ -596,9 +771,15 @@ def build_vote_embed(
     rot = max(0, to_int(riddle.get("rotation_count"), 0))
     if rot >= 1:
         meta += f" · 🔁 `{rot}` (XP raised)"
+    n = max(0, to_int(wrong_count, 0))
+    if n > 0:
+        meta += f" · ❌ `{n}` rejected before"
     age = hours_since(riddle.get("first_posted_at"))
     if age is not None:
         meta += f" · 📌 open **{format_duration_hours(age)}**"
+    url, _ = riddle_jump_url(_guild_id_of(guild), riddle)
+    if url:
+        meta += f" · [📌 post]({url})"
     e.add_field(name="ℹ️ Context", value=clamp_embed_value(meta), inline=False)
 
     # This riddle cannot rotate while this vote is open – say so, so nobody
@@ -641,6 +822,11 @@ def build_xp_reminder_embed(
     e.add_field(name="🎚️ Level", value=level_badge(xp), inline=True)
 
     if riddle:
+        url, _ = riddle_jump_url(_guild_id_of(guild), riddle)
+        if url:
+            e.add_field(name="🔗 Riddle",
+                        value=f"[#{riddle_no} — jump to the solved post →]({url})",
+                        inline=False)
         rot_line = _rotation_line(riddle)
         time_line = _timing_line(riddle, with_vote=True)
         details = "\n".join(x for x in (rot_line, time_line) if x)
@@ -680,6 +866,9 @@ def build_rotation_blocked_embed(guild: Optional[discord.Guild], riddle: dict,
     posted_rel = discord_ts(riddle.get("first_posted_at"), "R")
     if posted_rel:
         bits.append(f"📌 posted {posted_rel}")
+    url, _ = riddle_jump_url(_guild_id_of(guild), riddle)
+    if url:
+        bits.append(f"[📌 jump]({url})")
     if bits:
         e.add_field(name="ℹ️ Context", value=clamp_embed_value(" · ".join(bits)),
                     inline=False)
@@ -693,7 +882,7 @@ def build_rotation_blocked_embed(guild: Optional[discord.Guild], riddle: dict,
 
 
 def build_rotation_bonus_embed(guild: Optional[discord.Guild], riddle: dict,
-                               bump: dict) -> discord.Embed:
+                               bump: dict, wrong_count: int = 0) -> discord.Embed:
     """Posted to the vote channel when an auto-rotation raised a riddle's XP."""
     old_xp = to_int(bump.get("old_xp"), 0)
     new_xp = to_int(bump.get("new_xp"), 0)
@@ -715,6 +904,8 @@ def build_rotation_bonus_embed(guild: Optional[discord.Guild], riddle: dict,
     else:
         e.add_field(name="🧱 XP",
                     value=f"**{new_xp}** (ceiling {MAX_RIDDLE_XP} reached)", inline=False)
+    _add_wrong_count_field(e, wrong_count, inline=False,
+                           name="❌ Attempts so far (all rounds)")
     if bump.get("capped"):
         e.add_field(name="Note",
                     value=f"The bonus was clipped at the {MAX_RIDDLE_XP} XP ceiling.",
@@ -810,7 +1001,8 @@ class SubmitSolutionModal(Modal):
                 await quiet_followup(
                     interaction,
                     "❌ That exact answer was already reviewed and rejected for this "
-                    "riddle. Try something different.")
+                    "riddle. Check the attempt log in the channel — it lists "
+                    "everything that is already ruled out.")
                 return
         except Exception:
             logger.exception("answer_already_rejected check failed – continuing anyway")
@@ -845,16 +1037,31 @@ class SubmitSolutionModal(Modal):
             await quiet_followup(interaction, "❌ Vote channel not available. Tell an admin.")
             return
 
+        wrong_count = await self.cog.repo.count_wrong_submissions_for_riddle(rid)
         embed = build_vote_embed(interaction.guild, riddle, interaction.user.id,
                                  interaction.user.display_name,
-                                 interaction.user.display_avatar.url, ans)
+                                 interaction.user.display_avatar.url, ans,
+                                 wrong_count)
         try:
             vm = await vote_channel.send(embed=embed, view=VoteButtons(self.cog))
-            await self.cog.repo.set_submission_vote_message(sid, vm.id)
         except Exception:
             logger.exception("Failed to post submission for voting")
             await self.cog.repo.delete_submission(sid)
             await quiet_followup(interaction, "❌ Failed to post your submission for voting.")
+            return
+
+        # This whole modal runs OUTSIDE the guild lock, so a rotation can have
+        # cancelled the submission while the vote post was being sent. The
+        # status-guarded UPDATE is what detects that: rowcount 0 means the row
+        # is no longer pending, and the message we just created would otherwise
+        # sit in the vote channel with two live buttons pointing at nothing.
+        if not await self.cog.repo.set_submission_vote_message(sid, vm.id):
+            with contextlib.suppress(discord.HTTPException, discord.NotFound):
+                await vm.delete()
+            await quiet_followup(
+                interaction,
+                "⚠️ The riddle moved on while your answer was being filed — it was "
+                "not submitted. Please try again on the current riddle.")
             return
 
         await quiet_followup(interaction, "✅ Your solution was submitted for review.")
@@ -1079,9 +1286,17 @@ class PingRolesPickerView(View):
                     view=self, allowed_mentions=discord.AllowedMentions.none())
 
     async def _persist(self, interaction: Interaction, csv: Optional[str], ok_msg: str):
-        gid = interaction.guild.id if interaction.guild else 0
+        guild = interaction.guild
+        if guild is None:
+            # gid=0 used to be the fallback here, which wrote WHERE guild_id=0,
+            # matched nothing, and then reported "Riddle no longer open" for a
+            # riddle that was perfectly fine.
+            self.panel.last_info = "⚠️ Lost the guild context — run `/riddle` again."
+            await self._close_picker(interaction)
+            await self.panel.safe_edit_panel()
+            return
         ok, reason = await self.panel.cog.save_slot_mentions(
-            gid, self.riddle_id, interaction.user.id, csv)
+            guild.id, self.riddle_id, interaction.user.id, csv)
         self.panel.last_info = ok_msg if ok else {
             "conflict": "⚠️ Riddle no longer open.",
             "error": "❌ Could not update ping roles (DB error).",
@@ -1258,7 +1473,7 @@ class _VoteBaseButton(discord.ui.Button):
         await quiet_followup(
             interaction,
             "✅ Vote applied: **Correct** (solved flow triggered)." if self.approve else
-            "✅ Vote applied: **Wrong** (public post sent, riddle stays open).")
+            "✅ Vote applied: **Wrong** (attempt log updated, riddle stays open).")
 
 
 class VoteSuccessButton(_VoteBaseButton):
@@ -1360,9 +1575,12 @@ class FilledSlotsSelect(Select):
             if not r:
                 continue
             rot = max(0, to_int(r.get("rotation_count"), 0))
+            wrong = max(0, to_int(panel.wrong_counts.get(slot), 0))
             label = f"#{slot}"
             if rot:
                 label += f" 🔁{rot}"
+            if wrong:
+                label += f" ❌{wrong}"
             missing = riddle_missing_icons(r)
             if missing:
                 label += f"  {missing}"
@@ -1425,6 +1643,7 @@ class RiddleAdminPanelView(View):
         self.guild_id = guild_id
         self.selected_slot: int = 1
         self.slot_map: dict[int, dict] = {}
+        self.wrong_counts: dict[int, int] = {}
         self.state: dict = {}
         self.free_slot: Optional[int] = None
         self.last_info: str = "Ready."
@@ -1453,6 +1672,12 @@ class RiddleAdminPanelView(View):
         self.slot_map = await self.cog.repo.open_slot_map(self.guild_id)
         self.state = await self.cog.repo.get_state_row(self.guild_id)
         self.free_slot = await self.cog.repo.first_free_slot(self.guild_id)
+        # Attempt counters for the slot list. One small indexed COUNT per slot,
+        # and the panel is manager-only and refreshed by hand, so this is cheap.
+        self.wrong_counts = {}
+        for slot, row in self.slot_map.items():
+            self.wrong_counts[slot] = await self.cog.repo.\
+                count_wrong_submissions_for_riddle(to_int(row.get("id"), 0))
         if self.slot_map and self.selected_slot not in self.slot_map:
             self.selected_slot = min(self.slot_map)
 
@@ -1574,6 +1799,8 @@ class RiddleAdminPanelView(View):
             xp = to_int(row.get("xp"), 0)
             rot = max(0, to_int(row.get("rotation_count"), 0))
             rot_tag = f" 🔁{rot}" if rot >= 1 else ""
+            wrong = max(0, to_int(self.wrong_counts.get(slot), 0))
+            wrong_tag = f" ❌{wrong}" if wrong else ""
             missing = riddle_missing_icons(row)
             warn = f" {missing}" if missing else ""
             preview = _first_line(row.get("solution"), PANEL_PREVIEW_CHARS)
@@ -1589,8 +1816,8 @@ class RiddleAdminPanelView(View):
                     active_tag = f" · 👉 {format_duration_hours(age, short=True)}"
 
             lines.append(
-                f"{marker} **#{slot}**{rot_tag}{warn} · {xp}XP {level_badge(xp)}"
-                f"{active_tag} — _{preview}_")
+                f"{marker} **#{slot}**{rot_tag}{wrong_tag}{warn} · {xp}XP "
+                f"{level_badge(xp)}{active_tag} — _{preview}_")
 
         if empty:
             if len(empty) == 1:
@@ -1661,6 +1888,7 @@ class RiddleAdminPanelView(View):
             xp_val = to_int(row.get("xp"), 0)
             rot = max(0, to_int(row.get("rotation_count"), 0))
             base_xp = to_int(row.get("base_xp"), xp_val)
+            wrong = max(0, to_int(self.wrong_counts.get(self.selected_slot), 0))
             detail = incomplete_detail(row)
 
             if self.show_full_preview:
@@ -1684,6 +1912,12 @@ class RiddleAdminPanelView(View):
                 preview.add_field(name="🎚️ Level", value=level_badge(xp_val), inline=True)
                 preview.add_field(name="🆔 Riddle ID",
                                   value=str(to_int(row.get("id"), 0)), inline=True)
+                if wrong:
+                    preview.add_field(
+                        name="❌ Rejected answers",
+                        value=f"`{wrong}` across all rounds "
+                              f"(the attempt log lists the latest {WRONG_LOG_ENTRIES})",
+                        inline=False)
                 if rot >= 1:
                     preview.add_field(
                         name="🔁 Auto-Rotations",
@@ -1712,6 +1946,12 @@ class RiddleAdminPanelView(View):
                         value=f"{posted_abs} · "
                               f"{discord_ts(row.get('first_posted_at'), 'R')}{extra}",
                         inline=False)
+                jump = message_jump_url(self.guild_id, row.get("posted_channel_id"),
+                                        row.get("posted_message_id"))
+                if jump:
+                    preview.add_field(name="🔗 Live post",
+                                      value=f"[Jump to riddle #{shown_no} →]({jump})",
+                                      inline=False)
                 # Panel is desktop-only, so a thumbnail is fine here.
                 if is_http_url(r_url):
                     preview.set_thumbnail(url=r_url)
@@ -1730,6 +1970,8 @@ class RiddleAdminPanelView(View):
                     embeds.append(t)
             else:
                 desc = f"**Solution (1st line):**\n{_first_line(row.get('solution'), 200)}"
+                if wrong:
+                    desc += f"\n\n❌ `{wrong}` rejected answer(s) so far"
                 if rot >= 1:
                     desc += f"\n\n🔁 Auto-rotated `{rot}×` · base `{base_xp} XP`"
                 if detail:
