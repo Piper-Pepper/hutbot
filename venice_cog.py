@@ -92,6 +92,9 @@ LEGACY_STARTER_TEXTS = {
 }
 RECENT_SCAN_LIMIT = 12
 
+# Discord hard limit for select menus - exceeding it silently truncates.
+MAX_SELECT_OPTIONS = 25
+
 # =================================================
 # QUOTA (shared with the face cog via the store registry)
 # =================================================
@@ -186,6 +189,8 @@ MODELS: dict[str, dict[str, Any]] = {
     "seedream-v5-pro": {"label": "🌊 Seedream V5 Pro", "rating": RATING_NUDITY, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "3:2", "16:9", "9:16", "2:3", "3:4"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "2K", "api_timeout": 300.0, "speed_factor": 1.7}},
     "krea-2-turbo": {"label": "🎇 Krea 2 Turbo", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 5000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": ["1K", "2K"], "api_timeout": 200.0, "speed_factor": 1.1}},
     "qwen-image-2-pro": {"label": "🧩 Qwen Image 2 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.5}},
+    "qwen-image-3": {"label": "🧿 Qwen Image 3", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "default_aspect_ratio": "1:1", "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "1K", "api_timeout": 240.0, "speed_factor": 1.5}},
+    "qwen-image-3-pro": {"label": "💎 Qwen Image 3 Pro", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 10000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "default_aspect_ratio": "1:1", "width_height_divisor": 1, "resolutions": ["1K", "2K"], "default_resolution": "1K", "api_timeout": 300.0, "speed_factor": 1.8}},
     "wan-2-7-pro-text-to-image": {"label": "🦈 Wan 2.7 Pro", "rating": RATING_SFW, "caps": {"prompt_limit": 3000, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": _FULL_ASPECTS, "width_height_divisor": 1, "resolutions": [], "api_timeout": 240.0, "speed_factor": 1.5}},
     "grok-imagine-image-quality": {"label": "🚀 Grok Imagine HQ", "rating": RATING_SFW, "caps": {"prompt_limit": 7500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": ["1:1", "16:9", "9:16", "3:4", "3:2", "2:3"], "width_height_divisor": 1, "resolutions": ["1K", "2K"], "api_timeout": 240.0, "speed_factor": 1.4}},
     "lustify-v7": {"label": "🥵 Lustify v7", "rating": RATING_EXPLICIT, "caps": {"prompt_limit": 1500, "default_steps": 20, "max_steps": 50, "cfg_default": 5.0, "aspect_ratios": None, "width_height_divisor": 8, "resolutions": []}},
@@ -434,7 +439,15 @@ def build_model_options(
     if not options:
         options.append(discord.SelectOption(
             label="No models available", value=NO_MODEL_VALUE))
-    return options[:25]
+
+    # Discord silently rejects more than 25 options, so make truncation loud.
+    if len(options) > MAX_SELECT_OPTIONS:
+        dropped = [o.value for o in options[MAX_SELECT_OPTIONS:]]
+        logger.warning(
+            "Model dropdown exceeds %s options - dropping: %s",
+            MAX_SELECT_OPTIONS, ", ".join(dropped),
+        )
+    return options[:MAX_SELECT_OPTIONS]
 
 
 def build_easy_embed(model_id: str, ratio: str) -> discord.Embed:
@@ -725,7 +738,7 @@ class AspectRatioSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label=ASPECT_LABELS.get(r, r), value=r)
             for r in get_model_ratios(model_id)
-        ][:25]
+        ][:MAX_SELECT_OPTIONS]
         super().__init__(
             placeholder="📐 Choose aspect ratio...",
             min_values=1,
@@ -1294,6 +1307,7 @@ class VeniceImageCog(commands.Cog):
         pruned = await image_quota.prune()
         await ctx.send(
             f"✅ Reloaded. Active={len(get_active_model_ids())}, "
+            f"Easy={len(get_easy_mode_candidates())}, "
             f"Disabled={len(DISABLED_MODELS)}, reposted {reposted} starter message(s), "
             f"pruned {pruned} expired quota entr(ies)."
         )
